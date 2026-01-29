@@ -20,6 +20,10 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
   const bankName = (formData.get('bankName') as string)?.trim()
   const accountType = (formData.get('accountType') as string)?.trim()
   const lastFourDigits = (formData.get('lastFourDigits') as string)?.trim()
+  const initialBalanceStr = (formData.get('initialBalance') as string)?.trim()
+  const currency = (formData.get('currency') as string)?.trim() || 'CLP'
+  const color = (formData.get('color') as string)?.trim() || null
+  const emoji = (formData.get('emoji') as string)?.trim() || null
 
   if (!bankName) {
     return { success: false, error: 'Bank is required' }
@@ -33,15 +37,91 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
     return { success: false, error: 'Last 4 digits must be exactly 4 numbers' }
   }
 
+  // Parse initialBalance: convert from dollars to cents
+  let initialBalance = 0
+  if (initialBalanceStr) {
+    const parsed = parseFloat(initialBalanceStr.replace(/[$,]/g, ''))
+    if (!isNaN(parsed)) {
+      initialBalance = Math.round(parsed * 100)
+    }
+  }
+
   await db.insert(accounts).values({
     id: generateId(),
     userId: session.id,
     bankName,
     accountType,
     lastFourDigits,
+    initialBalance,
+    currency: currency as 'CLP' | 'USD',
+    color,
+    emoji,
   })
 
   revalidatePath('/')
+  revalidatePath('/settings')
+  return { success: true }
+}
+
+/**
+ * Update an existing account
+ */
+export async function updateAccount(formData: FormData): Promise<AccountActionResult> {
+  const session = await requireAuth()
+
+  const id = (formData.get('id') as string)?.trim()
+  const bankName = (formData.get('bankName') as string)?.trim()
+  const accountType = (formData.get('accountType') as string)?.trim()
+  const lastFourDigits = (formData.get('lastFourDigits') as string)?.trim()
+  const initialBalanceStr = (formData.get('initialBalance') as string)?.trim()
+  const currency = (formData.get('currency') as string)?.trim() || 'CLP'
+  const color = (formData.get('color') as string)?.trim() || null
+  const emoji = (formData.get('emoji') as string)?.trim() || null
+
+  if (!id) {
+    return { success: false, error: 'Account ID is required' }
+  }
+
+  if (!bankName) {
+    return { success: false, error: 'Bank is required' }
+  }
+
+  if (!accountType) {
+    return { success: false, error: 'Account type is required' }
+  }
+
+  if (!lastFourDigits || !/^\d{4}$/.test(lastFourDigits)) {
+    return { success: false, error: 'Last 4 digits must be exactly 4 numbers' }
+  }
+
+  let initialBalance = 0
+  if (initialBalanceStr) {
+    const parsed = parseFloat(initialBalanceStr.replace(/[$,]/g, ''))
+    if (!isNaN(parsed)) {
+      initialBalance = Math.round(parsed * 100)
+    }
+  }
+
+  await db.update(accounts)
+    .set({
+      bankName,
+      accountType,
+      lastFourDigits,
+      initialBalance,
+      currency: currency as 'CLP' | 'USD',
+      color,
+      emoji,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(accounts.id, id),
+        eq(accounts.userId, session.id)
+      )
+    )
+
+  revalidatePath('/')
+  revalidatePath('/settings')
   return { success: true }
 }
 
@@ -59,6 +139,7 @@ export async function deleteAccount(id: string): Promise<AccountActionResult> {
   )
 
   revalidatePath('/')
+  revalidatePath('/settings')
   return { success: true }
 }
 

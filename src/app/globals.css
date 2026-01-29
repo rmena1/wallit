@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f9fafb;
-  --foreground: #1a1a1a;
+  --background: #0a0a0a;
+  --foreground: #e5e5e5;
 }
 
 * {
@@ -17,4 +17,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
   padding: 0;
+}
+
+/* Hide scrollbar for account cards horizontal scroll */
+::-webkit-scrollbar {
+  display: none;
+}
+
+/* Dark theme for date inputs and selects */
+select option {
+  background-color: #1a1a1a;
+  color: #e5e5e5;
 }

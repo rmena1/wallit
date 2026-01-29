@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g transform="translate(256,256)">
+    <!-- Money bag body -->
+    <ellipse cx="0" cy="30" rx="100" ry="110" fill="none" stroke="white" stroke-width="22"/>
+    <!-- Bag tie / neck -->
+    <path d="M-40,-80 Q-30,-50 -50,-30" fill="none" stroke="white" stroke-width="22" stroke-linecap="round"/>
+    <path d="M40,-80 Q30,-50 50,-30" fill="none" stroke="white" stroke-width="22" stroke-linecap="round"/>
+    <line x1="-40" y1="-80" x2="40" y2="-80" stroke="white" stroke-width="22" stroke-linecap="round"/>
+    <!-- Dollar sign -->
+    <text x="0" y="55" text-anchor="middle" fill="white" font-family="-apple-system,SF Pro,Helvetica" font-size="120" font-weight="700">$</text>
+  </g>
+</svg>

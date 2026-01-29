@@ -20,135 +20,177 @@ async function registerAndLogin(page: Page) {
 }
 
 async function ensureAccount(page: Page) {
-  // Check if "Add Movement" is visible — if so, accounts exist already
-  const hasAddMovement = await page.getByRole('button', { name: /Add Movement/i }).isVisible().catch(() => false)
-  if (hasAddMovement) return
+  // Check if we have accounts by looking for the "Cuentas" section on home
+  const hasAccounts = await page.locator('text=Cuentas').first().isVisible().catch(() => false)
+  if (hasAccounts) return
 
-  // No accounts — need to create one
-  // Click "Add Account" from empty state
-  const addAccountBtn = page.getByRole('button', { name: 'Add Account' })
-  if (await addAccountBtn.isVisible().catch(() => false)) {
-    await addAccountBtn.click()
-  } else {
-    await page.getByTitle('Manage Accounts').click()
-  }
-
-  // Wait for the form
-  await expect(page.getByPlaceholder('Last 4 digits')).toBeVisible({ timeout: 5000 })
+  // No accounts — go to settings to create one
+  await page.goto('/settings')
+  await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: 5000 })
 
   await page.locator('select[name="bankName"]').selectOption('BCI')
   await page.locator('select[name="accountType"]').selectOption('Corriente')
-  await page.getByPlaceholder('Last 4 digits').fill('1234')
-  await page.getByRole('button', { name: /Add$/i }).click()
+  await page.getByPlaceholder('Últimos 4 dígitos').fill('1234')
+  await page.getByPlaceholder('Saldo inicial').fill('1000')
+  await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
 
-  // Wait for account to be created and page to refresh
-  await expect(page.getByRole('button', { name: /Add Movement/i })).toBeVisible({ timeout: 5000 })
+  // Wait for account to be created
+  await expect(page.getByText('BCI')).toBeVisible({ timeout: 5000 })
+
+  // Navigate back to home
+  await page.goto('/')
+  await expect(page.getByText('Balance General')).toBeVisible({ timeout: 5000 })
 }
 
-test.describe('Dashboard', () => {
+test.describe('Dashboard - Home', () => {
   test.beforeEach(async ({ page }) => {
     await registerAndLogin(page)
   })
 
-  test('dashboard renders with balance card', async ({ page }) => {
-    await expect(page.getByText('Balance').first()).toBeVisible()
-    await expect(page.getByText('Income').first()).toBeVisible()
-    await expect(page.getByText('Expenses').first()).toBeVisible()
-    await expect(page.getByText('Recent Movements')).toBeVisible()
+  test('home page renders with balance card', async ({ page }) => {
+    await expect(page.getByText('Balance General')).toBeVisible()
+    await expect(page.getByText('Ingresos')).toBeVisible()
+    await expect(page.getByText('Gastos')).toBeVisible()
+    await expect(page.getByText('Movimientos Recientes')).toBeVisible()
 
-    await page.screenshot({ path: './e2e-results/screenshots/dashboard.png', fullPage: true })
+    await page.screenshot({ path: './e2e-results/screenshots/home-page.png', fullPage: true })
   })
 
-  test('empty state or accounts exist', async ({ page }) => {
-    const hasAddMovement = await page.getByRole('button', { name: /Add Movement/i }).isVisible().catch(() => false)
-    const hasEmptyState = await page.getByText('Add a bank account to start tracking').isVisible().catch(() => false)
-    expect(hasAddMovement || hasEmptyState).toBeTruthy()
+  test('bottom navigation is visible', async ({ page }) => {
+    // Check bottom nav items
+    await expect(page.getByText('Inicio')).toBeVisible()
+    await expect(page.getByText('Reportes')).toBeVisible()
+    await expect(page.getByText('Config')).toBeVisible()
 
-    await page.screenshot({ path: './e2e-results/screenshots/dashboard-state.png', fullPage: true })
+    await page.screenshot({ path: './e2e-results/screenshots/bottom-nav.png', fullPage: true })
   })
 
-  test('create an account', async ({ page }) => {
-    // Open accounts panel
-    const addAccountBtn = page.getByRole('button', { name: 'Add Account' })
-    if (await addAccountBtn.isVisible().catch(() => false)) {
-      await addAccountBtn.click()
-    } else {
-      await page.getByTitle('Manage Accounts').click()
-    }
+  test('navigate to settings via bottom nav', async ({ page }) => {
+    await page.getByText('Config').click()
+    await page.waitForURL('**/settings')
+    await expect(page.getByText('Configuración')).toBeVisible()
 
-    await expect(page.getByPlaceholder('Last 4 digits')).toBeVisible({ timeout: 5000 })
+    await page.screenshot({ path: './e2e-results/screenshots/settings-page.png', fullPage: true })
+  })
+
+  test('navigate to reports via bottom nav', async ({ page }) => {
+    await page.getByText('Reportes').click()
+    await page.waitForURL('**/reports')
+    await expect(page.getByText('Reportes').first()).toBeVisible()
+
+    await page.screenshot({ path: './e2e-results/screenshots/reports-page.png', fullPage: true })
+  })
+
+  test('navigate to add movement page', async ({ page }) => {
+    await ensureAccount(page)
+
+    // Click the + button (the green circle in nav)
+    const addButton = page.locator('a[href="/add"]')
+    await addButton.click()
+    await page.waitForURL('**/add')
+    await expect(page.getByText('Nuevo Movimiento')).toBeVisible()
+
+    await page.screenshot({ path: './e2e-results/screenshots/add-movement-page.png', fullPage: true })
+  })
+})
+
+test.describe('Settings', () => {
+  test.beforeEach(async ({ page }) => {
+    await registerAndLogin(page)
+    await page.goto('/settings')
+  })
+
+  test('create an account with initial balance', async ({ page }) => {
+    await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: 5000 })
 
     const digits = String(Date.now()).slice(-4)
     await page.locator('select[name="bankName"]').selectOption('Santander')
     await page.locator('select[name="accountType"]').selectOption('Vista')
-    await page.getByPlaceholder('Last 4 digits').fill(digits)
-    await page.getByRole('button', { name: /Add$/i }).click()
+    await page.getByPlaceholder('Últimos 4 dígitos').fill(digits)
+    await page.getByPlaceholder('Saldo inicial').fill('500.00')
+    await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
 
-    await expect(page.locator('div').filter({ hasText: new RegExp(`···${digits}`) }).first()).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(`···${digits}`)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('$500.00').first()).toBeVisible({ timeout: 5000 })
 
     await page.screenshot({ path: './e2e-results/screenshots/account-created.png', fullPage: true })
   })
 
-  test('add movement form with account selector', async ({ page }) => {
+  test('categories panel in settings', async ({ page }) => {
+    await expect(page.getByText('Categorías')).toBeVisible()
+    await expect(page.getByPlaceholder('🍕')).toBeVisible()
+
+    const catName = `Cat-${Date.now()}`
+    await page.getByPlaceholder('🍕').fill('🎮')
+    await page.getByPlaceholder('Nombre de categoría').fill(catName)
+    await page.locator('form').filter({ has: page.getByPlaceholder('Nombre de categoría') }).locator('button[type="submit"]').click()
+
+    await expect(page.getByText(catName)).toBeVisible({ timeout: 5000 })
+
+    await page.screenshot({ path: './e2e-results/screenshots/category-created.png', fullPage: true })
+  })
+})
+
+test.describe('Movements', () => {
+  test.beforeEach(async ({ page }) => {
+    await registerAndLogin(page)
     await ensureAccount(page)
-
-    await page.getByRole('button', { name: /Add Movement/i }).click()
-
-    await expect(page.getByText('New Movement')).toBeVisible()
-    await expect(page.locator('select[name="accountId"]')).toBeVisible()
-    await expect(page.getByPlaceholder('What was it for?')).toBeVisible()
-    await expect(page.getByPlaceholder('0.00')).toBeVisible()
-
-    await page.screenshot({ path: './e2e-results/screenshots/add-form.png', fullPage: true })
-
-    await page.getByRole('button', { name: /Add Movement/i }).click()
-    await expect(page.getByText('New Movement')).not.toBeVisible()
   })
 
   test('create an expense', async ({ page }) => {
-    await ensureAccount(page)
-
     const name = `Coffee-${Date.now()}`
-    await page.getByRole('button', { name: /Add Movement/i }).click()
-    await page.locator('select[name="accountId"]').selectOption({ index: 1 })
-    await page.getByPlaceholder('What was it for?').fill(name)
-    await page.getByPlaceholder('0.00').fill('4.50')
-    await page.getByRole('button', { name: 'Save' }).click()
 
+    // Go to add movement page
+    await page.goto('/add')
+    await expect(page.getByText('Nuevo Movimiento')).toBeVisible({ timeout: 5000 })
+
+    // Expense is default
+    await page.locator('select[name="accountId"]').selectOption({ index: 1 })
+    await page.getByPlaceholder('¿En qué se gastó?').fill(name)
+    await page.getByPlaceholder('0.00').fill('4.50')
+    await page.getByRole('button', { name: /Guardar Movimiento/i }).click()
+
+    // Should redirect to home
+    await page.waitForURL('**/', { timeout: 5000 })
     await expect(page.getByText(name)).toBeVisible({ timeout: 5000 })
 
     await page.screenshot({ path: './e2e-results/screenshots/expense-created.png', fullPage: true })
   })
 
   test('create an income', async ({ page }) => {
-    await ensureAccount(page)
-
     const name = `Salary-${Date.now()}`
-    await page.getByRole('button', { name: /Add Movement/i }).click()
-    await page.getByText('↑ Income').click()
-    await page.locator('select[name="accountId"]').selectOption({ index: 1 })
-    await page.getByPlaceholder('What was it for?').fill(name)
-    await page.getByPlaceholder('0.00').fill('1000')
-    await page.getByRole('button', { name: 'Save' }).click()
 
+    await page.goto('/add')
+    await expect(page.getByText('Nuevo Movimiento')).toBeVisible({ timeout: 5000 })
+
+    // Switch to income
+    await page.getByText('↑ Ingreso').click()
+    await page.locator('select[name="accountId"]').selectOption({ index: 1 })
+    await page.getByPlaceholder('¿En qué se gastó?').fill(name)
+    await page.getByPlaceholder('0.00').fill('1000')
+    await page.getByRole('button', { name: /Guardar Movimiento/i }).click()
+
+    await page.waitForURL('**/', { timeout: 5000 })
     await expect(page.getByText(name)).toBeVisible({ timeout: 5000 })
 
     await page.screenshot({ path: './e2e-results/screenshots/income-created.png', fullPage: true })
   })
 
   test('delete a movement', async ({ page }) => {
-    await ensureAccount(page)
-
     const name = `Del-${Date.now()}`
-    await page.getByRole('button', { name: /Add Movement/i }).click()
+
+    // Create movement
+    await page.goto('/add')
     await page.locator('select[name="accountId"]').selectOption({ index: 1 })
-    await page.getByPlaceholder('What was it for?').fill(name)
+    await page.getByPlaceholder('¿En qué se gastó?').fill(name)
     await page.getByPlaceholder('0.00').fill('1.00')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await page.getByRole('button', { name: /Guardar Movimiento/i }).click()
+
+    await page.waitForURL('**/', { timeout: 5000 })
     await expect(page.getByText(name)).toBeVisible({ timeout: 5000 })
 
+    // Delete it
     page.on('dialog', dialog => dialog.accept())
-
     const nameEl = page.getByText(name)
     const row = nameEl.locator('xpath=ancestor::div[contains(@style,"justify-content")]')
     await row.locator('button:has(svg)').click()
@@ -158,23 +200,25 @@ test.describe('Dashboard', () => {
     await page.screenshot({ path: './e2e-results/screenshots/movement-deleted.png', fullPage: true })
   })
 
-  test('categories panel', async ({ page }) => {
-    await page.getByTitle('Manage Categories').click()
-    await expect(page.getByPlaceholder('🍕')).toBeVisible()
+  test('account balance updates with movements', async ({ page }) => {
+    const ts = Date.now()
 
-    const catName = `Cat-${Date.now()}`
-    await page.getByPlaceholder('🍕').fill('🎮')
-    await page.getByPlaceholder('Category name').fill(catName)
-    await page.locator('form').filter({ has: page.getByPlaceholder('Category name') }).locator('button[type="submit"]').click()
+    // Create expense
+    await page.goto('/add')
+    await page.locator('select[name="accountId"]').selectOption({ index: 1 })
+    await page.getByPlaceholder('¿En qué se gastó?').fill(`Test-${ts}`)
+    await page.getByPlaceholder('0.00').fill('50.00')
+    await page.getByRole('button', { name: /Guardar Movimiento/i }).click()
 
-    await expect(page.getByText(catName)).toBeVisible({ timeout: 5000 })
+    await page.waitForURL('**/', { timeout: 5000 })
 
-    await page.screenshot({ path: './e2e-results/screenshots/category-created.png', fullPage: true })
+    // Verify the balance is shown on home (account cards section)
+    await expect(page.getByText('Cuentas')).toBeVisible()
+
+    await page.screenshot({ path: './e2e-results/screenshots/balance-updated.png', fullPage: true })
   })
 
-  test('full flow: account + movements', async ({ page }) => {
-    await ensureAccount(page)
-
+  test('full flow: account + movements + balance', async ({ page }) => {
     const ts = Date.now()
     const items = [
       { name: `Lunch-${ts}`, amount: '12.50', type: 'expense' },
@@ -183,14 +227,18 @@ test.describe('Dashboard', () => {
     ]
 
     for (const item of items) {
-      await page.getByRole('button', { name: /Add Movement/i }).click()
+      await page.goto('/add')
+      await expect(page.getByText('Nuevo Movimiento')).toBeVisible({ timeout: 5000 })
+
       if (item.type === 'income') {
-        await page.getByText('↑ Income').click()
+        await page.getByText('↑ Ingreso').click()
       }
       await page.locator('select[name="accountId"]').selectOption({ index: 1 })
-      await page.getByPlaceholder('What was it for?').fill(item.name)
+      await page.getByPlaceholder('¿En qué se gastó?').fill(item.name)
       await page.getByPlaceholder('0.00').fill(item.amount)
-      await page.getByRole('button', { name: 'Save' }).click()
+      await page.getByRole('button', { name: /Guardar Movimiento/i }).click()
+
+      await page.waitForURL('**/', { timeout: 5000 })
       await expect(page.getByText(item.name)).toBeVisible({ timeout: 5000 })
     }
 

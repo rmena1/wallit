@@ -6,6 +6,7 @@ import { eq, and, desc } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 import { createMovementSchema } from '@/lib/validations'
 import { generateId } from '@/lib/utils'
+import { convertUsdToClp } from '@/lib/exchange-rate'
 
 export type MovementActionResult = {
   success: boolean
@@ -23,6 +24,7 @@ export async function createMovement(formData: FormData): Promise<MovementAction
     date: formData.get('date'),
     amount: parseInt(formData.get('amount') as string, 10),
     type: formData.get('type'),
+    currency: (formData.get('currency') as string) || 'CLP',
   }
   
   const categoryId = formData.get('categoryId') as string | null
@@ -42,7 +44,23 @@ export async function createMovement(formData: FormData): Promise<MovementAction
     }
   }
   
-  const { name, date, amount, type } = parsed.data
+  const { name, date, amount, type, currency } = parsed.data
+
+  // Handle currency conversion
+  let finalAmount = amount
+  let amountUsd: number | null = null
+  let exchangeRate: number | null = null
+
+  if (currency === 'USD') {
+    try {
+      const conversion = await convertUsdToClp(amount)
+      amountUsd = amount
+      finalAmount = conversion.clpCents
+      exchangeRate = conversion.rate
+    } catch {
+      return { success: false, error: 'Error al obtener tipo de cambio' }
+    }
+  }
   
   // Create movement
   await db.insert(movements).values({
@@ -52,8 +70,11 @@ export async function createMovement(formData: FormData): Promise<MovementAction
     accountId,
     name,
     date,
-    amount,
+    amount: finalAmount,
     type,
+    currency,
+    amountUsd,
+    exchangeRate,
   })
   
   revalidatePath('/')
@@ -93,6 +114,10 @@ export async function getMovements() {
       date: movements.date,
       amount: movements.amount,
       type: movements.type,
+      needsReview: movements.needsReview,
+      currency: movements.currency,
+      amountUsd: movements.amountUsd,
+      exchangeRate: movements.exchangeRate,
       createdAt: movements.createdAt,
       updatedAt: movements.updatedAt,
       categoryName: categories.name,
