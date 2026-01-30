@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm'
 import { hashPassword, verifyPassword, createSession, destroySession } from '@/lib/auth'
 import { registerSchema, loginSchema } from '@/lib/validations'
 import { generateId } from '@/lib/utils'
+import { isRateLimited } from '@/lib/rate-limit'
 
 export type AuthActionResult = {
   success: boolean
@@ -32,6 +33,11 @@ export async function register(formData: FormData): Promise<AuthActionResult> {
   }
   
   const { email, password } = parsed.data
+
+  // Rate limit by email
+  if (isRateLimited(`register:${email.toLowerCase()}`, { maxAttempts: 3, windowMs: 15 * 60 * 1000 })) {
+    return { success: false, error: 'Too many attempts. Please try again later.' }
+  }
   
   // Check if user already exists
   const existingUser = await db
@@ -105,6 +111,11 @@ export async function login(formData: FormData): Promise<AuthActionResult> {
   }
   
   const { email, password } = parsed.data
+
+  // Rate limit by email (5 attempts per 15 min)
+  if (isRateLimited(`login:${email.toLowerCase()}`, { maxAttempts: 5, windowMs: 15 * 60 * 1000 })) {
+    return { success: false, error: 'Too many login attempts. Please try again later.' }
+  }
   
   // Find user
   const user = await db

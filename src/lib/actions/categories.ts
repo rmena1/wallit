@@ -9,6 +9,7 @@ import { generateId } from '@/lib/utils'
 export type CategoryActionResult = {
   success: boolean
   error?: string
+  categoryId?: string
 }
 
 /**
@@ -28,15 +29,16 @@ export async function createCategory(formData: FormData): Promise<CategoryAction
     return { success: false, error: 'Emoji is required' }
   }
   
+  const id = generateId()
   await db.insert(categories).values({
-    id: generateId(),
+    id,
     userId: session.id,
     name: name.trim(),
     emoji: emoji.trim(),
   })
   
   revalidatePath('/')
-  return { success: true }
+  return { success: true, categoryId: id }
 }
 
 /**

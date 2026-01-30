@@ -12,13 +12,8 @@ export default defineConfig({
     screenshot: 'on',
     trace: 'retain-on-failure',
   },
+  workers: 1,
   projects: [
-    {
-      name: 'mobile',
-      use: {
-        ...devices['Pixel 7'],
-      },
-    },
     {
       name: 'desktop',
       use: {

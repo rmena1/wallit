@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createMovement } from '@/lib/actions/movements'
-import { today, parseMoney } from '@/lib/utils'
+import { today, parseMoney, formatCurrency } from '@/lib/utils'
+import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
 
 interface AddMovementPageProps {
@@ -30,6 +31,10 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [currency, setCurrency] = useState<'CLP' | 'USD'>('CLP')
+  const [showCreateCategory, setShowCreateCategory] = useState(false)
+  const [localCategories, setLocalCategories] = useState(categories)
+  const [selectedCategoryId, setSelectedCategoryId] = useState('')
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -149,7 +154,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
             {/* Amount + Currency + Date */}
             <div style={{ display: 'flex', gap: 12 }}>
               <div style={{ flex: 2 }}>
-                <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Monto</label>
+                <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>{currency === 'USD' ? 'Monto pesos' : 'Monto'}</label>
                 <input
                   name="amount" type="text" placeholder="0.00"
                   required inputMode="decimal" autoComplete="off"
@@ -158,7 +163,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
               </div>
               <div style={{ flex: 1 }}>
                 <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Moneda</label>
-                <select name="currency" defaultValue="CLP" style={selectStyle}>
+                <select name="currency" defaultValue="CLP" onChange={e => setCurrency(e.target.value as 'CLP' | 'USD')} style={selectStyle}>
                   <option value="CLP">CLP</option>
                   <option value="USD">USD</option>
                 </select>
@@ -175,14 +180,22 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
             {/* Category */}
             <div>
               <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Categoría</label>
-              <select name="categoryId" defaultValue="" style={selectStyle}>
-                <option value="">Sin categoría</option>
-                {categories.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.emoji} {cat.name}
-                  </option>
-                ))}
-              </select>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <select name="categoryId" value={selectedCategoryId} onChange={e => setSelectedCategoryId(e.target.value)} style={{ ...selectStyle, flex: 1 }}>
+                  <option value="">Sin categoría</option>
+                  {localCategories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.emoji} {cat.name}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => setShowCreateCategory(true)} style={{
+                  width: 48, height: 48, borderRadius: 12, border: '1px solid #2a2a2a',
+                  backgroundColor: '#1a1a1a', color: '#22c55e', fontSize: 20,
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0,
+                }}>+</button>
+              </div>
             </div>
 
             <button
@@ -201,6 +214,15 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
           </div>
         </form>
       </main>
+
+      <CreateCategoryDialog
+        open={showCreateCategory}
+        onClose={() => setShowCreateCategory(false)}
+        onCreated={(id, name, emoji) => {
+          setLocalCategories(prev => [...prev, { id, name, emoji, userId: '', createdAt: new Date(), updatedAt: new Date() }])
+          setSelectedCategoryId(id)
+        }}
+      />
 
       <style>{`
         .type-radio:checked + .type-label {

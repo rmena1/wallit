@@ -1,10 +1,11 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { logout } from '@/lib/actions/auth'
 import { deleteMovement } from '@/lib/actions/movements'
 import { markAsReceived } from '@/lib/actions/review'
-import { formatDateDisplay, formatMoney } from '@/lib/utils'
+import { formatDateDisplay, formatCurrency } from '@/lib/utils'
 import type { AccountWithBalance } from '@/lib/actions/balances'
 
 interface MovementWithCategory {
@@ -24,8 +25,17 @@ interface MovementWithCategory {
   accountLastFour: string | null
   accountColor: string | null
   accountEmoji: string | null
+  currency: 'CLP' | 'USD'
   receivable: boolean
   received: boolean
+  receivableId: string | null
+}
+
+interface UserAccount {
+  id: string
+  bankName: string
+  lastFourDigits: string
+  emoji: string | null
 }
 
 interface HomePageProps {
@@ -37,6 +47,7 @@ interface HomePageProps {
   movements: MovementWithCategory[]
   pendingReviewCount: number
   usdClpRate: number | null
+  userAccounts: UserAccount[]
 }
 
 function TrashIcon() {
@@ -59,15 +70,28 @@ function getAccountIconFromType(accountType: string): string {
   }
 }
 
-export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements, pendingReviewCount, usdClpRate }: HomePageProps) {
+export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements, pendingReviewCount, usdClpRate, userAccounts }: HomePageProps) {
+  const router = useRouter()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [receivableFilter, setReceivableFilter] = useState(false)
   const [markingReceived, setMarkingReceived] = useState<string | null>(null)
+  const [paymentDialogId, setPaymentDialogId] = useState<string | null>(null)
+  const [selectedAccountId, setSelectedAccountId] = useState<string>('cash')
+  const reviewCount = pendingReviewCount
 
-  async function handleMarkReceived(id: string) {
+  function openPaymentDialog(id: string) {
+    setSelectedAccountId('cash')
+    setPaymentDialogId(id)
+  }
+
+  async function handleConfirmPayment() {
+    if (!paymentDialogId) return
+    const id = paymentDialogId
+    setPaymentDialogId(null)
     setMarkingReceived(id)
     try {
-      await markAsReceived(id)
+      const accountId = selectedAccountId === 'cash' ? undefined : selectedAccountId
+      await markAsReceived(id, accountId)
     } finally {
       setMarkingReceived(null)
     }
@@ -111,7 +135,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             <span style={{ fontSize: 17, fontWeight: 700, color: '#f5f5f5' }}>wallit</span>
             {usdClpRate !== null && (
               <span style={{ fontSize: 12, color: '#22c55e', backgroundColor: '#1a2e1a', padding: '2px 8px', borderRadius: 6, fontWeight: 600, marginLeft: 4 }}>
-                USD ${(usdClpRate / 100).toLocaleString('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                USD {formatCurrency(usdClpRate, 'CLP')}
               </span>
             )}
           </div>
@@ -146,7 +170,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             color: totalBalance >= 0 ? '#4ade80' : '#f87171',
             whiteSpace: 'nowrap',
           }}>
-            {formatMoney(totalBalance)}
+            {formatCurrency(totalBalance, 'CLP')}
           </div>
           <div style={{
             display: 'flex', gap: 16, marginTop: 16, paddingTop: 16,
@@ -155,13 +179,13 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#a1a1aa', marginBottom: 2 }}>Ingresos</div>
               <div style={{ fontSize: 16, fontWeight: 600, color: '#4ade80', whiteSpace: 'nowrap' }}>
-                {formatMoney(totalIncome)}
+                {formatCurrency(totalIncome, 'CLP')}
               </div>
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#a1a1aa', marginBottom: 2 }}>Gastos</div>
               <div style={{ fontSize: 16, fontWeight: 600, color: '#f87171', whiteSpace: 'nowrap' }}>
-                {formatMoney(totalExpense)}
+                {formatCurrency(totalExpense, 'CLP')}
               </div>
             </div>
           </div>
@@ -201,7 +225,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                     whiteSpace: 'nowrap',
                     marginBottom: 4,
                   }}>
-                    {formatMoney(acc.balance)}
+                    {formatCurrency(acc.balance, acc.currency)}
                   </div>
                   <div style={{ fontSize: 11, color: '#52525b' }}>
                     {acc.accountType} · ···{acc.lastFourDigits}
@@ -243,7 +267,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
         )}
 
         {/* Review Banner */}
-        {pendingReviewCount > 0 && (
+        {reviewCount > 0 && (
           <a href="/review" style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             backgroundColor: '#1a1a0a', borderRadius: 14, padding: '14px 16px',
@@ -255,7 +279,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               <span style={{ fontSize: 20 }}>👀</span>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 600, color: '#fbbf24' }}>
-                  {pendingReviewCount} movimiento{pendingReviewCount !== 1 ? 's' : ''} pendiente{pendingReviewCount !== 1 ? 's' : ''} de revisión
+                  {reviewCount} movimiento{reviewCount !== 1 ? 's' : ''} pendiente{reviewCount !== 1 ? 's' : ''} de revisión
                 </div>
                 <div style={{ fontSize: 12, color: '#a18329', marginTop: 2 }}>
                   Toca para revisar
@@ -268,7 +292,8 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
           </a>
         )}
 
-        {/* Recent Movements */}
+        {/* Recent Movements — only show when user has accounts */}
+        {accountBalances.length > 0 && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: 0 }}>
@@ -296,12 +321,25 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             }}>
               <span style={{ fontSize: 40, display: 'block', marginBottom: 8 }}>📊</span>
               <span style={{ fontSize: 14 }}>Sin movimientos aún</span>
+              <a
+                href="/add"
+                style={{
+                  display: 'inline-block', marginTop: 12,
+                  padding: '8px 20px', borderRadius: 10, border: 'none',
+                  background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                  color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                  textDecoration: 'none',
+                }}
+              >
+                Agregar Movimiento
+              </a>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {filteredMovements.map((m) => (
                 <div
                   key={m.id}
+                  onClick={() => router.push(`/edit/${m.id}`)}
                   style={{
                     backgroundColor: m.receivable && !m.received ? '#2a2000' : m.received ? '#1a1a1a' : '#1a1a1a',
                     borderRadius: 12,
@@ -311,12 +349,13 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                     opacity: deletingId === m.id || markingReceived === m.id ? 0.4 : m.received ? 0.5 : 1,
                     transition: 'opacity 0.2s ease',
                     textDecoration: m.received ? 'line-through' : 'none',
+                    cursor: 'pointer',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
                     {m.receivable && !m.received && (
                       <button
-                        onClick={() => handleMarkReceived(m.id)}
+                        onClick={(e) => { e.stopPropagation(); openPaymentDialog(m.id) }}
                         disabled={markingReceived === m.id}
                         style={{
                           width: 24, height: 24, borderRadius: 6,
@@ -368,10 +407,10 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                       color: m.type === 'income' ? '#4ade80' : '#f87171',
                       whiteSpace: 'nowrap',
                     }}>
-                      {m.type === 'income' ? '+' : '-'}{formatMoney(m.amount)}
+                      {m.type === 'income' ? '+' : '-'}{formatCurrency(m.amount, 'CLP')}
                     </span>
                     <button
-                      onClick={() => handleDelete(m.id)}
+                      onClick={(e) => { e.stopPropagation(); handleDelete(m.id) }}
                       disabled={deletingId === m.id}
                       style={{
                         width: 30, height: 30, borderRadius: 8,
@@ -389,7 +428,116 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             </div>
           )}
         </div>
+        )}
       </main>
+
+      {/* Payment Dialog */}
+      {paymentDialogId && (
+        <div
+          onClick={() => setPaymentDialogId(null)}
+          style={{
+            position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 100, padding: 20,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              backgroundColor: '#1a1a1a', borderRadius: 20, padding: 24,
+              border: '1px solid #2a2a2a', width: '100%', maxWidth: 380,
+            }}
+          >
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#e5e5e5', marginBottom: 4 }}>
+              💰 Cobrar gasto
+            </div>
+            <div style={{ fontSize: 13, color: '#71717a', marginBottom: 20 }}>
+              ¿En qué cuenta recibiste el pago?
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
+              {/* Cash option */}
+              <label
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                  backgroundColor: selectedAccountId === 'cash' ? '#27272a' : 'transparent',
+                  border: selectedAccountId === 'cash' ? '1px solid #4ade80' : '1px solid #2a2a2a',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <input
+                  type="radio" name="paymentAccount" value="cash"
+                  checked={selectedAccountId === 'cash'}
+                  onChange={() => setSelectedAccountId('cash')}
+                  style={{ display: 'none' }}
+                />
+                <span style={{ fontSize: 20 }}>💵</span>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e5e5' }}>Efectivo</div>
+                  <div style={{ fontSize: 11, color: '#71717a' }}>No genera movimiento de ingreso</div>
+                </div>
+                {selectedAccountId === 'cash' && (
+                  <span style={{ marginLeft: 'auto', color: '#4ade80', fontSize: 16 }}>✓</span>
+                )}
+              </label>
+
+              {/* Account options */}
+              {userAccounts.map(acc => (
+                <label
+                  key={acc.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                    backgroundColor: selectedAccountId === acc.id ? '#27272a' : 'transparent',
+                    border: selectedAccountId === acc.id ? '1px solid #4ade80' : '1px solid #2a2a2a',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <input
+                    type="radio" name="paymentAccount" value={acc.id}
+                    checked={selectedAccountId === acc.id}
+                    onChange={() => setSelectedAccountId(acc.id)}
+                    style={{ display: 'none' }}
+                  />
+                  <span style={{ fontSize: 20 }}>{acc.emoji || '🏦'}</span>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e5e5' }}>{acc.bankName}</div>
+                    <div style={{ fontSize: 11, color: '#71717a' }}>···{acc.lastFourDigits}</div>
+                  </div>
+                  {selectedAccountId === acc.id && (
+                    <span style={{ marginLeft: 'auto', color: '#4ade80', fontSize: 16 }}>✓</span>
+                  )}
+                </label>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                onClick={() => setPaymentDialogId(null)}
+                style={{
+                  flex: 1, padding: '12px', borderRadius: 12,
+                  border: '1px solid #2a2a2a', backgroundColor: '#111',
+                  color: '#a1a1aa', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmPayment}
+                style={{
+                  flex: 1, padding: '12px', borderRadius: 12,
+                  border: 'none', background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                  color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(34,197,94,0.25)',
+                }}
+              >
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }

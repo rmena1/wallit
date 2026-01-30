@@ -75,6 +75,7 @@ export const movements = sqliteTable('movements', {
   exchangeRate: integer('exchange_rate'), // rate * 100 (e.g. 950.50 → 95050)
   receivable: integer('receivable', { mode: 'boolean' }).notNull().default(false),
   received: integer('received', { mode: 'boolean' }).notNull().default(false),
+  receivableId: text('receivable_id'), // links income payment to original receivable expense
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, (table) => [

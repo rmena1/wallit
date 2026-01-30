@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { confirmMovement, deleteReviewMovement, markAsReceivable, splitMovement } from '@/lib/actions/review'
-import { formatMoney, parseMoney } from '@/lib/utils'
+import { formatCurrency, parseMoney } from '@/lib/utils'
+import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
 
 interface PendingMovement {
@@ -30,9 +31,9 @@ interface Props {
 }
 
 const inputStyle: React.CSSProperties = {
-  width: '100%', height: 48, borderRadius: 12,
+  width: '100%', height: 36, borderRadius: 8,
   border: '1px solid #2a2a2a', backgroundColor: '#1a1a1a',
-  fontSize: 15, color: '#e5e5e5', padding: '0 14px', outline: 'none',
+  fontSize: 14, color: '#e5e5e5', padding: '0 10px', outline: 'none',
   boxSizing: 'border-box',
 }
 
@@ -40,12 +41,12 @@ const selectStyle: React.CSSProperties = {
   ...inputStyle,
   appearance: 'none' as const,
   backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2371717a' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-  backgroundPosition: 'right 12px center',
+  backgroundPosition: 'right 8px center',
   backgroundRepeat: 'no-repeat',
-  backgroundSize: '16px',
+  backgroundSize: '14px',
 }
 
-const labelStyle: React.CSSProperties = { fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }
+const labelStyle: React.CSSProperties = { fontSize: 11, color: '#71717a', marginBottom: 2, display: 'block' }
 
 function centsToDisplay(cents: number): string {
   return (cents / 100).toString()
@@ -60,7 +61,6 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Form state for current movement
   const current = movements[currentIndex] as PendingMovement | undefined
   const [formName, setFormName] = useState(current?.name ?? '')
   const [formDate, setFormDate] = useState(current?.date ?? '')
@@ -72,14 +72,13 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
   const [formAmountUsd, setFormAmountUsd] = useState(current?.amountUsd ? centsToDisplay(current.amountUsd) : '')
   const [formExchangeRate, setFormExchangeRate] = useState(current?.exchangeRate ? (current.exchangeRate / 100).toString() : '')
 
-  // Delete state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  // Receivable state
   const [showReceivable, setShowReceivable] = useState(false)
   const [receivableText, setReceivableText] = useState('')
-  // Split state
   const [showSplit, setShowSplit] = useState(false)
   const [splitItems, setSplitItems] = useState<{ name: string; amount: string }[]>([])
+  const [showCreateCategory, setShowCreateCategory] = useState(false)
+  const [localCategories, setLocalCategories] = useState(categories)
 
   const done = currentIndex >= total
 
@@ -113,7 +112,6 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     try {
       const amountCents = parseMoney(formAmount)
       if (amountCents <= 0) { setError('Monto inválido'); setLoading(false); return }
-
       await confirmMovement(current.id, {
         name: formName.trim(),
         date: formDate,
@@ -133,9 +131,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     }
   }
 
-  function handleSkip() {
-    goNext(false)
-  }
+  function handleSkip() { goNext(false) }
 
   async function handleDelete() {
     if (!current) return
@@ -179,14 +175,10 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     setSplitItems(prev => {
       const next = [...prev]
       next[idx] = { ...next[idx], [field]: value }
-      // Auto-adjust first item amount
       if (field === 'amount' && idx !== 0 && current) {
-        const totalCents = current.amount
-        const totalDisplay = totalCents / 100
+        const totalDisplay = current.amount / 100
         let otherSum = 0
-        for (let i = 1; i < next.length; i++) {
-          otherSum += parseFloat(next[i].amount) || 0
-        }
+        for (let i = 1; i < next.length; i++) otherSum += parseFloat(next[i].amount) || 0
         next[0] = { ...next[0], amount: Math.max(0, totalDisplay - otherSum).toString() }
       }
       return next
@@ -203,7 +195,6 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
       if (splits.length < 2) { setError('Necesitas al menos 2 partes'); setLoading(false); return }
       await splitMovement(current.id, splits)
       setShowSplit(false)
-      // Reload page to get new split movements
       router.refresh()
       window.location.reload()
     } catch {
@@ -222,9 +213,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
           <div style={{ fontSize: 20, fontWeight: 700, color: '#e5e5e5', marginBottom: 8 }}>
             No hay movimientos pendientes
           </div>
-          <button onClick={() => router.push('/')} style={primaryBtn}>
-            Volver al inicio
-          </button>
+          <button onClick={() => router.push('/')} style={primaryBtn}>Volver al inicio</button>
         </main>
       </>
     )
@@ -242,32 +231,24 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
           <div style={{ fontSize: 15, color: '#a1a1aa', marginBottom: 24 }}>
             {confirmed} confirmado{confirmed !== 1 ? 's' : ''} · {skipped} omitido{skipped !== 1 ? 's' : ''}
           </div>
-          <button onClick={() => router.push('/')} style={primaryBtn}>
-            Volver al inicio
-          </button>
+          <button onClick={() => router.push('/')} style={primaryBtn}>Volver al inicio</button>
         </main>
       </>
     )
   }
 
   const reviewed = confirmed + skipped
-  const remaining = total - reviewed
 
   return (
     <>
       <Header />
-      <main style={{ maxWidth: 540, margin: '0 auto', padding: '16px 16px 96px' }}>
-        {/* Progress */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontSize: 13, color: '#a1a1aa' }}>
-              {reviewed} de {total} revisados
-            </span>
-            <span style={{ fontSize: 13, color: '#71717a' }}>
-              {remaining} pendiente{remaining !== 1 ? 's' : ''}
-            </span>
-          </div>
-          <div style={{ height: 4, backgroundColor: '#27272a', borderRadius: 2 }}>
+      <main style={{ maxWidth: 540, margin: '0 auto', padding: '8px 12px 0' }}>
+        {/* Progress bar - compact */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 12, color: '#a1a1aa', whiteSpace: 'nowrap' }}>
+            {reviewed + 1}/{total}
+          </span>
+          <div style={{ flex: 1, height: 3, backgroundColor: '#27272a', borderRadius: 2 }}>
             <div style={{
               height: '100%', borderRadius: 2,
               background: 'linear-gradient(90deg, #22c55e, #16a34a)',
@@ -280,8 +261,8 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
         {error && (
           <div style={{
             backgroundColor: '#450a0a', border: '1px solid #7f1d1d',
-            borderRadius: 12, padding: '12px 16px', marginBottom: 16,
-            fontSize: 14, color: '#fca5a5',
+            borderRadius: 8, padding: '6px 10px', marginBottom: 6,
+            fontSize: 13, color: '#fca5a5',
           }}>
             {error}
           </div>
@@ -289,54 +270,56 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
 
         {/* Card */}
         <div style={{
-          backgroundColor: '#1a1a1a', borderRadius: 16, padding: 20,
+          backgroundColor: '#1a1a1a', borderRadius: 12, padding: '12px 14px',
           border: '1px solid #2a2a2a',
         }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {/* Type toggle */}
+          {/* Prominent amount + name header */}
+          <div style={{ textAlign: 'center', marginBottom: 10 }}>
             <div style={{
-              display: 'flex', backgroundColor: '#111', borderRadius: 12,
-              padding: 4, gap: 4, border: '1px solid #2a2a2a',
+              fontSize: 28, fontWeight: 800,
+              color: formType === 'expense' ? '#f87171' : '#4ade80',
+              lineHeight: 1.1,
+            }}>
+              {formatCurrency(current!.amount, 'CLP')}
+            </div>
+            <div style={{ fontSize: 13, color: '#a1a1aa', marginTop: 2 }}>
+              {current!.name}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {/* Type toggle - compact */}
+            <div style={{
+              display: 'flex', backgroundColor: '#111', borderRadius: 8,
+              padding: 2, gap: 2, border: '1px solid #2a2a2a',
             }}>
               {(['expense', 'income'] as const).map(t => (
                 <button key={t} type="button" onClick={() => setFormType(t)} style={{
-                  flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
-                  fontSize: 15, fontWeight: 500, cursor: 'pointer',
+                  flex: 1, padding: '6px 0', borderRadius: 6, border: 'none',
+                  fontSize: 13, fontWeight: 600, cursor: 'pointer',
                   backgroundColor: formType === t ? '#27272a' : 'transparent',
                   color: formType === t ? (t === 'expense' ? '#f87171' : '#4ade80') : '#52525b',
-                  boxShadow: formType === t ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
-                  transition: 'all 0.2s ease',
+                  transition: 'all 0.15s ease',
                 }}>
                   {t === 'expense' ? '↓ Gasto' : '↑ Ingreso'}
                 </button>
               ))}
             </div>
 
-            {/* Account */}
-            <div>
-              <label style={labelStyle}>Cuenta</label>
-              <select value={formAccountId} onChange={e => setFormAccountId(e.target.value)} style={selectStyle}>
-                <option value="">Sin cuenta</option>
-                {accounts.map(a => (
-                  <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} · {a.accountType} · ···{a.lastFourDigits}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Name */}
+            {/* Row: Nombre (full width) */}
             <div>
               <label style={labelStyle}>Descripción</label>
-              <input value={formName} onChange={e => setFormName(e.target.value)} autoFocus style={inputStyle} />
+              <input value={formName} onChange={e => setFormName(e.target.value)} style={inputStyle} />
             </div>
 
-            {/* Amount + Currency */}
-            <div style={{ display: 'flex', gap: 12 }}>
-              <div style={{ flex: 2 }}>
+            {/* Row: Monto | Moneda */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px', gap: 6 }}>
+              <div>
                 <label style={labelStyle}>Monto</label>
                 <input value={formAmount} onChange={e => setFormAmount(e.target.value)}
                   inputMode="decimal" style={inputStyle} />
               </div>
-              <div style={{ flex: 1 }}>
+              <div>
                 <label style={labelStyle}>Moneda</label>
                 <select value={formCurrency} onChange={e => setFormCurrency(e.target.value as 'CLP' | 'USD')} style={selectStyle}>
                   <option value="CLP">CLP</option>
@@ -347,85 +330,99 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
 
             {/* USD fields */}
             {formCurrency === 'USD' && (
-              <div style={{ display: 'flex', gap: 12 }}>
-                <div style={{ flex: 1 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                <div>
                   <label style={labelStyle}>Monto USD</label>
                   <input value={formAmountUsd} onChange={e => setFormAmountUsd(e.target.value)}
                     inputMode="decimal" style={inputStyle} />
                 </div>
-                <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>Tipo de cambio</label>
+                <div>
+                  <label style={labelStyle}>Tipo cambio</label>
                   <input value={formExchangeRate} onChange={e => setFormExchangeRate(e.target.value)}
                     inputMode="decimal" style={inputStyle} />
                 </div>
               </div>
             )}
 
-            {/* Date */}
+            {/* Row: Cuenta | Categoría */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <div>
+                <label style={labelStyle}>Cuenta</label>
+                <select value={formAccountId} onChange={e => setFormAccountId(e.target.value)} style={selectStyle}>
+                  <option value="">Sin cuenta</option>
+                  {accounts.map(a => (
+                    <option key={a.id} value={a.id}>{a.emoji || '🏦'} ···{a.lastFourDigits}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>Categoría</label>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <select value={formCategoryId} onChange={e => setFormCategoryId(e.target.value)} style={{ ...selectStyle, flex: 1 }}>
+                    <option value="">Sin categoría</option>
+                    {localCategories.map(c => (
+                      <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={() => setShowCreateCategory(true)} style={{
+                    width: 36, height: 36, borderRadius: 8, border: '1px solid #2a2a2a',
+                    backgroundColor: '#1a1a1a', color: '#22c55e', fontSize: 16,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0, padding: 0,
+                  }}>+</button>
+                </div>
+              </div>
+            </div>
+
+            {/* Row: Fecha (full width, compact) */}
             <div>
               <label style={labelStyle}>Fecha</label>
               <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)}
                 style={{ ...inputStyle, colorScheme: 'dark' }} />
             </div>
-
-            {/* Category */}
-            <div>
-              <label style={labelStyle}>Categoría</label>
-              <select value={formCategoryId} onChange={e => setFormCategoryId(e.target.value)} style={selectStyle}>
-                <option value="">Sin categoría</option>
-                {categories.map(c => (
-                  <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Current values hint */}
-            <div style={{ fontSize: 12, color: '#52525b', padding: '4px 0' }}>
-              Original: {current!.name} · {formatMoney(current!.amount)} · {current!.date}
-            </div>
           </div>
         </div>
 
-        {/* Action buttons */}
-        <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+        {/* Primary action buttons */}
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button onClick={handleSkip} disabled={loading} style={{
-            flex: 1, height: 48, borderRadius: 12, border: '1px solid #2a2a2a',
+            flex: 1, height: 40, borderRadius: 10, border: '1px solid #2a2a2a',
             backgroundColor: '#1a1a1a', color: '#a1a1aa',
-            fontSize: 15, fontWeight: 600, cursor: 'pointer',
+            fontSize: 14, fontWeight: 600, cursor: 'pointer',
           }}>
-            Revisar después
+            Después →
           </button>
           <button onClick={handleConfirm} disabled={loading} style={{
-            flex: 1, height: 48, borderRadius: 12, border: 'none',
+            flex: 1.3, height: 40, borderRadius: 10, border: 'none',
             background: loading ? '#27272a' : 'linear-gradient(135deg, #22c55e, #16a34a)',
-            color: '#fff', fontSize: 15, fontWeight: 600,
+            color: '#fff', fontSize: 14, fontWeight: 600,
             cursor: loading ? 'not-allowed' : 'pointer',
-            boxShadow: loading ? 'none' : '0 4px 12px rgba(34,197,94,0.3)',
+            boxShadow: loading ? 'none' : '0 2px 8px rgba(34,197,94,0.3)',
           }}>
-            {loading ? 'Guardando...' : 'Confirmar ✓'}
+            {loading ? '...' : '✓ Confirmar'}
           </button>
         </div>
 
-        {/* Secondary actions */}
-        <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+        {/* Secondary actions - icon-style compact */}
+        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
           <button onClick={() => setShowDeleteConfirm(true)} disabled={loading} style={{
-            flex: 1, height: 42, borderRadius: 12, border: '1px solid #7f1d1d',
+            flex: 1, height: 34, borderRadius: 8, border: '1px solid #7f1d1d',
             backgroundColor: '#1a1a1a', color: '#f87171',
-            fontSize: 14, fontWeight: 600, cursor: 'pointer',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
           }}>
             🗑 Eliminar
           </button>
           <button onClick={() => { setShowReceivable(true); setReceivableText(current?.name || '') }} disabled={loading} style={{
-            flex: 1, height: 42, borderRadius: 12, border: '1px solid #854d0e',
+            flex: 1, height: 34, borderRadius: 8, border: '1px solid #854d0e',
             backgroundColor: '#1a1a1a', color: '#fbbf24',
-            fontSize: 14, fontWeight: 600, cursor: 'pointer',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
           }}>
-            💰 Por cobrar
+            💰 Cobrar
           </button>
           <button onClick={openSplit} disabled={loading} style={{
-            flex: 1, height: 42, borderRadius: 12, border: '1px solid #1e40af',
+            flex: 1, height: 34, borderRadius: 8, border: '1px solid #1e40af',
             backgroundColor: '#1a1a1a', color: '#60a5fa',
-            fontSize: 14, fontWeight: 600, cursor: 'pointer',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
           }}>
             ✂️ Dividir
           </button>
@@ -452,16 +449,12 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                   flex: 1, height: 44, borderRadius: 12, border: '1px solid #2a2a2a',
                   backgroundColor: '#27272a', color: '#a1a1aa',
                   fontSize: 15, fontWeight: 600, cursor: 'pointer',
-                }}>
-                  Cancelar
-                </button>
+                }}>Cancelar</button>
                 <button onClick={handleDelete} disabled={loading} style={{
                   flex: 1, height: 44, borderRadius: 12, border: 'none',
                   backgroundColor: '#dc2626', color: '#fff',
                   fontSize: 15, fontWeight: 600, cursor: 'pointer',
-                }}>
-                  {loading ? 'Eliminando...' : 'Eliminar'}
-                </button>
+                }}>{loading ? 'Eliminando...' : 'Eliminar'}</button>
               </div>
             </div>
           </div>
@@ -483,33 +476,33 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
               <div style={{ fontSize: 14, color: '#a1a1aa', marginBottom: 16 }}>
                 Escribe un recordatorio (ej: &quot;Juan me debe la mitad&quot;)
               </div>
-              <input
-                value={receivableText}
-                onChange={e => setReceivableText(e.target.value)}
-                placeholder="Texto del recordatorio..."
-                autoFocus
-                style={inputStyle}
-              />
+              <input value={receivableText} onChange={e => setReceivableText(e.target.value)}
+                placeholder="Texto del recordatorio..." autoFocus style={inputStyle} />
               <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
                 <button onClick={() => { setShowReceivable(false); setReceivableText('') }} style={{
                   flex: 1, height: 44, borderRadius: 12, border: '1px solid #2a2a2a',
                   backgroundColor: '#27272a', color: '#a1a1aa',
                   fontSize: 15, fontWeight: 600, cursor: 'pointer',
-                }}>
-                  Cancelar
-                </button>
+                }}>Cancelar</button>
                 <button onClick={handleReceivable} disabled={loading || !receivableText.trim()} style={{
                   flex: 1, height: 44, borderRadius: 12, border: 'none',
                   backgroundColor: '#d97706', color: '#fff',
                   fontSize: 15, fontWeight: 600, cursor: 'pointer',
                   opacity: receivableText.trim() ? 1 : 0.5,
-                }}>
-                  {loading ? 'Guardando...' : 'Confirmar'}
-                </button>
+                }}>{loading ? 'Guardando...' : 'Confirmar'}</button>
               </div>
             </div>
           </div>
         )}
+
+        <CreateCategoryDialog
+          open={showCreateCategory}
+          onClose={() => setShowCreateCategory(false)}
+          onCreated={(id, name, emoji) => {
+            setLocalCategories(prev => [...prev, { id, name, emoji, userId: '', createdAt: new Date(), updatedAt: new Date() }])
+            setFormCategoryId(id)
+          }}
+        />
 
         {/* Split dialog */}
         {showSplit && current && (
@@ -529,10 +522,9 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                 fontSize: 14, color: '#a1a1aa', marginBottom: 16,
                 padding: '8px 12px', backgroundColor: '#111', borderRadius: 8,
               }}>
-                Total: <strong style={{ color: '#e5e5e5' }}>{formatMoney(current.amount)}</strong>
+                Total: <strong style={{ color: '#e5e5e5' }}>{formatCurrency(current.amount, current.currency)}</strong>
                 {' · '}{current.name}
               </div>
-
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {splitItems.map((item, idx) => (
                   <div key={idx} style={{
@@ -541,53 +533,33 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                     borderRadius: 10, border: '1px solid #2a2a2a',
                   }}>
                     <span style={{ fontSize: 13, color: '#71717a', width: 20, flexShrink: 0 }}>{idx + 1}</span>
-                    <input
-                      value={item.name}
-                      onChange={e => updateSplitItem(idx, 'name', e.target.value)}
-                      placeholder="Descripción"
-                      style={{ ...inputStyle, height: 40, fontSize: 14, flex: 2 }}
-                    />
-                    <input
-                      value={item.amount}
-                      onChange={e => updateSplitItem(idx, 'amount', e.target.value)}
-                      placeholder="0"
-                      inputMode="decimal"
-                      readOnly={idx === 0}
-                      style={{
-                        ...inputStyle, height: 40, fontSize: 14, flex: 1, textAlign: 'right',
+                    <input value={item.name} onChange={e => updateSplitItem(idx, 'name', e.target.value)}
+                      placeholder="Descripción" style={{ ...inputStyle, height: 40, fontSize: 14, flex: 2 }} />
+                    <input value={item.amount} onChange={e => updateSplitItem(idx, 'amount', e.target.value)}
+                      placeholder="0" inputMode="decimal" readOnly={idx === 0}
+                      style={{ ...inputStyle, height: 40, fontSize: 14, flex: 1, textAlign: 'right',
                         ...(idx === 0 ? { backgroundColor: '#0a0a0a', color: '#71717a' } : {}),
-                      }}
-                    />
+                      }} />
                   </div>
                 ))}
               </div>
-
-              <button
-                onClick={() => setSplitItems(prev => [...prev, { name: '', amount: '' }])}
+              <button onClick={() => setSplitItems(prev => [...prev, { name: '', amount: '' }])}
                 style={{
                   marginTop: 10, padding: '8px 16px', borderRadius: 10,
                   border: '1px dashed #2a2a2a', backgroundColor: 'transparent',
                   color: '#60a5fa', fontSize: 14, cursor: 'pointer', width: '100%',
-                }}
-              >
-                + Agregar
-              </button>
-
+                }}>+ Agregar</button>
               <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
                 <button onClick={() => setShowSplit(false)} style={{
                   flex: 1, height: 44, borderRadius: 12, border: '1px solid #2a2a2a',
                   backgroundColor: '#27272a', color: '#a1a1aa',
                   fontSize: 15, fontWeight: 600, cursor: 'pointer',
-                }}>
-                  Cancelar
-                </button>
+                }}>Cancelar</button>
                 <button onClick={handleSplit} disabled={loading} style={{
                   flex: 1, height: 44, borderRadius: 12, border: 'none',
                   backgroundColor: '#2563eb', color: '#fff',
                   fontSize: 15, fontWeight: 600, cursor: 'pointer',
-                }}>
-                  {loading ? 'Dividiendo...' : 'Confirmar división'}
-                </button>
+                }}>{loading ? 'Dividiendo...' : 'Confirmar división'}</button>
               </div>
             </div>
           </div>
@@ -602,21 +574,20 @@ function Header() {
   return (
     <header style={{
       backgroundColor: '#111111', borderBottom: '1px solid #1e1e1e',
-      padding: '12px 16px', position: 'sticky', top: 0, zIndex: 10,
+      padding: '8px 12px', position: 'sticky', top: 0, zIndex: 10,
     }}>
       <div style={{ maxWidth: 540, margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <button onClick={() => router.push('/')} style={{
           background: 'none', border: 'none', color: '#a1a1aa',
-          fontSize: 15, cursor: 'pointer', padding: '4px 0',
-          display: 'flex', alignItems: 'center', gap: 4,
+          fontSize: 14, cursor: 'pointer', padding: '2px 0',
+          display: 'flex', alignItems: 'center', gap: 2,
         }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6" />
           </svg>
-          Volver
         </button>
-        <span style={{ fontSize: 17, fontWeight: 700, color: '#f5f5f5' }}>Revisión de Movimientos</span>
-        <div style={{ width: 60 }} />
+        <span style={{ fontSize: 15, fontWeight: 700, color: '#f5f5f5' }}>Revisión</span>
+        <div style={{ width: 24 }} />
       </div>
     </header>
   )

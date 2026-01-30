@@ -99,6 +99,29 @@ export async function markAsReceivable(id: string, reminderText: string) {
   return { success: true }
 }
 
+export async function unmarkReceivable(id: string) {
+  const session = await requireAuth()
+  
+  // Delete any payment income linked to this receivable
+  await db
+    .delete(movements)
+    .where(and(eq(movements.receivableId, id), eq(movements.userId, session.id)))
+  
+  // Unmark the receivable
+  await db
+    .update(movements)
+    .set({
+      receivable: false,
+      received: false,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
+  revalidatePath('/')
+  revalidatePath('/review')
+  revalidatePath('/receivables')
+  return { success: true }
+}
+
 export async function splitMovement(originalId: string, splits: { name: string; amount: number }[]) {
   const session = await requireAuth()
   
@@ -113,61 +136,111 @@ export async function splitMovement(originalId: string, splits: { name: string; 
   const { generateId } = await import('@/lib/utils')
   const totalOriginal = original.amount
   
-  // Delete original
-  await db.delete(movements).where(eq(movements.id, originalId))
-  
-  // Create split movements
-  for (const split of splits) {
-    const proportion = totalOriginal !== 0 ? split.amount / totalOriginal : 0
-    await db.insert(movements).values({
-      id: generateId(),
-      userId: session.id,
-      categoryId: original.categoryId,
-      accountId: original.accountId,
-      name: split.name,
-      date: original.date,
-      amount: split.amount,
-      type: original.type,
-      currency: original.currency,
-      amountUsd: original.currency === 'USD' && original.amountUsd
-        ? Math.round(original.amountUsd * proportion)
-        : null,
-      exchangeRate: original.exchangeRate,
-      needsReview: true,
-      receivable: false,
-      received: false,
-      // Use a future createdAt so they sort first in review queue
-      createdAt: new Date(Date.now() + 1000),
-      updatedAt: new Date(),
-    })
+  // Validate split amounts sum to original
+  const splitTotal = splits.reduce((sum, s) => sum + s.amount, 0)
+  if (splitTotal !== totalOriginal) {
+    throw new Error(`Split amounts (${splitTotal}) must equal original amount (${totalOriginal})`)
   }
+  
+  // Use a transaction to ensure atomicity — if any insert fails,
+  // the original movement is preserved (no data loss)
+  await db.transaction(async (tx) => {
+    // Delete original
+    await tx.delete(movements).where(eq(movements.id, originalId))
+    
+    // Create split movements
+    for (const split of splits) {
+      const proportion = totalOriginal !== 0 ? split.amount / totalOriginal : 0
+      await tx.insert(movements).values({
+        id: generateId(),
+        userId: session.id,
+        categoryId: original.categoryId,
+        accountId: original.accountId,
+        name: split.name,
+        date: original.date,
+        amount: split.amount,
+        type: original.type,
+        currency: original.currency,
+        amountUsd: original.currency === 'USD' && original.amountUsd
+          ? Math.round(original.amountUsd * proportion)
+          : null,
+        exchangeRate: original.exchangeRate,
+        needsReview: true,
+        receivable: false,
+        received: false,
+        // Use a future createdAt so they sort first in review queue
+        createdAt: new Date(Date.now() + 1000),
+        updatedAt: new Date(),
+      })
+    }
+  })
   
   revalidatePath('/')
   revalidatePath('/review')
   return { success: true }
 }
 
-export async function markAsReceived(id: string) {
+export async function markAsReceived(id: string, paymentAccountId?: string) {
   const session = await requireAuth()
-  await db
-    .update(movements)
-    .set({ received: true, updatedAt: new Date() })
+  
+  // Get the original receivable movement
+  const [original] = await db
+    .select()
+    .from(movements)
     .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
+  
+  if (!original) throw new Error('Movement not found')
+  
+  const { generateId } = await import('@/lib/utils')
+  
+  await db.transaction(async (tx) => {
+    // Mark the original as received
+    await tx
+      .update(movements)
+      .set({ received: true, updatedAt: new Date() })
+      .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
+    
+    // If an account was selected (not cash), create an income movement
+    if (paymentAccountId) {
+      await tx.insert(movements).values({
+        id: generateId(),
+        userId: session.id,
+        categoryId: original.categoryId,
+        accountId: paymentAccountId,
+        name: `Cobro: ${original.name}`,
+        date: new Date().toISOString().slice(0, 10),
+        amount: original.amount,
+        type: 'income',
+        currency: original.currency,
+        amountUsd: original.amountUsd,
+        exchangeRate: original.exchangeRate,
+        receivable: false,
+        received: false,
+        receivableId: id, // link to original receivable
+        needsReview: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+    }
+  })
+  
   revalidatePath('/')
   return { success: true }
 }
 
 export async function getAccountsAndCategories() {
   const session = await requireAuth()
-  const userAccounts = await db
-    .select()
-    .from(accounts)
-    .where(eq(accounts.userId, session.id))
-    .orderBy(accounts.bankName)
-  const userCategories = await db
-    .select()
-    .from(categories)
-    .where(eq(categories.userId, session.id))
-    .orderBy(categories.name)
+  const [userAccounts, userCategories] = await Promise.all([
+    db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.userId, session.id))
+      .orderBy(accounts.bankName),
+    db
+      .select()
+      .from(categories)
+      .where(eq(categories.userId, session.id))
+      .orderBy(categories.name),
+  ])
   return { accounts: userAccounts, categories: userCategories }
 }

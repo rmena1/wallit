@@ -82,6 +82,73 @@ export async function createMovement(formData: FormData): Promise<MovementAction
 }
 
 /**
+ * Get a single movement by ID (with category/account info)
+ */
+export async function getMovementById(id: string) {
+  const session = await requireAuth()
+  const results = await db
+    .select({
+      id: movements.id,
+      userId: movements.userId,
+      categoryId: movements.categoryId,
+      accountId: movements.accountId,
+      name: movements.name,
+      date: movements.date,
+      amount: movements.amount,
+      type: movements.type,
+      currency: movements.currency,
+      amountUsd: movements.amountUsd,
+      exchangeRate: movements.exchangeRate,
+      receivable: movements.receivable,
+      received: movements.received,
+      needsReview: movements.needsReview,
+      categoryName: categories.name,
+      categoryEmoji: categories.emoji,
+      accountBankName: accounts.bankName,
+      accountLastFour: accounts.lastFourDigits,
+    })
+    .from(movements)
+    .leftJoin(categories, eq(movements.categoryId, categories.id))
+    .leftJoin(accounts, eq(movements.accountId, accounts.id))
+    .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
+  return results[0] || null
+}
+
+/**
+ * Update an existing movement
+ */
+export async function updateMovement(id: string, data: {
+  name: string
+  date: string
+  amount: number
+  type: 'income' | 'expense'
+  currency: 'CLP' | 'USD'
+  accountId: string | null
+  categoryId: string | null
+  amountUsd: number | null
+  exchangeRate: number | null
+}): Promise<MovementActionResult> {
+  const session = await requireAuth()
+  await db
+    .update(movements)
+    .set({
+      name: data.name,
+      date: data.date,
+      amount: data.amount,
+      type: data.type,
+      currency: data.currency,
+      accountId: data.accountId,
+      categoryId: data.categoryId,
+      amountUsd: data.amountUsd,
+      exchangeRate: data.exchangeRate,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
+  revalidatePath('/')
+  return { success: true }
+}
+
+/**
  * Delete a movement
  */
 export async function deleteMovement(id: string): Promise<MovementActionResult> {

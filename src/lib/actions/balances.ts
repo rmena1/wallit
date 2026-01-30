@@ -11,6 +11,7 @@ export interface AccountWithBalance {
   lastFourDigits: string
   initialBalance: number
   balance: number
+  currency: 'CLP' | 'USD'
   color: string | null
   emoji: string | null
 }
@@ -29,10 +30,11 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       accountType: accounts.accountType,
       lastFourDigits: accounts.lastFourDigits,
       initialBalance: accounts.initialBalance,
+      currency: accounts.currency,
       color: accounts.color,
       emoji: accounts.emoji,
-      incomeSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN ${movements.amount} ELSE 0 END), 0)`,
-      expenseSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN ${movements.amount} ELSE 0 END), 0)`,
+      incomeSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN CASE WHEN ${accounts.currency} = 'USD' AND ${movements.amountUsd} IS NOT NULL THEN ${movements.amountUsd} ELSE ${movements.amount} END ELSE 0 END), 0)`,
+      expenseSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN CASE WHEN ${accounts.currency} = 'USD' AND ${movements.amountUsd} IS NOT NULL THEN ${movements.amountUsd} ELSE ${movements.amount} END ELSE 0 END), 0)`,
     })
     .from(accounts)
     .leftJoin(movements, eq(accounts.id, movements.accountId))
@@ -47,15 +49,23 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
     lastFourDigits: r.lastFourDigits,
     initialBalance: r.initialBalance,
     balance: r.initialBalance + r.incomeSum - r.expenseSum,
+    currency: r.currency,
     color: r.color,
     emoji: r.emoji,
   }))
 }
 
 /**
- * Get the total balance across all accounts for the current user.
+ * Get the total balance across all accounts for the current user, in CLP cents.
+ * USD account balances are converted to CLP using the current exchange rate.
  */
-export async function getTotalBalance(): Promise<number> {
+export async function getTotalBalance(usdToClpRate?: number): Promise<number> {
   const accountBalances = await getAccountBalances()
-  return accountBalances.reduce((sum, a) => sum + a.balance, 0)
+  return accountBalances.reduce((sum, a) => {
+    if (a.currency === 'USD' && usdToClpRate) {
+      // Convert USD cents to CLP cents: usdCents * (rate / 100)
+      return sum + Math.round(a.balance * usdToClpRate / 100)
+    }
+    return sum + a.balance
+  }, 0)
 }

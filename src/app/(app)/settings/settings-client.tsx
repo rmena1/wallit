@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { createAccount, updateAccount, deleteAccount } from '@/lib/actions/accounts'
 import { createCategory, deleteCategory } from '@/lib/actions/categories'
-import { formatMoney } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
 import { BANK_NAMES, ACCOUNT_TYPES } from '@/lib/constants'
 import type { Category, Account } from '@/lib/db'
 import type { AccountWithBalance } from '@/lib/actions/balances'
@@ -363,13 +363,13 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                       </div>
                       <div style={{ marginTop: 6, display: 'flex', gap: 12 }}>
                         <div style={{ fontSize: 12, color: '#52525b' }}>
-                          Saldo inicial: {formatMoney(acc.initialBalance)}
+                          Saldo inicial: {formatCurrency(acc.initialBalance, acc.currency)}
                         </div>
                         <div style={{
                           fontSize: 13, fontWeight: 600,
                           color: balance >= 0 ? '#4ade80' : '#f87171',
                         }}>
-                          Balance: {formatMoney(balance)}
+                          Balance: {formatCurrency(balance, acc.currency)}
                         </div>
                       </div>
                     </div>

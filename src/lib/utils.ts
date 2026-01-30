@@ -41,14 +41,32 @@ export function formatDateDisplay(dateStr: string): string {
 // ============================================================================
 
 /**
- * Format cents as currency string
+ * Format cents as currency string (old, use formatCurrency instead)
  */
 export function formatMoney(cents: number): string {
-  const dollars = cents / 100
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(dollars)
+  return formatCurrency(cents, 'CLP')
+}
+
+/**
+ * Format cents as Chilean currency string
+ * CLP: $350.887 (dot thousands, no decimals)
+ * USD: US$1.218,17 (dot thousands, comma decimals)
+ */
+export function formatCurrency(cents: number, currency: 'CLP' | 'USD'): string {
+  if (currency === 'USD') {
+    const value = cents / 100
+    const parts = Math.abs(value).toFixed(2).split('.')
+    const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+    const decPart = parts[1]
+    const sign = value < 0 ? '-' : ''
+    return `${sign}US$${intPart},${decPart}`
+  } else {
+    // CLP: no decimals, dot as thousands separator
+    const value = Math.round(Math.abs(cents / 100))
+    const formatted = value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+    const sign = cents < 0 ? '-' : ''
+    return `${sign}$${formatted}`
+  }
 }
 
 /**

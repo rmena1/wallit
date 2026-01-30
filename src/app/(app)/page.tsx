@@ -13,61 +13,77 @@ export default async function Home() {
     redirect('/login')
   }
 
-  // Fetch account balances
-  const accountBalances = await getAccountBalances()
-  const totalBalance = accountBalances.reduce((sum, a) => sum + a.balance, 0)
+  // Run all data fetches in parallel for faster page load
+  const [
+    usdClpRate,
+    accountBalances,
+    recentMovements,
+    totalsResult,
+    reviewResult,
+  ] = await Promise.all([
+    // Exchange rate
+    getUsdToClpRate().catch(() => null as number | null),
 
-  // Fetch recent movements (last 20)
-  const recentMovements = await db
-    .select({
-      id: movements.id,
-      userId: movements.userId,
-      categoryId: movements.categoryId,
-      accountId: movements.accountId,
-      name: movements.name,
-      date: movements.date,
-      amount: movements.amount,
-      type: movements.type,
-      createdAt: movements.createdAt,
-      updatedAt: movements.updatedAt,
-      categoryName: categories.name,
-      categoryEmoji: categories.emoji,
-      accountBankName: accounts.bankName,
-      accountLastFour: accounts.lastFourDigits,
-      accountColor: accounts.color,
-      accountEmoji: accounts.emoji,
-      receivable: movements.receivable,
-      received: movements.received,
-    })
-    .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
-    .where(eq(movements.userId, session.id))
-    .orderBy(desc(movements.date), desc(movements.createdAt))
-    .limit(20)
+    // Account balances
+    getAccountBalances(),
 
-  // Calculate totals
-  const totalsResult = await db
-    .select({
-      totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0)`,
-      totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0)`,
-    })
-    .from(movements)
-    .where(eq(movements.userId, session.id))
+    // Recent movements (last 20)
+    db
+      .select({
+        id: movements.id,
+        userId: movements.userId,
+        categoryId: movements.categoryId,
+        accountId: movements.accountId,
+        name: movements.name,
+        date: movements.date,
+        amount: movements.amount,
+        type: movements.type,
+        createdAt: movements.createdAt,
+        updatedAt: movements.updatedAt,
+        categoryName: categories.name,
+        categoryEmoji: categories.emoji,
+        accountBankName: accounts.bankName,
+        accountLastFour: accounts.lastFourDigits,
+        accountColor: accounts.color,
+        accountEmoji: accounts.emoji,
+        currency: movements.currency,
+        receivable: movements.receivable,
+        received: movements.received,
+        receivableId: movements.receivableId,
+      })
+      .from(movements)
+      .leftJoin(categories, eq(movements.categoryId, categories.id))
+      .leftJoin(accounts, eq(movements.accountId, accounts.id))
+      .where(eq(movements.userId, session.id))
+      .orderBy(desc(movements.date), desc(movements.createdAt))
+      .limit(20),
+
+    // Totals
+    db
+      .select({
+        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) THEN amount ELSE 0 END), 0)`,
+      })
+      .from(movements)
+      .where(eq(movements.userId, session.id)),
+
+    // Pending review count
+    db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(movements)
+      .where(and(eq(movements.userId, session.id), eq(movements.needsReview, true))),
+  ])
+
+  // Compute total balance from parallel results
+  const totalBalance = accountBalances.reduce((sum, a) => {
+    if (a.currency === 'USD' && usdClpRate) {
+      return sum + Math.round(a.balance * usdClpRate / 100)
+    }
+    return sum + a.balance
+  }, 0)
 
   const totals = totalsResult[0] || { totalIncome: 0, totalExpense: 0 }
-
-  // Pending review count
-  const reviewResult = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(movements)
-    .where(and(eq(movements.userId, session.id), eq(movements.needsReview, true)))
   const pendingReviewCount = reviewResult[0]?.count ?? 0
-
-  let usdClpRate: number | null = null
-  try {
-    usdClpRate = await getUsdToClpRate()
-  } catch {}
 
   return (
     <HomePage
@@ -79,6 +95,7 @@ export default async function Home() {
       movements={recentMovements}
       pendingReviewCount={pendingReviewCount}
       usdClpRate={usdClpRate}
+      userAccounts={accountBalances.map(a => ({ id: a.id, bankName: a.bankName, lastFourDigits: a.lastFourDigits, emoji: a.emoji }))}
     />
   )
 }
