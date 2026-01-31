@@ -51,6 +51,8 @@ export default async function Home() {
         receivable: movements.receivable,
         received: movements.received,
         receivableId: movements.receivableId,
+        time: movements.time,
+        originalName: movements.originalName,
       })
       .from(movements)
       .leftJoin(categories, eq(movements.categoryId, categories.id))

@@ -29,6 +29,8 @@ export async function getPendingReviewMovements() {
       categoryId: movements.categoryId,
       accountId: movements.accountId,
       needsReview: movements.needsReview,
+      time: movements.time,
+      originalName: movements.originalName,
       categoryName: categories.name,
       categoryEmoji: categories.emoji,
       accountBankName: accounts.bankName,
@@ -51,6 +53,7 @@ export async function confirmMovement(id: string, data: {
   categoryId: string | null
   amountUsd: number | null
   exchangeRate: number | null
+  time?: string | null
 }) {
   const session = await requireAuth()
   await db
@@ -65,6 +68,7 @@ export async function confirmMovement(id: string, data: {
       categoryId: data.categoryId,
       amountUsd: data.amountUsd,
       exchangeRate: data.exchangeRate,
+      time: data.time ?? undefined,
       needsReview: false,
       updatedAt: new Date(),
     })
@@ -179,6 +183,8 @@ export async function splitMovement(originalId: string, splits: { name: string; 
           ? Math.round(original.amountUsd * proportion)
           : null,
         exchangeRate: original.exchangeRate,
+        time: original.time,
+        originalName: original.originalName,
         needsReview: true,
         receivable: false,
         received: false,
@@ -228,6 +234,7 @@ export async function markAsReceived(id: string, paymentAccountId?: string) {
         currency: original.currency,
         amountUsd: original.amountUsd,
         exchangeRate: original.exchangeRate,
+        time: original.time,
         receivable: false,
         received: false,
         receivableId: id, // link to original receivable

@@ -29,6 +29,8 @@ interface MovementWithCategory {
   receivable: boolean
   received: boolean
   receivableId: string | null
+  time: string | null
+  originalName: string | null
 }
 
 interface UserAccount {
@@ -417,8 +419,13 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                       }}>
                         {m.name}
                       </div>
+                      {m.originalName && m.originalName !== m.name && (
+                        <div style={{ fontSize: 11, color: '#3f3f46', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {m.originalName}
+                        </div>
+                      )}
                       <div style={{ fontSize: 12, color: '#52525b', marginTop: 1 }}>
-                        {formatDateDisplay(m.date)}
+                        {formatDateDisplay(m.date)}{m.time && ` · ${m.time}`}
                         {m.categoryName && (
                           <span> · {m.categoryName}</span>
                         )}

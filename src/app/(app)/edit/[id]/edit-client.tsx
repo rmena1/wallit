@@ -21,6 +21,8 @@ interface MovementData {
   accountId: string | null
   receivable: boolean
   received: boolean
+  time: string | null
+  originalName: string | null
 }
 
 interface Props {
@@ -65,6 +67,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
   const [formCategoryId, setFormCategoryId] = useState(movement.categoryId ?? '')
   const [formAmountUsd, setFormAmountUsd] = useState(movement.amountUsd ? centsToDisplay(movement.amountUsd) : '')
   const [formExchangeRate, setFormExchangeRate] = useState(movement.exchangeRate ? (movement.exchangeRate / 100).toString() : '')
+  const [formTime, setFormTime] = useState(movement.time ?? '')
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReceivable, setShowReceivable] = useState(false)
@@ -91,6 +94,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
         categoryId: formCategoryId || null,
         amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
         exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
+        time: formTime || null,
       })
       router.push('/')
     } catch {
@@ -280,12 +284,32 @@ export function EditClient({ movement, accounts, categories }: Props) {
               </div>
             )}
 
-            {/* Date */}
-            <div>
-              <label style={labelStyle}>Fecha</label>
-              <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)}
-                style={{ ...inputStyle, colorScheme: 'dark' }} />
+            {/* Date + Time */}
+            <div style={{ display: 'flex', gap: 12 }}>
+              <div style={{ flex: 2 }}>
+                <label style={labelStyle}>Fecha</label>
+                <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)}
+                  style={{ ...inputStyle, colorScheme: 'dark' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Hora</label>
+                <input type="time" value={formTime} onChange={e => setFormTime(e.target.value)}
+                  style={{ ...inputStyle, colorScheme: 'dark' }} />
+              </div>
             </div>
+
+            {/* Original Name (read-only) */}
+            {movement.originalName && (
+              <div>
+                <label style={labelStyle}>Nombre original</label>
+                <div style={{
+                  padding: '12px 14px', borderRadius: 12, backgroundColor: '#111',
+                  border: '1px solid #2a2a2a', fontSize: 14, color: '#71717a',
+                }}>
+                  {movement.originalName}
+                </div>
+              </div>
+            )}
 
             {/* Category */}
             <div>

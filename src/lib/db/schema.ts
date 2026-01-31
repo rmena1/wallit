@@ -76,6 +76,8 @@ export const movements = sqliteTable('movements', {
   receivable: integer('receivable', { mode: 'boolean' }).notNull().default(false),
   received: integer('received', { mode: 'boolean' }).notNull().default(false),
   receivableId: text('receivable_id'), // links income payment to original receivable expense
+  time: text('time'), // HH:MM format, nullable
+  originalName: text('original_name'), // original name from bank email
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, (table) => [

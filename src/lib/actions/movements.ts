@@ -29,6 +29,8 @@ export async function createMovement(formData: FormData): Promise<MovementAction
   
   const categoryId = formData.get('categoryId') as string | null
   const accountId = formData.get('accountId') as string | null
+  const time = (formData.get('time') as string | null) || null
+  const originalName = (formData.get('originalName') as string | null) || null
 
   if (!accountId) {
     return { success: false, error: 'Account is required' }
@@ -85,6 +87,8 @@ export async function createMovement(formData: FormData): Promise<MovementAction
     currency,
     amountUsd,
     exchangeRate,
+    time,
+    originalName,
   })
   
   revalidatePath('/')
@@ -112,6 +116,8 @@ export async function getMovementById(id: string) {
       receivable: movements.receivable,
       received: movements.received,
       needsReview: movements.needsReview,
+      time: movements.time,
+      originalName: movements.originalName,
       categoryName: categories.name,
       categoryEmoji: categories.emoji,
       accountBankName: accounts.bankName,
@@ -137,6 +143,7 @@ export async function updateMovement(id: string, data: {
   categoryId: string | null
   amountUsd: number | null
   exchangeRate: number | null
+  time?: string | null
 }): Promise<MovementActionResult> {
   const session = await requireAuth()
   await db
@@ -151,6 +158,7 @@ export async function updateMovement(id: string, data: {
       categoryId: data.categoryId,
       amountUsd: data.amountUsd,
       exchangeRate: data.exchangeRate,
+      time: data.time ?? undefined,
       updatedAt: new Date(),
     })
     .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
@@ -197,6 +205,8 @@ export async function getMovements() {
       exchangeRate: movements.exchangeRate,
       createdAt: movements.createdAt,
       updatedAt: movements.updatedAt,
+      time: movements.time,
+      originalName: movements.originalName,
       categoryName: categories.name,
       categoryEmoji: categories.emoji,
       accountBankName: accounts.bankName,

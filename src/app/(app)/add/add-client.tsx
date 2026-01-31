@@ -169,12 +169,21 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                 </select>
               </div>
             </div>
-            <div>
-              <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Fecha</label>
-              <input
-                name="date" type="date" defaultValue={today()} required
-                style={{ ...inputStyle, colorScheme: 'dark' }}
-              />
+            <div style={{ display: 'flex', gap: 12 }}>
+              <div style={{ flex: 2 }}>
+                <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Fecha</label>
+                <input
+                  name="date" type="date" defaultValue={today()} required
+                  style={{ ...inputStyle, colorScheme: 'dark' }}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Hora</label>
+                <input
+                  name="time" type="time"
+                  style={{ ...inputStyle, colorScheme: 'dark' }}
+                />
+              </div>
             </div>
 
             {/* Category */}

@@ -18,6 +18,8 @@ interface PendingMovement {
   exchangeRate: number | null
   categoryId: string | null
   accountId: string | null
+  time: string | null
+  originalName: string | null
   categoryName: string | null
   categoryEmoji: string | null
   accountBankName: string | null
@@ -71,6 +73,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
   const [formCategoryId, setFormCategoryId] = useState(current?.categoryId ?? '')
   const [formAmountUsd, setFormAmountUsd] = useState(current?.amountUsd ? centsToDisplay(current.amountUsd) : '')
   const [formExchangeRate, setFormExchangeRate] = useState(current?.exchangeRate ? (current.exchangeRate / 100).toString() : '')
+  const [formTime, setFormTime] = useState(current?.time ?? '')
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReceivable, setShowReceivable] = useState(false)
@@ -95,6 +98,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     setFormCategoryId(m.categoryId ?? '')
     setFormAmountUsd(m.amountUsd ? centsToDisplay(m.amountUsd) : '')
     setFormExchangeRate(m.exchangeRate ? (m.exchangeRate / 100).toString() : '')
+    setFormTime(m.time ?? '')
     setError(null)
   }, [currentIndex, movements])
 
@@ -110,6 +114,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     setFormCategoryId(m.categoryId ?? '')
     setFormAmountUsd(m.amountUsd ? centsToDisplay(m.amountUsd) : '')
     setFormExchangeRate(m.exchangeRate ? (m.exchangeRate / 100).toString() : '')
+    setFormTime(m.time ?? '')
     setError(null)
   }
 
@@ -138,6 +143,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
         categoryId: formCategoryId || null,
         amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
         exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
+        time: formTime || null,
       })
       goNext(true)
     } catch {
@@ -395,12 +401,26 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
               </div>
             </div>
 
-            {/* Row: Fecha (full width, compact) */}
-            <div>
-              <label style={labelStyle}>Fecha</label>
-              <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)}
-                style={{ ...inputStyle, colorScheme: 'dark' }} />
+            {/* Row: Fecha + Hora */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: 6 }}>
+              <div>
+                <label style={labelStyle}>Fecha</label>
+                <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)}
+                  style={{ ...inputStyle, colorScheme: 'dark' }} />
+              </div>
+              <div>
+                <label style={labelStyle}>Hora</label>
+                <input type="time" value={formTime} onChange={e => setFormTime(e.target.value)}
+                  style={{ ...inputStyle, colorScheme: 'dark' }} />
+              </div>
             </div>
+
+            {/* Original Name */}
+            {current!.originalName && (
+              <div style={{ fontSize: 11, color: '#52525b', padding: '4px 8px', backgroundColor: '#111', borderRadius: 6 }}>
+                Original: {current!.originalName}
+              </div>
+            )}
           </div>
         </div>
 
