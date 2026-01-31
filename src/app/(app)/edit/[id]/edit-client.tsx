@@ -158,10 +158,15 @@ export function EditClient({ movement, accounts, categories }: Props) {
         .filter(s => s.name.trim() && s.amount)
         .map(s => ({ name: s.name.trim(), amount: parseMoney(s.amount) }))
       if (splits.length < 2) { setError('Necesitas al menos 2 partes'); setLoading(false); return }
-      await splitMovement(movement.id, splits)
+      const result = await splitMovement(movement.id, splits)
+      if (result && !result.success) {
+        setError(result.error || 'Error al dividir')
+        setLoading(false)
+        return
+      }
       router.push('/')
-    } catch {
-      setError('Error al dividir')
+    } catch (err) {
+      setError(`Error al dividir: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setLoading(false)
     }
