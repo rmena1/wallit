@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { confirmMovement, deleteReviewMovement, markAsReceivable, splitMovement } from '@/lib/actions/review'
 import { formatCurrency, parseMoney } from '@/lib/utils'
@@ -81,6 +81,22 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
   const [localCategories, setLocalCategories] = useState(categories)
 
   const done = currentIndex >= total
+
+  // Ensure form fields sync whenever currentIndex changes
+  useEffect(() => {
+    const m = movements[currentIndex]
+    if (!m) return
+    setFormName(m.name)
+    setFormDate(m.date)
+    setFormAmount(centsToDisplay(m.amount))
+    setFormType(m.type)
+    setFormCurrency(m.currency)
+    setFormAccountId(m.accountId ?? '')
+    setFormCategoryId(m.categoryId ?? '')
+    setFormAmountUsd(m.amountUsd ? centsToDisplay(m.amountUsd) : '')
+    setFormExchangeRate(m.exchangeRate ? (m.exchangeRate / 100).toString() : '')
+    setError(null)
+  }, [currentIndex, movements])
 
   function loadMovement(idx: number) {
     const m = movements[idx]
