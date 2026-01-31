@@ -1,26 +1,18 @@
 import { Page, expect } from '@playwright/test'
 
-export const TEST_EMAIL = `e2e-${Date.now()}@wallit.app`
 export const TEST_PASSWORD = 'testpass123'
 
-let registered = false
+// Each test file gets a unique email at module load
+export const TEST_EMAIL = `e2e-${Date.now()}@wallit.app`
 
 export async function registerAndLogin(page: Page) {
-  if (!registered) {
-    await page.goto('/register')
-    await page.getByLabel('Email').fill(TEST_EMAIL)
-    await page.getByLabel('Password').fill(TEST_PASSWORD)
-    await page.getByRole('button', { name: 'Create account' }).click()
-    const ok = await page.waitForURL('**/', { timeout: 5000 }).then(() => true).catch(() => false)
-    if (ok) { registered = true; return }
-  }
-
-  await page.goto('/login')
-  await page.getByLabel('Email').fill(TEST_EMAIL)
+  // Always register a fresh user to avoid rate limiting on login
+  const email = `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@wallit.app`
+  await page.goto('/register')
+  await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(TEST_PASSWORD)
-  await page.getByRole('button', { name: 'Sign in' }).click()
-  await page.waitForURL('**/', { timeout: 5000 })
-  registered = true
+  await page.getByRole('button', { name: 'Create account' }).click()
+  await page.waitForURL('**/', { timeout: 10000 })
 }
 
 export async function ensureAccount(page: Page) {
@@ -35,7 +27,13 @@ export async function ensureAccount(page: Page) {
     return
   }
 
-  await page.locator('select[name="bankName"]').selectOption('BCI')
+  // Open the add account form if collapsed
+  const bankSelect = page.locator('select[name="bankName"]')
+  if (!await bankSelect.isVisible()) {
+    await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
+    await bankSelect.waitFor({ state: 'visible', timeout: 3000 })
+  }
+  await bankSelect.selectOption('BCI')
   await page.locator('select[name="accountType"]').selectOption('Corriente')
   await page.getByPlaceholder('Últimos 4 dígitos').fill('9999')
   await page.getByPlaceholder('Saldo inicial').fill('100000')

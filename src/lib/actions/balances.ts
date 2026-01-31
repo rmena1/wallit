@@ -33,11 +33,11 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       currency: accounts.currency,
       color: accounts.color,
       emoji: accounts.emoji,
-      incomeSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN CASE WHEN ${accounts.currency} = 'USD' AND ${movements.amountUsd} IS NOT NULL THEN ${movements.amountUsd} ELSE ${movements.amount} END ELSE 0 END), 0)`,
-      expenseSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN CASE WHEN ${accounts.currency} = 'USD' AND ${movements.amountUsd} IS NOT NULL THEN ${movements.amountUsd} ELSE ${movements.amount} END ELSE 0 END), 0)`,
+      incomeSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN CASE WHEN ${accounts.currency} = 'USD' THEN COALESCE(${movements.amountUsd}, 0) ELSE ${movements.amount} END ELSE 0 END), 0)`,
+      expenseSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN CASE WHEN ${accounts.currency} = 'USD' THEN COALESCE(${movements.amountUsd}, 0) ELSE ${movements.amount} END ELSE 0 END), 0)`,
     })
     .from(accounts)
-    .leftJoin(movements, eq(accounts.id, movements.accountId))
+    .leftJoin(movements, and(eq(accounts.id, movements.accountId), eq(movements.userId, session.id)))
     .where(eq(accounts.userId, session.id))
     .groupBy(accounts.id)
     .orderBy(accounts.bankName)

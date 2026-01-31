@@ -1,7 +1,7 @@
 import { getSession } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { db, movements, categories, accounts } from '@/lib/db'
-import { eq, desc, sql, and } from 'drizzle-orm'
+import { eq, desc, sql, and, isNull, gte } from 'drizzle-orm'
 import { getAccountBalances } from '@/lib/actions/balances'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { HomePage } from './home-client'
@@ -20,6 +20,7 @@ export default async function Home() {
     recentMovements,
     totalsResult,
     reviewResult,
+    recentUnlinkedIncomes,
   ] = await Promise.all([
     // Exchange rate
     getUsdToClpRate().catch(() => null as number | null),
@@ -72,6 +73,34 @@ export default async function Home() {
       .select({ count: sql<number>`COUNT(*)` })
       .from(movements)
       .where(and(eq(movements.userId, session.id), eq(movements.needsReview, true))),
+
+    // Recent unlinked incomes (last 30 days, no receivableId, type=income)
+    db
+      .select({
+        id: movements.id,
+        name: movements.name,
+        date: movements.date,
+        amount: movements.amount,
+        currency: movements.currency,
+        accountBankName: accounts.bankName,
+        accountLastFour: accounts.lastFourDigits,
+        accountEmoji: accounts.emoji,
+        categoryName: categories.name,
+        categoryEmoji: categories.emoji,
+      })
+      .from(movements)
+      .leftJoin(categories, eq(movements.categoryId, categories.id))
+      .leftJoin(accounts, eq(movements.accountId, accounts.id))
+      .where(and(
+        eq(movements.userId, session.id),
+        eq(movements.type, 'income'),
+        isNull(movements.receivableId),
+        eq(movements.receivable, false),
+        eq(movements.needsReview, false),
+        gte(movements.date, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)),
+      ))
+      .orderBy(desc(movements.date), desc(movements.createdAt))
+      .limit(20),
   ])
 
   // Compute total balance from parallel results
@@ -96,6 +125,7 @@ export default async function Home() {
       pendingReviewCount={pendingReviewCount}
       usdClpRate={usdClpRate}
       userAccounts={accountBalances.map(a => ({ id: a.id, bankName: a.bankName, lastFourDigits: a.lastFourDigits, emoji: a.emoji }))}
+      recentUnlinkedIncomes={recentUnlinkedIncomes}
     />
   )
 }

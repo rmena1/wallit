@@ -39,6 +39,5 @@ test.describe('Settings — Category Management (Complete Flow)', () => {
     await comidaChip.click()
     await page.waitForTimeout(1000)
     await screenshot(page, 'settings-categories-05-after-delete')
-    await screenshot(page, 'settings-categories-05-after-delete')
   })
 })

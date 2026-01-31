@@ -124,6 +124,20 @@ export async function unmarkReceivable(id: string) {
 
 export async function splitMovement(originalId: string, splits: { name: string; amount: number }[]) {
   const session = await requireAuth()
+
+  // Validate splits input
+  if (!Array.isArray(splits) || splits.length < 2 || splits.length > 20) {
+    return { success: false, error: 'Splits must contain between 2 and 20 items' }
+  }
+
+  for (const split of splits) {
+    if (typeof split.name !== 'string' || split.name.trim().length === 0 || split.name.length > 200) {
+      return { success: false, error: 'Each split must have a valid name (1-200 chars)' }
+    }
+    if (typeof split.amount !== 'number' || !Number.isInteger(split.amount) || split.amount <= 0) {
+      return { success: false, error: 'Each split amount must be a positive integer' }
+    }
+  }
   
   // Get original movement
   const [original] = await db
@@ -131,7 +145,7 @@ export async function splitMovement(originalId: string, splits: { name: string; 
     .from(movements)
     .where(and(eq(movements.id, originalId), eq(movements.userId, session.id)))
   
-  if (!original) throw new Error('Movement not found')
+  if (!original) return { success: false, error: 'Movement not found' }
 
   const { generateId } = await import('@/lib/utils')
   const totalOriginal = original.amount
@@ -139,7 +153,7 @@ export async function splitMovement(originalId: string, splits: { name: string; 
   // Validate split amounts sum to original
   const splitTotal = splits.reduce((sum, s) => sum + s.amount, 0)
   if (splitTotal !== totalOriginal) {
-    throw new Error(`Split amounts (${splitTotal}) must equal original amount (${totalOriginal})`)
+    return { success: false, error: 'Split amounts must equal the original amount' }
   }
   
   // Use a transaction to ensure atomicity — if any insert fails,
@@ -189,7 +203,7 @@ export async function markAsReceived(id: string, paymentAccountId?: string) {
     .from(movements)
     .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
   
-  if (!original) throw new Error('Movement not found')
+  if (!original) return { success: false, error: 'Movement not found' }
   
   const { generateId } = await import('@/lib/utils')
   
@@ -225,6 +239,44 @@ export async function markAsReceived(id: string, paymentAccountId?: string) {
   })
   
   revalidatePath('/')
+  return { success: true }
+}
+
+export async function markAsReceivedWithExisting(receivableId: string, existingIncomeId: string) {
+  const session = await requireAuth()
+  
+  // Verify both movements exist and belong to user
+  const [receivable] = await db
+    .select()
+    .from(movements)
+    .where(and(eq(movements.id, receivableId), eq(movements.userId, session.id)))
+  
+  const [income] = await db
+    .select()
+    .from(movements)
+    .where(and(eq(movements.id, existingIncomeId), eq(movements.userId, session.id)))
+  
+  if (!receivable) return { success: false, error: 'Receivable not found' }
+  if (!income) return { success: false, error: 'Income movement not found' }
+  if (income.type !== 'income') return { success: false, error: 'Selected movement is not an income' }
+  if (income.receivableId) return { success: false, error: 'Income is already linked to another receivable' }
+  
+  await db.transaction(async (tx) => {
+    // Mark the receivable as received
+    await tx
+      .update(movements)
+      .set({ received: true, updatedAt: new Date() })
+      .where(and(eq(movements.id, receivableId), eq(movements.userId, session.id)))
+    
+    // Link the existing income to this receivable
+    await tx
+      .update(movements)
+      .set({ receivableId: receivableId, updatedAt: new Date() })
+      .where(and(eq(movements.id, existingIncomeId), eq(movements.userId, session.id)))
+  })
+  
+  revalidatePath('/')
+  revalidatePath('/receivables')
   return { success: true }
 }
 

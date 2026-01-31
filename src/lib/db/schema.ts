@@ -83,6 +83,7 @@ export const movements = sqliteTable('movements', {
   index('idx_movements_date').on(table.userId, table.date),
   index('idx_movements_category').on(table.categoryId),
   index('idx_movements_account').on(table.accountId),
+  index('idx_movements_review').on(table.userId, table.needsReview),
 ])
 
 // ============================================================================

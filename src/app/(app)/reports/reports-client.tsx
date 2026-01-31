@@ -357,6 +357,34 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
 
         {loading ? (
           <div style={{ textAlign: 'center', color: '#555', padding: 40 }}>Cargando...</div>
+        ) : data && data.movementCount === 0 ? (
+          /* Consolidated empty state when no movements exist */
+          <div style={{
+            background: 'linear-gradient(135deg, #18181b 0%, #1a2e1a 100%)',
+            borderRadius: 20, padding: '48px 24px', textAlign: 'center',
+            border: '1px solid #2a3a2a', marginTop: 8,
+          }}>
+            <span style={{ fontSize: 56, display: 'block', marginBottom: 16 }}>📊</span>
+            <div style={{ fontSize: 20, fontWeight: 700, color: '#f5f5f5', marginBottom: 8 }}>
+              Sin datos en este período
+            </div>
+            <div style={{ fontSize: 14, color: '#a1a1aa', marginBottom: 28, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 28px' }}>
+              Agrega movimientos para ver tus reportes de gastos, ingresos y balance aquí.
+            </div>
+            <a
+              href="/add"
+              style={{
+                display: 'inline-block',
+                padding: '14px 28px', borderRadius: 14, border: 'none',
+                background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer',
+                boxShadow: '0 4px 16px rgba(34,197,94,0.3)',
+                textDecoration: 'none',
+              }}
+            >
+              Agregar Movimiento →
+            </a>
+          </div>
         ) : data && (
           <>
             {/* Summary Cards */}

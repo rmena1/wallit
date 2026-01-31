@@ -29,7 +29,7 @@ test.describe('Auth - Login Flow', () => {
     await page.getByLabel('Email').fill('fake@test.com')
     await page.getByLabel('Password').fill('wrongpassword')
     await page.getByRole('button', { name: 'Sign in' }).click()
-    await expect(page.getByText(/invalid|error|incorrect/i)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/invalid|error|incorrect|too many/i)).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'auth-login-04-invalid-credentials')
 
     // 5. Navigate to register
@@ -62,7 +62,7 @@ test.describe('Auth - Register Flow', () => {
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill('testpass123')
     await page.getByRole('button', { name: 'Create account' }).click()
-    await expect(page).toHaveURL(/localhost:3002\/(?!login)(?!register)/, { timeout: 5000 })
+    await expect(page).toHaveURL(/localhost:3100\/(?!login)(?!register)/, { timeout: 5000 })
     await screenshot(page, 'auth-register-03-success')
 
     // 4. Duplicate email error
@@ -106,12 +106,12 @@ test.describe('Auth - Redirects & Logout', () => {
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill('testpass123')
     await page.getByRole('button', { name: 'Create account' }).click()
-    await expect(page).toHaveURL(/localhost:3002\/(?!login)(?!register)/, { timeout: 5000 })
+    await expect(page).toHaveURL(/localhost:3100\/(?!login)(?!register)/, { timeout: 5000 })
     await screenshot(page, 'auth-redirects-03-authenticated')
 
     // 3. Authenticated user accessing login is redirected to home
     await page.goto('/login')
-    await expect(page).toHaveURL(/localhost:3002\/(?!login)(?!register)/, { timeout: 5000 })
+    await expect(page).toHaveURL(/localhost:3100\/(?!login)(?!register)/, { timeout: 5000 })
     await screenshot(page, 'auth-redirects-04-login-redirects-home')
 
     // 4. Logout

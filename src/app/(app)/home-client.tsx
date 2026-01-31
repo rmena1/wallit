@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { logout } from '@/lib/actions/auth'
 import { deleteMovement } from '@/lib/actions/movements'
-import { markAsReceived } from '@/lib/actions/review'
+import { markAsReceived, markAsReceivedWithExisting } from '@/lib/actions/review'
 import { formatDateDisplay, formatCurrency } from '@/lib/utils'
 import type { AccountWithBalance } from '@/lib/actions/balances'
 
@@ -38,6 +38,19 @@ interface UserAccount {
   emoji: string | null
 }
 
+interface UnlinkedIncome {
+  id: string
+  name: string
+  date: string
+  amount: number
+  currency: 'CLP' | 'USD'
+  accountBankName: string | null
+  accountLastFour: string | null
+  accountEmoji: string | null
+  categoryName: string | null
+  categoryEmoji: string | null
+}
+
 interface HomePageProps {
   email: string
   accountBalances: AccountWithBalance[]
@@ -48,6 +61,7 @@ interface HomePageProps {
   pendingReviewCount: number
   usdClpRate: number | null
   userAccounts: UserAccount[]
+  recentUnlinkedIncomes: UnlinkedIncome[]
 }
 
 function TrashIcon() {
@@ -70,17 +84,21 @@ function getAccountIconFromType(accountType: string): string {
   }
 }
 
-export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements, pendingReviewCount, usdClpRate, userAccounts }: HomePageProps) {
+export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements, pendingReviewCount, usdClpRate, userAccounts, recentUnlinkedIncomes }: HomePageProps) {
   const router = useRouter()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [receivableFilter, setReceivableFilter] = useState(false)
   const [markingReceived, setMarkingReceived] = useState<string | null>(null)
   const [paymentDialogId, setPaymentDialogId] = useState<string | null>(null)
   const [selectedAccountId, setSelectedAccountId] = useState<string>('cash')
+  const [paymentMode, setPaymentMode] = useState<'new' | 'existing'>('new')
+  const [selectedExistingIncomeId, setSelectedExistingIncomeId] = useState<string | null>(null)
   const reviewCount = pendingReviewCount
 
   function openPaymentDialog(id: string) {
     setSelectedAccountId('cash')
+    setPaymentMode('new')
+    setSelectedExistingIncomeId(null)
     setPaymentDialogId(id)
   }
 
@@ -90,12 +108,18 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
     setPaymentDialogId(null)
     setMarkingReceived(id)
     try {
-      const accountId = selectedAccountId === 'cash' ? undefined : selectedAccountId
-      await markAsReceived(id, accountId)
+      if (paymentMode === 'existing' && selectedExistingIncomeId) {
+        await markAsReceivedWithExisting(id, selectedExistingIncomeId)
+      } else {
+        const accountId = selectedAccountId === 'cash' ? undefined : selectedAccountId
+        await markAsReceived(id, accountId)
+      }
     } finally {
       setMarkingReceived(null)
     }
   }
+
+  const canConfirmPayment = paymentMode === 'new' || (paymentMode === 'existing' && selectedExistingIncomeId !== null)
 
   const filteredMovements = receivableFilter
     ? movements.filter(m => m.receivable && !m.received)
@@ -157,7 +181,8 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
 
       {/* Main */}
       <main style={{ maxWidth: 540, margin: '0 auto', padding: '16px 16px 96px' }}>
-        {/* Total Balance Card */}
+        {/* Total Balance Card — only show when user has accounts */}
+        {accountBalances.length > 0 && (
         <div style={{
           background: 'linear-gradient(135deg, #18181b 0%, #27272a 100%)',
           borderRadius: 20, padding: '20px 20px 16px', marginBottom: 16,
@@ -190,6 +215,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             </div>
           </div>
         </div>
+        )}
 
         {/* Account Cards */}
         {accountBalances.length > 0 && (
@@ -236,32 +262,33 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
           </div>
         )}
 
-        {/* No accounts empty state */}
+        {/* No accounts — welcoming onboarding empty state */}
         {accountBalances.length === 0 && (
           <div style={{
-            backgroundColor: '#1a1a1a', borderRadius: 16,
-            padding: '32px 20px', textAlign: 'center',
-            border: '1px solid #2a2a2a', marginBottom: 20,
+            background: 'linear-gradient(135deg, #18181b 0%, #1a2e1a 100%)',
+            borderRadius: 20,
+            padding: '48px 24px', textAlign: 'center',
+            border: '1px solid #2a3a2a', marginBottom: 20,
           }}>
-            <span style={{ fontSize: 40, display: 'block', marginBottom: 8 }}>🏦</span>
-            <div style={{ fontSize: 16, fontWeight: 600, color: '#e5e5e5', marginBottom: 4 }}>
-              Sin cuentas
+            <span style={{ fontSize: 56, display: 'block', marginBottom: 16 }}>💰</span>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#f5f5f5', marginBottom: 8 }}>
+              ¡Bienvenido a Wallit!
             </div>
-            <div style={{ fontSize: 14, color: '#71717a', marginBottom: 16 }}>
-              Agrega una cuenta bancaria para empezar a rastrear tus movimientos
+            <div style={{ fontSize: 15, color: '#a1a1aa', marginBottom: 28, lineHeight: 1.5 }}>
+              Agrega tu primera cuenta bancaria para empezar a rastrear ingresos, gastos y tu balance en tiempo real.
             </div>
             <a
               href="/settings"
               style={{
-                display: 'inline-block',
-                padding: '10px 24px', borderRadius: 12, border: 'none',
+                display: 'block',
+                padding: '14px 24px', borderRadius: 14, border: 'none',
                 background: 'linear-gradient(135deg, #22c55e, #16a34a)',
-                color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer',
-                boxShadow: '0 2px 8px rgba(34,197,94,0.25)',
+                color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer',
+                boxShadow: '0 4px 16px rgba(34,197,94,0.3)',
                 textDecoration: 'none',
               }}
             >
-              Agregar Cuenta
+              Agregar Cuenta →
             </a>
           </div>
         )}
@@ -451,10 +478,41 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             <div style={{ fontSize: 18, fontWeight: 700, color: '#e5e5e5', marginBottom: 4 }}>
               💰 Cobrar gasto
             </div>
-            <div style={{ fontSize: 13, color: '#71717a', marginBottom: 20 }}>
-              ¿En qué cuenta recibiste el pago?
+            <div style={{ fontSize: 13, color: '#71717a', marginBottom: 16 }}>
+              ¿Cómo registrar el cobro?
             </div>
 
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderRadius: 10, overflow: 'hidden', border: '1px solid #2a2a2a' }}>
+              <button
+                onClick={() => setPaymentMode('new')}
+                style={{
+                  flex: 1, padding: '10px 8px', border: 'none', cursor: 'pointer',
+                  fontSize: 13, fontWeight: 600,
+                  backgroundColor: paymentMode === 'new' ? '#27272a' : '#111',
+                  color: paymentMode === 'new' ? '#4ade80' : '#71717a',
+                  borderBottom: paymentMode === 'new' ? '2px solid #4ade80' : '2px solid transparent',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                Nuevo ingreso
+              </button>
+              <button
+                onClick={() => setPaymentMode('existing')}
+                style={{
+                  flex: 1, padding: '10px 8px', border: 'none', cursor: 'pointer',
+                  fontSize: 13, fontWeight: 600,
+                  backgroundColor: paymentMode === 'existing' ? '#27272a' : '#111',
+                  color: paymentMode === 'existing' ? '#4ade80' : '#71717a',
+                  borderBottom: paymentMode === 'existing' ? '2px solid #4ade80' : '2px solid transparent',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                Vincular existente
+              </button>
+            </div>
+
+            {paymentMode === 'new' ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
               {/* Cash option */}
               <label
@@ -511,6 +569,51 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                 </label>
               ))}
             </div>
+            ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24, maxHeight: 280, overflowY: 'auto' }}>
+              {recentUnlinkedIncomes.length === 0 ? (
+                <div style={{ padding: '24px 16px', textAlign: 'center', color: '#71717a', fontSize: 13 }}>
+                  No hay ingresos recientes sin vincular
+                </div>
+              ) : (
+                recentUnlinkedIncomes.map(inc => (
+                  <label
+                    key={inc.id}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                      backgroundColor: selectedExistingIncomeId === inc.id ? '#27272a' : 'transparent',
+                      border: selectedExistingIncomeId === inc.id ? '1px solid #4ade80' : '1px solid #2a2a2a',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <input
+                      type="radio" name="existingIncome" value={inc.id}
+                      checked={selectedExistingIncomeId === inc.id}
+                      onChange={() => setSelectedExistingIncomeId(inc.id)}
+                      style={{ display: 'none' }}
+                    />
+                    <span style={{ fontSize: 16 }}>{inc.categoryEmoji || '↑'}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e5e5', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {inc.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#71717a' }}>
+                        {formatDateDisplay(inc.date)}
+                        {inc.accountBankName && <span> · {inc.accountEmoji || ''} {inc.accountBankName}</span>}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: '#4ade80', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                      +{formatCurrency(inc.amount, 'CLP')}
+                    </span>
+                    {selectedExistingIncomeId === inc.id && (
+                      <span style={{ color: '#4ade80', fontSize: 16, flexShrink: 0 }}>✓</span>
+                    )}
+                  </label>
+                ))
+              )}
+            </div>
+            )}
 
             <div style={{ display: 'flex', gap: 10 }}>
               <button
@@ -525,11 +628,15 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               </button>
               <button
                 onClick={handleConfirmPayment}
+                disabled={!canConfirmPayment}
                 style={{
                   flex: 1, padding: '12px', borderRadius: 12,
-                  border: 'none', background: 'linear-gradient(135deg, #22c55e, #16a34a)',
-                  color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
-                  boxShadow: '0 2px 8px rgba(34,197,94,0.25)',
+                  border: 'none',
+                  background: canConfirmPayment ? 'linear-gradient(135deg, #22c55e, #16a34a)' : '#27272a',
+                  color: canConfirmPayment ? '#fff' : '#52525b',
+                  fontSize: 14, fontWeight: 600,
+                  cursor: canConfirmPayment ? 'pointer' : 'not-allowed',
+                  boxShadow: canConfirmPayment ? '0 2px 8px rgba(34,197,94,0.25)' : 'none',
                 }}
               >
                 Confirmar

@@ -73,6 +73,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
   const [accountError, setAccountError] = useState<string | null>(null)
   const [deletingAccountId, setDeletingAccountId] = useState<string | null>(null)
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null)
+  const [showAddAccount, setShowAddAccount] = useState(accounts.length === 0)
   const [categoryLoading, setCategoryLoading] = useState(false)
   const [categoryError, setCategoryError] = useState<string | null>(null)
   const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null)
@@ -89,6 +90,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
         setAccountError(result.error || 'Error al crear cuenta')
       } else {
         form.reset()
+        setShowAddAccount(false)
       }
     } catch {
       setAccountError('Ocurrió un error')
@@ -194,8 +196,43 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
             </div>
           )}
 
-          {/* Create Account Form */}
-          <form onSubmit={handleAccountSubmit} style={{ marginBottom: 16 }}>
+          {/* Add Account Toggle / Form */}
+          {!showAddAccount ? (
+            <button
+              onClick={() => setShowAddAccount(true)}
+              style={{
+                width: '100%', height: 44, borderRadius: 10,
+                border: '1px dashed #3f3f46', backgroundColor: 'transparent',
+                color: '#22c55e', fontSize: 14, fontWeight: 600,
+                cursor: 'pointer', display: 'flex', alignItems: 'center',
+                justifyContent: 'center', gap: 6, marginBottom: 16,
+                transition: 'all 0.2s ease',
+              }}
+            >
+              <PlusIcon size={16} />
+              Agregar Cuenta
+            </button>
+          ) : (
+          <form onSubmit={handleAccountSubmit} style={{
+            marginBottom: 16,
+            backgroundColor: '#111111', borderRadius: 12, padding: 14,
+            border: '1px solid #3f3f46',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#a1a1aa' }}>Nueva cuenta</span>
+              {accounts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddAccount(false)}
+                  style={{
+                    background: 'none', border: 'none', color: '#71717a',
+                    fontSize: 13, cursor: 'pointer', padding: '2px 0',
+                  }}
+                >
+                  Cancelar
+                </button>
+              )}
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <select name="bankName" required defaultValue="" style={selectStyle}>
                 <option value="" disabled>Seleccionar banco</option>
@@ -254,6 +291,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
               </button>
             </div>
           </form>
+          )}
 
           {/* Account List */}
           {accounts.length === 0 ? (

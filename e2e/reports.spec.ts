@@ -8,7 +8,7 @@ test.describe('Reports — Complete Flow', () => {
     await ensureCategory(page, '🍔', 'Comida')
 
     // Create movements to have data
-    await createMovement(page, { name: 'Almuerzo', amount: '12000' })
+    await createMovement(page, { name: 'Almuerzo rápido', amount: '12000' })
     await createMovement(page, { name: 'Cena', amount: '18000' })
     await createMovement(page, { name: 'Freelance', amount: '500000', type: 'income' })
 
@@ -47,7 +47,13 @@ test.describe('Reports — Complete Flow', () => {
   })
 
   test('reports empty state', async ({ page }) => {
-    await registerAndLogin(page)
+    // Register a fresh user with no data
+    const freshEmail = `reports-empty-${Date.now()}@wallit.app`
+    await page.goto('/register')
+    await page.getByLabel('Email').fill(freshEmail)
+    await page.getByLabel('Password').fill('testpass123')
+    await page.getByRole('button', { name: 'Create account' }).click()
+    await page.waitForURL('**/', { timeout: 10000 })
 
     // Navigate to reports with no data
     await page.goto('/reports')

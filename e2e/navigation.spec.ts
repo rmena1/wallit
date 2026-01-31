@@ -14,7 +14,7 @@ test.describe('Navigation — Bottom Nav Flow', () => {
 
     // 2. Navigate to Reports via bottom nav
     await page.getByRole('link', { name: 'Reportes' }).click()
-    await expect(page.getByText('Reportes')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'navigation-02-reports')
 
     // 3. Navigate to Settings via bottom nav

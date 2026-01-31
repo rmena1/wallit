@@ -33,6 +33,16 @@ export async function createMovement(formData: FormData): Promise<MovementAction
   if (!accountId) {
     return { success: false, error: 'Account is required' }
   }
+
+  // Verify account belongs to the current user
+  const [ownedAccount] = await db
+    .select({ id: accounts.id })
+    .from(accounts)
+    .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+    .limit(1)
+  if (!ownedAccount) {
+    return { success: false, error: 'Invalid account' }
+  }
   
   // Validate input
   const parsed = createMovementSchema.safeParse(rawData)
