@@ -1,8 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, accounts } from '@/lib/db'
-import { eq, and } from 'drizzle-orm'
+import { db, accounts, movements, categories } from '@/lib/db'
+import { eq, and, desc } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 import { generateId } from '@/lib/utils'
 
@@ -154,4 +154,34 @@ export async function getAccounts() {
     .from(accounts)
     .where(eq(accounts.userId, session.id))
     .orderBy(accounts.bankName)
+}
+
+/**
+ * Get paginated movements for an account (used by "load more" on account detail)
+ */
+export async function getAccountMovements(accountId: string, offset: number, limit: number = 50) {
+  const session = await requireAuth()
+
+  return db
+    .select({
+      id: movements.id,
+      name: movements.name,
+      date: movements.date,
+      amount: movements.amount,
+      type: movements.type,
+      currency: movements.currency,
+      amountUsd: movements.amountUsd,
+      time: movements.time,
+      originalName: movements.originalName,
+      receivable: movements.receivable,
+      received: movements.received,
+      categoryName: categories.name,
+      categoryEmoji: categories.emoji,
+    })
+    .from(movements)
+    .leftJoin(categories, eq(movements.categoryId, categories.id))
+    .where(and(eq(movements.accountId, accountId), eq(movements.userId, session.id)))
+    .orderBy(desc(movements.date), desc(movements.createdAt))
+    .limit(limit)
+    .offset(offset)
 }

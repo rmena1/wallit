@@ -42,8 +42,9 @@ function ReportsSkeleton() {
 function getDefaultRange(): [string, string] {
   const now = new Date()
   const start = new Date(now.getFullYear(), now.getMonth(), 1)
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0) // last day of month
   const fmt = (d: Date) => d.toISOString().slice(0, 10)
-  return [fmt(start), fmt(now)]
+  return [fmt(start), fmt(end)]
 }
 
 export default async function Reports() {

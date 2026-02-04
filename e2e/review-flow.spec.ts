@@ -53,28 +53,29 @@ async function registerUser(page: Page): Promise<string> {
 }
 
 test.describe('Review Flow — Complete', () => {
-  test('empty state shows no pending movements', async ({ page }) => {
-    await registerAndLogin(page)
-
+  test('empty state, then confirm, skip, and delete review movements', async ({ page }) => {
+    // 1. Register and test empty state
+    const email = await registerUser(page)
     await page.goto('/review')
     await expect(page.getByText('No hay movimientos pendientes')).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'review-01-empty-state')
 
+    // 2. Navigate back to home from empty state
     await page.getByRole('button', { name: 'Volver al inicio' }).click()
     await page.waitForURL('**/', { timeout: 5000 })
     await screenshot(page, 'review-02-back-to-home')
-  })
 
-  test('confirm, skip, and delete review movements', async ({ page }) => {
-    const email = await registerUser(page)
+    // 3. Set up account for the same user
     await ensureAccount(page)
 
     const userId = getUserId(email)
     if (!userId) throw new Error('User not found in DB')
     const accountId = getFirstAccountId(userId)
 
+    // 4. Seed review movements
     seedReviewMovements(userId, accountId)
 
+    // 5. Go to review page with pending movements
     await page.goto('/review')
     await expect(page.getByText('Revisión')).toBeVisible({ timeout: 5000 })
     await expect(page.getByText('1/3')).toBeVisible({ timeout: 5000 })
@@ -83,20 +84,17 @@ test.describe('Review Flow — Complete', () => {
     // First movement visible (latest createdAt appears first)
     await expect(page.getByText('Uber Eats - Pizza')).toBeVisible({ timeout: 5000 })
 
-    // Step 1: Confirm the first movement
-    // Note: confirmMovement calls revalidatePath which may re-render the page with fresh data
+    // 6. Confirm the first movement
     await page.getByRole('button', { name: '✓ Confirmar' }).click()
-    // After confirm, page re-renders. Wait for the next movement to appear
-    // The counter may reset because revalidatePath causes server re-fetch
     await page.waitForTimeout(1000) // Wait for re-render
     await screenshot(page, 'review-04-after-confirm')
 
-    // Step 2: Skip the current movement
+    // 7. Skip the current movement
     await page.getByRole('button', { name: /Después/i }).click()
     await page.waitForTimeout(500)
     await screenshot(page, 'review-05-after-skip')
 
-    // Step 3: Delete the current movement (or we may be at completion)
+    // 8. Delete the current movement (or we may be at completion)
     const deleteBtn = page.getByRole('button', { name: /🗑 Eliminar/i })
     if (await deleteBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await deleteBtn.click()
@@ -106,12 +104,13 @@ test.describe('Review Flow — Complete', () => {
       await page.waitForTimeout(1000)
     }
 
-    // Should show completion screen (or empty state if re-rendered)
+    // 9. Should show completion screen (or empty state if re-rendered)
     const completed = page.getByText('¡Revisión completada!')
     const empty = page.getByText('No hay movimientos pendientes')
     await expect(completed.or(empty)).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'review-07-completed')
 
+    // 10. Navigate back to home
     await page.getByRole('button', { name: 'Volver al inicio' }).click()
     await page.waitForURL('**/', { timeout: 5000 })
     await screenshot(page, 'review-08-back-home')
@@ -160,11 +159,8 @@ test.describe('Review Flow — Complete', () => {
     await screenshot(page, 'review-recv-03-after-receivable')
 
     // After marking receivable, page re-renders. Second movement should now be visible
-    // (may show as 1/1 since the first was marked as receivable and removed from pending)
     const secondMovement = page.getByText('Compra desconocida')
     if (await secondMovement.isVisible({ timeout: 3000 }).catch(() => false)) {
-      // Good — second movement is showing
-
       // Edit the description
       const descInput = page.locator('input').first()
       await descInput.clear()

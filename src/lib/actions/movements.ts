@@ -158,7 +158,7 @@ export async function updateMovement(id: string, data: {
       categoryId: data.categoryId,
       amountUsd: data.amountUsd,
       exchangeRate: data.exchangeRate,
-      time: data.time ?? undefined,
+      time: data.time,
       updatedAt: new Date(),
     })
     .where(and(eq(movements.id, id), eq(movements.userId, session.id)))

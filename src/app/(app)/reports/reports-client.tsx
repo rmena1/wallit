@@ -28,13 +28,13 @@ const PRESETS: Preset[] = [
   { label: 'Últimos 30 días', getRange: () => { const e = new Date(); const s = new Date(); s.setDate(e.getDate() - 29); return [s, e] } },
   { label: 'Últimos 100 días', getRange: () => { const e = new Date(); const s = new Date(); s.setDate(e.getDate() - 99); return [s, e] } },
   { label: 'Esta semana', getRange: () => { const e = new Date(); return [startOfWeek(e), e] } },
-  { label: 'Este mes', getRange: () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth(), 1), n] } },
-  { label: 'Este año', getRange: () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), n] } },
+  { label: 'Este mes', getRange: () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth(), 1), new Date(n.getFullYear(), n.getMonth() + 1, 0)] } },
+  { label: 'Este año', getRange: () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), new Date(n.getFullYear(), 11, 31)] } },
 ]
 
 function getDefaultRange(): [string, string] {
-  const [s, e] = PRESETS[4].getRange()
-  return [fmt(s), fmt(e)]
+  const n = new Date()
+  return [fmt(new Date(n.getFullYear(), n.getMonth(), 1)), fmt(new Date(n.getFullYear(), n.getMonth() + 1, 0))]
 }
 
 function daysInRange(start: string, end: string): string[] {
@@ -55,71 +55,89 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
   const map = new Map(dailyData.map(d => [d.date, d.expense]))
   const today = fmt(new Date())
 
-  let cumulative = 0
-  const data: { date: string; label: string; actual: number | null; projected: number | null; trend: number | null }[] = []
-
-  // find last actual day
+  // Find the last day we have actual data for (up to today)
   const lastActualDay = days.filter(d => d <= today).pop() || today
-  let totalActualExpense = 0
-  let actualDays = 0
 
-  // Collect actual data points for linear regression
-  const actualPoints: { x: number; y: number }[] = []
+  // Build cumulative actual values for all days up to today
+  let cumulative = 0
+  let totalActualExpense = 0
+  let actualDaysCount = 0
+  const cumulativeByDay = new Map<string, number>()
 
   for (const day of days) {
-    if (day <= today && day <= lastActualDay) {
-      const val = map.get(day) || 0
-      cumulative += val
-      totalActualExpense = cumulative
-      actualDays++
-      actualPoints.push({ x: actualDays, y: cumulative / 100 })
-      data.push({ date: day, label: day.slice(5), actual: cumulative / 100, projected: null, trend: null })
-    }
+    if (day > lastActualDay) break
+    const val = map.get(day) || 0
+    cumulative += val
+    cumulativeByDay.set(day, cumulative)
+    totalActualExpense = cumulative
+    actualDaysCount++
   }
 
-  // Linear regression on actual cumulative expense points (computed once, reused for trend + projection)
+  // Linear regression / trend calculation
+  // With 1 point: use daily rate from that single point (slope = cumulative/dayIndex, intercept = 0)
+  // With 2+ points: standard linear regression on cumulative values
   let trendSlope = 0, trendIntercept = 0
-  if (actualPoints.length >= 2) {
-    const n = actualPoints.length
+  let hasTrend = false
+
+  if (actualDaysCount >= 2) {
+    const points: { x: number; y: number }[] = []
+    let idx = 0
+    for (const day of days) {
+      if (day > lastActualDay) break
+      idx++
+      points.push({ x: idx, y: (cumulativeByDay.get(day) || 0) / 100 })
+    }
+    const n = points.length
     let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
-    for (const p of actualPoints) {
+    for (const p of points) {
       sumX += p.x; sumY += p.y; sumXY += p.x * p.y; sumX2 += p.x * p.x
     }
     trendSlope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX)
     trendIntercept = (sumY - trendSlope * sumX) / n
-
-    // Apply trend to actual data points
-    for (let i = 0; i < days.length; i++) {
-      const x = i + 1
-      const trendVal = trendSlope * x + trendIntercept
-      const existing = data.find(d => d.date === days[i])
-      if (existing) {
-        existing.trend = Math.max(0, trendVal)
-      }
-    }
+    hasTrend = true
+  } else if (actualDaysCount === 1) {
+    // Single data point: extrapolate linearly from 0 through the single point
+    // trend(x) = (totalActualExpense/100 / actualDayIndex) * x
+    // Find which day index the single actual day is at
+    const singleDayIndex = days.indexOf([...cumulativeByDay.keys()].pop()!) + 1
+    trendSlope = (totalActualExpense / 100) / singleDayIndex
+    trendIntercept = 0
+    hasTrend = true
   }
 
-  // Projection from last actual day to end
-  const dailyRate = actualDays > 0 ? totalActualExpense / actualDays : 0
+  // Build data array for ALL days in range
+  const dailyRate = actualDaysCount > 0 ? totalActualExpense / actualDaysCount : 0
   let projCumulative = totalActualExpense
-  let started = false
+  const data: { date: string; label: string; actual: number | null; projected: number | null; trend: number | null }[] = []
 
-  for (const day of days) {
-    if (day === lastActualDay) {
-      const existing = data.find(d => d.date === day)
-      if (existing) existing.projected = existing.actual
-      started = true
-      continue
-    }
-    if (started && day > lastActualDay) {
+  for (let i = 0; i < days.length; i++) {
+    const day = days[i]
+    const dayIndex = i + 1
+    const trendVal = hasTrend ? Math.max(0, trendSlope * dayIndex + trendIntercept) : null
+
+    if (day <= lastActualDay) {
+      // Actual data day
+      const actualVal = (cumulativeByDay.get(day) || 0) / 100
+      data.push({
+        date: day, label: day.slice(5),
+        actual: actualVal,
+        projected: day === lastActualDay ? actualVal : null, // connect projection start
+        trend: trendVal,
+      })
+    } else {
+      // Future projected day
       projCumulative += dailyRate
-      const dayIndex = days.indexOf(day) + 1
-      const trendVal = actualPoints.length >= 2 ? Math.max(0, trendSlope * dayIndex + trendIntercept) : null
-      data.push({ date: day, label: day.slice(5), actual: null, projected: projCumulative / 100, trend: trendVal })
+      data.push({
+        date: day, label: day.slice(5),
+        actual: null,
+        projected: projCumulative / 100,
+        trend: trendVal,
+      })
     }
   }
 
-  const projectedTotal = actualDays > 0 ? dailyRate * days.length : 0
+  // Gasto esperado = (totalGasto / díasTranscurridos) * díasTotalesDelPeriodo
+  const projectedTotal = actualDaysCount > 0 ? (totalActualExpense / actualDaysCount) * days.length : 0
   return { data, projectedTotal }
 }
 
@@ -423,8 +441,9 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                 <div style={{ width: '100%', height: 200 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={expenseChart.data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                      <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45}
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false}
+                        interval={Math.max(0, Math.floor(expenseChart.data.length / 6) - 1)} />
+                      <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45} domain={[0, 'auto']}
                         tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
                       <Tooltip content={<ChartTooltip color="#ef4444" />} />
                       <Line type="monotone" dataKey="actual" stroke="#ef4444" strokeWidth={2} dot={false} connectNulls={false} />

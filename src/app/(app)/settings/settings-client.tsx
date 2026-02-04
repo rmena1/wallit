@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { createAccount, updateAccount, deleteAccount } from '@/lib/actions/accounts'
-import { createCategory, deleteCategory } from '@/lib/actions/categories'
+import { createCategory, updateCategory, deleteCategory } from '@/lib/actions/categories'
 import { formatCurrency } from '@/lib/utils'
 import { BANK_NAMES, ACCOUNT_TYPES } from '@/lib/constants'
 import type { Category, Account } from '@/lib/db'
@@ -77,6 +77,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
   const [categoryLoading, setCategoryLoading] = useState(false)
   const [categoryError, setCategoryError] = useState<string | null>(null)
   const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null)
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null)
 
   async function handleAccountSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -156,6 +157,25 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
       await deleteCategory(id)
     } finally {
       setDeletingCategoryId(null)
+    }
+  }
+
+  async function handleCategoryUpdate(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setCategoryError(null)
+    setCategoryLoading(true)
+    try {
+      const formData = new FormData(e.currentTarget)
+      const result = await updateCategory(formData)
+      if (!result.success) {
+        setCategoryError(result.error || 'Error al actualizar categoría')
+      } else {
+        setEditingCategoryId(null)
+      }
+    } catch {
+      setCategoryError('Ocurrió un error')
+    } finally {
+      setCategoryLoading(false)
     }
   }
 
@@ -493,29 +513,94 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
               Sin categorías aún
             </div>
           ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {categories.map((cat) => (
-                <div key={cat.id} style={{
-                  display: 'flex', alignItems: 'center', gap: 4,
-                  backgroundColor: '#27272a', borderRadius: 20,
-                  padding: '6px 10px', fontSize: 13,
-                  opacity: deletingCategoryId === cat.id ? 0.4 : 1,
-                }}>
-                  <span>{cat.emoji}</span>
-                  <span style={{ color: '#d4d4d8' }}>{cat.name}</span>
-                  <button
-                    onClick={() => handleDeleteCategory(cat.id)}
-                    disabled={deletingCategoryId === cat.id}
-                    style={{
-                      background: 'none', border: 'none', fontSize: 14,
-                      color: '#71717a', cursor: 'pointer', padding: '0 0 0 2px',
-                      lineHeight: 1,
-                    }}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {categories.map((cat) => {
+                if (editingCategoryId === cat.id) {
+                  return (
+                    <form key={cat.id} onSubmit={handleCategoryUpdate} style={{
+                      display: 'flex', gap: 8, alignItems: 'center',
+                      backgroundColor: '#111111', borderRadius: 12,
+                      padding: '8px 10px', border: '1px solid #3f3f46',
+                    }}>
+                      <input type="hidden" name="id" value={cat.id} />
+                      <input
+                        name="emoji" type="text" defaultValue={cat.emoji} required maxLength={4}
+                        style={{
+                          width: 44, height: 40, borderRadius: 8,
+                          border: '1px solid #2a2a2a', backgroundColor: '#1a1a1a',
+                          fontSize: 18, textAlign: 'center', padding: 0, outline: 'none',
+                          color: '#e5e5e5',
+                        }}
+                      />
+                      <input
+                        name="name" type="text" defaultValue={cat.name} required
+                        autoFocus
+                        style={{ ...inputStyle, flex: 1, height: 40 }}
+                      />
+                      <button
+                        type="submit" disabled={categoryLoading}
+                        style={{
+                          height: 40, padding: '0 12px', borderRadius: 8, border: 'none',
+                          background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                          color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        ✓
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingCategoryId(null)}
+                        style={{
+                          height: 40, padding: '0 10px', borderRadius: 8,
+                          border: '1px solid #2a2a2a', backgroundColor: '#1a1a1a',
+                          color: '#a1a1aa', fontSize: 13, cursor: 'pointer',
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </form>
+                  )
+                }
+                return (
+                  <div key={cat.id} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    backgroundColor: '#111111', borderRadius: 12,
+                    padding: '10px 14px',
+                    border: '1px solid #2a2a2a',
+                    opacity: deletingCategoryId === cat.id ? 0.4 : 1,
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => setEditingCategoryId(cat.id)}
                   >
-                    ×
-                  </button>
-                </div>
-              ))}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ fontSize: 20 }}>{cat.emoji}</span>
+                      <span style={{ fontSize: 14, color: '#d4d4d8', fontWeight: 500 }}>{cat.name}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setEditingCategoryId(cat.id) }}
+                        style={{
+                          background: 'none', border: 'none',
+                          color: '#71717a', cursor: 'pointer', padding: 6,
+                        }}
+                      >
+                        <EditIcon />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteCategory(cat.id) }}
+                        disabled={deletingCategoryId === cat.id}
+                        style={{
+                          background: 'none', border: 'none',
+                          color: '#52525b', cursor: 'pointer', padding: 6,
+                        }}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

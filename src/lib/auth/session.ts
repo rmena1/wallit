@@ -1,8 +1,8 @@
 import { cache } from 'react'
 import { cookies } from 'next/headers'
+import { randomBytes } from 'crypto'
 import { db, sessions, users } from '@/lib/db'
 import { eq, and, gt, lt } from 'drizzle-orm'
-import { generateId } from '@/lib/utils'
 
 const SESSION_COOKIE_NAME = 'wallit_session'
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
@@ -46,7 +46,7 @@ export async function createSession(userId: string): Promise<string> {
   // Clean up old sessions before creating a new one
   await pruneSessionsForUser(userId)
 
-  const sessionId = generateId()
+  const sessionId = randomBytes(32).toString('hex') // 256-bit cryptographic session token
   const expiresAt = new Date(Date.now() + SESSION_DURATION_MS)
   
   await db.insert(sessions).values({

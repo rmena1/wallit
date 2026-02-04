@@ -62,7 +62,7 @@ test.describe('Auth - Register Flow', () => {
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill('testpass123')
     await page.getByRole('button', { name: 'Create account' }).click()
-    await expect(page).toHaveURL(/localhost:3100\/(?!login)(?!register)/, { timeout: 5000 })
+    await expect(page).toHaveURL(/localhost:3001\/(?!login)(?!register)/, { timeout: 5000 })
     await screenshot(page, 'auth-register-03-success')
 
     // 4. Duplicate email error
@@ -106,17 +106,19 @@ test.describe('Auth - Redirects & Logout', () => {
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill('testpass123')
     await page.getByRole('button', { name: 'Create account' }).click()
-    await expect(page).toHaveURL(/localhost:3100\/(?!login)(?!register)/, { timeout: 5000 })
+    await expect(page).toHaveURL(/localhost:3001\/(?!login)(?!register)/, { timeout: 5000 })
     await screenshot(page, 'auth-redirects-03-authenticated')
 
     // 3. Authenticated user accessing login is redirected to home
     await page.goto('/login')
-    await expect(page).toHaveURL(/localhost:3100\/(?!login)(?!register)/, { timeout: 5000 })
+    await expect(page).toHaveURL(/localhost:3001\/(?!login)(?!register)/, { timeout: 5000 })
     await screenshot(page, 'auth-redirects-04-login-redirects-home')
 
-    // 4. Logout
-    await expect(page.getByRole('button', { name: 'Salir' })).toBeVisible()
-    await page.getByRole('button', { name: 'Salir' }).click()
+    // 4. Logout via user avatar menu
+    const avatarBtn = page.locator('header button').last()
+    await expect(avatarBtn).toBeVisible()
+    await avatarBtn.click()
+    await page.getByText('Cerrar sesión').click()
     await page.waitForURL(/\/login/, { timeout: 10000 })
     await screenshot(page, 'auth-redirects-05-logged-out')
   })

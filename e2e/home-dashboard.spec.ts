@@ -58,8 +58,11 @@ test.describe('Home Dashboard — Complete Flow', () => {
     await page.getByRole('button', { name: /Por cobrar/i }).click()
     await screenshot(page, 'home-dashboard-07-filter-off')
 
-    // 8. Verify logout button is present (full logout flow tested in auth.spec.ts)
-    await expect(page.getByRole('button', { name: 'Salir' })).toBeVisible()
+    // 8. Verify user avatar menu is present and contains logout
+    const avatarButton = page.locator('header button').last()
+    await expect(avatarButton).toBeVisible()
+    await avatarButton.click()
+    await expect(page.getByText('Cerrar sesión')).toBeVisible()
     await screenshot(page, 'home-dashboard-08-final-state')
   })
 })

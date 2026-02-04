@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createMovement } from '@/lib/actions/movements'
-import { today, parseMoney, formatCurrency } from '@/lib/utils'
+import { today, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
 
@@ -18,6 +18,12 @@ const inputStyle: React.CSSProperties = {
   fontSize: 15, color: '#e5e5e5', padding: '0 14px', outline: 'none',
 }
 
+const inputErrorStyle: React.CSSProperties = {
+  ...inputStyle,
+  border: '1px solid #dc2626',
+  backgroundColor: '#1a1010',
+}
+
 const selectStyle: React.CSSProperties = {
   ...inputStyle,
   appearance: 'none' as const,
@@ -27,25 +33,102 @@ const selectStyle: React.CSSProperties = {
   backgroundSize: '16px',
 }
 
+const selectErrorStyle: React.CSSProperties = {
+  ...selectStyle,
+  border: '1px solid #dc2626',
+  backgroundColor: '#1a1010',
+}
+
+const errorTextStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#f87171',
+  marginTop: 4,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+}
+
+interface FieldErrors {
+  accountId?: string
+  name?: string
+  amount?: string
+  date?: string
+}
+
 export function AddMovementPage({ accounts, categories }: AddMovementPageProps) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [currency, setCurrency] = useState<'CLP' | 'USD'>('CLP')
   const [showCreateCategory, setShowCreateCategory] = useState(false)
   const [localCategories, setLocalCategories] = useState(categories)
   const [selectedCategoryId, setSelectedCategoryId] = useState('')
+  
+  // Controlled form state
+  const [accountId, setAccountId] = useState('')
+  const [name, setName] = useState('')
+  const [amount, setAmount] = useState('')
+  const [date, setDate] = useState(today())
+  const [time, setTime] = useState('')
+  const [type, setType] = useState<'expense' | 'income'>('expense')
+
+  function validateForm(): boolean {
+    const errors: FieldErrors = {}
+    
+    if (!accountId) {
+      errors.accountId = 'Selecciona una cuenta'
+    }
+    if (!name.trim()) {
+      errors.name = 'Ingresa una descripción'
+    }
+    if (!amount.trim()) {
+      errors.amount = 'Ingresa un monto'
+    } else {
+      const cents = parseMoney(amount)
+      if (cents <= 0) {
+        errors.amount = 'El monto debe ser mayor a 0'
+      }
+    }
+    if (!date) {
+      errors.date = 'Selecciona una fecha'
+    }
+    
+    setFieldErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
+  // Clear field error when user starts typing
+  function clearFieldError(field: keyof FieldErrors) {
+    if (fieldErrors[field]) {
+      setFieldErrors(prev => {
+        const next = { ...prev }
+        delete next[field]
+        return next
+      })
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setError(null)
+    
+    if (!validateForm()) {
+      return
+    }
+    
     setLoading(true)
     try {
-      const form = e.currentTarget
-      const formData = new FormData(form)
-      const amountStr = formData.get('amount') as string
-      const cents = parseMoney(amountStr)
-      formData.set('amount', cents.toString())
+      const formData = new FormData()
+      formData.set('type', type)
+      formData.set('accountId', accountId)
+      formData.set('name', name)
+      formData.set('amount', parseMoney(amount).toString())
+      formData.set('currency', currency)
+      formData.set('date', date)
+      if (time) formData.set('time', time)
+      if (selectedCategoryId) formData.set('categoryId', selectedCategoryId)
+      
       const result = await createMovement(formData)
       if (!result.success) {
         setError(result.error || 'Error al crear movimiento')
@@ -100,7 +183,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
           </div>
         )}
 
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {/* Type Toggle */}
             <div style={{
@@ -113,7 +196,8 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                 }}>
                   <input
                     type="radio" name="type" value={t}
-                    defaultChecked={t === 'expense'}
+                    checked={type === t}
+                    onChange={() => setType(t)}
                     style={{ display: 'none' }}
                     className="type-radio"
                   />
@@ -131,7 +215,12 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
             {/* Account selector */}
             <div>
               <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Cuenta</label>
-              <select name="accountId" required defaultValue="" style={selectStyle}>
+              <select 
+                name="accountId"
+                value={accountId} 
+                onChange={e => { setAccountId(e.target.value); clearFieldError('accountId') }}
+                style={fieldErrors.accountId ? selectErrorStyle : selectStyle}
+              >
                 <option value="" disabled>Seleccionar cuenta</option>
                 {accounts.map((acc) => (
                   <option key={acc.id} value={acc.id}>
@@ -139,48 +228,102 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                   </option>
                 ))}
               </select>
+              {fieldErrors.accountId && (
+                <div style={errorTextStyle}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  {fieldErrors.accountId}
+                </div>
+              )}
             </div>
 
             {/* Name */}
             <div>
               <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Descripción</label>
               <input
-                name="name" type="text" placeholder="¿En qué se gastó?"
-                required autoComplete="off"
-                style={inputStyle}
+                type="text" 
+                placeholder="¿En qué se gastó?"
+                autoComplete="off"
+                value={name}
+                onChange={e => { setName(e.target.value); clearFieldError('name') }}
+                style={fieldErrors.name ? inputErrorStyle : inputStyle}
               />
+              {fieldErrors.name && (
+                <div style={errorTextStyle}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  {fieldErrors.name}
+                </div>
+              )}
             </div>
 
-            {/* Amount + Currency + Date */}
+            {/* Amount + Currency */}
             <div style={{ display: 'flex', gap: 12 }}>
               <div style={{ flex: 2 }}>
                 <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>{currency === 'USD' ? 'Monto pesos' : 'Monto'}</label>
                 <input
-                  name="amount" type="text" placeholder="0.00"
-                  required inputMode="decimal" autoComplete="off"
-                  style={inputStyle}
+                  type="text" 
+                  placeholder="0.00"
+                  inputMode="decimal" 
+                  autoComplete="off"
+                  value={amount}
+                  onChange={e => { setAmount(e.target.value); clearFieldError('amount') }}
+                  style={fieldErrors.amount ? inputErrorStyle : inputStyle}
                 />
+                {fieldErrors.amount && (
+                  <div style={errorTextStyle}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10"/>
+                      <line x1="12" y1="8" x2="12" y2="12"/>
+                      <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    {fieldErrors.amount}
+                  </div>
+                )}
               </div>
               <div style={{ flex: 1 }}>
                 <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Moneda</label>
-                <select name="currency" defaultValue="CLP" onChange={e => setCurrency(e.target.value as 'CLP' | 'USD')} style={selectStyle}>
+                <select name="currency" value={currency} onChange={e => setCurrency(e.target.value as 'CLP' | 'USD')} style={selectStyle}>
                   <option value="CLP">CLP</option>
                   <option value="USD">USD</option>
                 </select>
               </div>
             </div>
+            
+            {/* Date + Time */}
             <div style={{ display: 'flex', gap: 12 }}>
               <div style={{ flex: 2 }}>
                 <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Fecha</label>
                 <input
-                  name="date" type="date" defaultValue={today()} required
-                  style={{ ...inputStyle, colorScheme: 'dark' }}
+                  type="date" 
+                  value={date}
+                  onChange={e => { setDate(e.target.value); clearFieldError('date') }}
+                  style={{ ...(fieldErrors.date ? inputErrorStyle : inputStyle), colorScheme: 'dark' }}
                 />
+                {fieldErrors.date && (
+                  <div style={errorTextStyle}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10"/>
+                      <line x1="12" y1="8" x2="12" y2="12"/>
+                      <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    {fieldErrors.date}
+                  </div>
+                )}
               </div>
               <div style={{ flex: 1 }}>
                 <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Hora</label>
                 <input
-                  name="time" type="time"
+                  name="time"
+                  type="time"
+                  value={time}
+                  onChange={e => setTime(e.target.value)}
                   style={{ ...inputStyle, colorScheme: 'dark' }}
                 />
               </div>

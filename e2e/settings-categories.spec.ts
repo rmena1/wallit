@@ -31,12 +31,12 @@ test.describe('Settings — Category Management (Complete Flow)', () => {
     await expect(page.getByText('Hogar')).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'settings-categories-04-multiple-categories')
 
-    // 5. Delete a category
+    // 5. Delete a category (button uses TrashIcon SVG, triggered via confirm dialog)
     page.on('dialog', dialog => dialog.accept())
-    // Each category chip is a div with emoji + name + × button, displayed as flex wrap items
-    // Target the specific chip containing "🍔" and "Comida" text with the × button
-    const comidaChip = page.locator('div').filter({ hasText: '🍔' }).filter({ hasText: 'Comida' }).locator('button', { hasText: '×' }).first()
-    await comidaChip.click()
+    // Find the category row containing "Comida" and click its delete button (last button in that row)
+    const comidaRow = page.locator('div').filter({ hasText: /🍔.*Comida/ }).first()
+    const deleteBtn = comidaRow.locator('button').last()
+    await deleteBtn.click()
     await page.waitForTimeout(1000)
     await screenshot(page, 'settings-categories-05-after-delete')
   })

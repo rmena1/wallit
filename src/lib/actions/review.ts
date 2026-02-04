@@ -68,7 +68,7 @@ export async function confirmMovement(id: string, data: {
       categoryId: data.categoryId,
       amountUsd: data.amountUsd,
       exchangeRate: data.exchangeRate,
-      time: data.time ?? undefined,
+      time: data.time,
       needsReview: false,
       updatedAt: new Date(),
     })
@@ -162,14 +162,15 @@ export async function splitMovement(originalId: string, splits: { name: string; 
   
   // Use a transaction to ensure atomicity — if any insert fails,
   // the original movement is preserved (no data loss)
-  await db.transaction(async (tx) => {
+  // Note: better-sqlite3 is synchronous, so no async/await inside transaction
+  db.transaction((tx) => {
     // Delete original
-    await tx.delete(movements).where(eq(movements.id, originalId))
+    tx.delete(movements).where(eq(movements.id, originalId)).run()
     
     // Create split movements
     for (const split of splits) {
       const proportion = totalOriginal !== 0 ? split.amount / totalOriginal : 0
-      await tx.insert(movements).values({
+      tx.insert(movements).values({
         id: generateId(),
         userId: session.id,
         categoryId: original.categoryId,
@@ -191,7 +192,7 @@ export async function splitMovement(originalId: string, splits: { name: string; 
         // Use a future createdAt so they sort first in review queue
         createdAt: new Date(Date.now() + 1000),
         updatedAt: new Date(),
-      })
+      }).run()
     }
   })
   
@@ -211,18 +212,32 @@ export async function markAsReceived(id: string, paymentAccountId?: string) {
   
   if (!original) return { success: false, error: 'Movement not found' }
   
+  // Verify the payment account belongs to the current user (IDOR protection)
+  if (paymentAccountId) {
+    const [ownedAccount] = await db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(and(eq(accounts.id, paymentAccountId), eq(accounts.userId, session.id)))
+      .limit(1)
+    if (!ownedAccount) {
+      return { success: false, error: 'Invalid account' }
+    }
+  }
+  
   const { generateId } = await import('@/lib/utils')
   
-  await db.transaction(async (tx) => {
+  // Note: better-sqlite3 is synchronous, so no async/await inside transaction
+  db.transaction((tx) => {
     // Mark the original as received
-    await tx
+    tx
       .update(movements)
       .set({ received: true, updatedAt: new Date() })
       .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
+      .run()
     
     // If an account was selected (not cash), create an income movement
     if (paymentAccountId) {
-      await tx.insert(movements).values({
+      tx.insert(movements).values({
         id: generateId(),
         userId: session.id,
         categoryId: original.categoryId,
@@ -241,7 +256,7 @@ export async function markAsReceived(id: string, paymentAccountId?: string) {
         needsReview: false,
         createdAt: new Date(),
         updatedAt: new Date(),
-      })
+      }).run()
     }
   })
   
@@ -268,18 +283,21 @@ export async function markAsReceivedWithExisting(receivableId: string, existingI
   if (income.type !== 'income') return { success: false, error: 'Selected movement is not an income' }
   if (income.receivableId) return { success: false, error: 'Income is already linked to another receivable' }
   
-  await db.transaction(async (tx) => {
+  // Note: better-sqlite3 is synchronous, so no async/await inside transaction
+  db.transaction((tx) => {
     // Mark the receivable as received
-    await tx
+    tx
       .update(movements)
       .set({ received: true, updatedAt: new Date() })
       .where(and(eq(movements.id, receivableId), eq(movements.userId, session.id)))
+      .run()
     
     // Link the existing income to this receivable
-    await tx
+    tx
       .update(movements)
       .set({ receivableId: receivableId, updatedAt: new Date() })
       .where(and(eq(movements.id, existingIncomeId), eq(movements.userId, session.id)))
+      .run()
   })
   
   revalidatePath('/')

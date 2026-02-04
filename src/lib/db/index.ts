@@ -15,6 +15,18 @@ function createDb() {
   // Enable WAL mode for better concurrent access
   sqlite.pragma('journal_mode = WAL')
   
+  // Performance: reduce fsync overhead (safe with WAL — data integrity preserved)
+  sqlite.pragma('synchronous = NORMAL')
+  
+  // Performance: increase page cache to ~32MB (default is ~2MB)
+  sqlite.pragma('cache_size = -32000')
+  
+  // Performance: store temp tables in memory
+  sqlite.pragma('temp_store = MEMORY')
+  
+  // Performance: allow concurrent reads during writes (WAL2-like behavior)
+  sqlite.pragma('busy_timeout = 5000')
+  
   // Enable foreign keys
   sqlite.pragma('foreign_keys = ON')
   

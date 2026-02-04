@@ -1,0 +1,86 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - button [ref=e5] [cursor=pointer]:
+          - img [ref=e6]
+        - generic [ref=e8]: Revisión
+    - main [ref=e9]:
+      - generic [ref=e11]: 1/3
+      - generic [ref=e13]:
+        - generic [ref=e14]:
+          - generic [ref=e15]: $30.000
+          - generic [ref=e16]: Parte de Juan
+        - generic [ref=e17]:
+          - generic [ref=e18]:
+            - button "↓ Gasto" [ref=e19] [cursor=pointer]
+            - button "↑ Ingreso" [ref=e20] [cursor=pointer]
+          - generic [ref=e21]:
+            - generic [ref=e22]: Descripción
+            - textbox [ref=e23]: Parte de Juan
+          - generic [ref=e24]:
+            - generic [ref=e25]:
+              - generic [ref=e26]: Monto
+              - textbox [ref=e27]: "30000"
+            - generic [ref=e28]:
+              - generic [ref=e29]: Moneda
+              - combobox [ref=e30]:
+                - option "CLP" [selected]
+                - option "USD"
+          - generic [ref=e31]:
+            - generic [ref=e32]:
+              - generic [ref=e33]: Cuenta
+              - combobox [ref=e34]:
+                - option "Sin cuenta"
+                - option "🏦 ···9999" [selected]
+            - generic [ref=e35]:
+              - generic [ref=e36]: Categoría
+              - generic [ref=e37]:
+                - combobox [ref=e38]:
+                  - option "Sin categoría" [selected]
+                  - option "📚 Education"
+                  - option "🎬 Entertainment"
+                  - option "🍔 Food"
+                  - option "🎁 Gifts"
+                  - option "💊 Health"
+                  - option "🏠 Home"
+                  - option "💰 Salary"
+                  - option "🛒 Shopping"
+                  - option "🚗 Transport"
+                  - option "💼 Work"
+                - button "+" [ref=e39] [cursor=pointer]
+          - generic [ref=e40]:
+            - generic [ref=e41]:
+              - generic [ref=e42]: Fecha
+              - textbox [ref=e43]: 2026-02-04
+            - generic [ref=e44]:
+              - generic [ref=e45]: Hora
+              - textbox [ref=e46]
+      - generic [ref=e47]:
+        - button "Después →" [ref=e48] [cursor=pointer]
+        - button "✓ Confirmar" [ref=e49] [cursor=pointer]
+      - generic [ref=e50]:
+        - button "🗑 Eliminar" [ref=e51] [cursor=pointer]
+        - button "💰 Cobrar" [ref=e52] [cursor=pointer]
+        - button "✂️ Dividir" [ref=e53] [cursor=pointer]
+    - navigation [ref=e54]:
+      - link "Inicio" [ref=e55] [cursor=pointer]:
+        - /url: /
+        - img [ref=e56]
+        - generic [ref=e59]: Inicio
+      - link "Reportes" [ref=e60] [cursor=pointer]:
+        - /url: /reports
+        - img [ref=e61]
+        - generic [ref=e62]: Reportes
+      - link "Config" [ref=e63] [cursor=pointer]:
+        - /url: /settings
+        - img [ref=e64]
+        - generic [ref=e67]: Config
+      - link [ref=e68] [cursor=pointer]:
+        - /url: /add
+        - img [ref=e69]
+  - alert [ref=e70]
+```

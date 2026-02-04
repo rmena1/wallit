@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo, memo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { logout } from '@/lib/actions/auth'
 import { deleteMovement } from '@/lib/actions/movements'
@@ -75,6 +75,102 @@ function TrashIcon() {
   )
 }
 
+// Memoized movement card component to prevent unnecessary re-renders
+interface MovementCardProps {
+  movement: MovementWithCategory
+  isMarking: boolean
+  onOpenPaymentDialog: (id: string) => void
+  onNavigate: (id: string) => void
+}
+
+const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpenPaymentDialog, onNavigate }: MovementCardProps) {
+  return (
+    <div
+      onClick={() => onNavigate(m.id)}
+      style={{
+        backgroundColor: m.receivable && !m.received ? '#2a2000' : m.received ? '#1a1a1a' : '#1a1a1a',
+        borderRadius: 12,
+        padding: '12px 14px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        border: m.receivable && !m.received ? '1px solid #854d0e' : '1px solid #2a2a2a',
+        opacity: isMarking ? 0.4 : m.received ? 0.5 : 1,
+        transition: 'opacity 0.2s ease',
+        textDecoration: m.received ? 'line-through' : 'none',
+        cursor: 'pointer',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+        {m.receivable && !m.received && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onOpenPaymentDialog(m.id) }}
+            disabled={isMarking}
+            style={{
+              width: 24, height: 24, borderRadius: 6,
+              border: '2px solid #fbbf24', backgroundColor: 'transparent',
+              cursor: 'pointer', flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+            title="Marcar como cobrado"
+          />
+        )}
+        {m.received && (
+          <div style={{
+            width: 24, height: 24, borderRadius: 6,
+            border: '2px solid #4ade80', backgroundColor: '#052e16',
+            flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 14, color: '#4ade80',
+          }}>✓</div>
+        )}
+        <div style={{
+          width: 36, height: 36, borderRadius: 10,
+          backgroundColor: m.categoryEmoji ? '#27272a' : (m.type === 'income' ? '#052e16' : '#450a0a'),
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 16, flexShrink: 0,
+        }}>
+          {m.categoryEmoji || (m.type === 'income' ? '↑' : '↓')}
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{
+            fontSize: 15, fontWeight: 500, color: '#e5e5e5',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {m.name}
+          </div>
+          {m.originalName && m.originalName !== m.name && (
+            <div style={{ fontSize: 11, color: '#3f3f46', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {m.originalName}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: '#52525b', marginTop: 1 }}>
+            {formatDateDisplay(m.date)}{m.time && ` · ${m.time}`}
+            {m.categoryName && (
+              <span> · {m.categoryName}</span>
+            )}
+            {m.accountBankName && (
+              <span style={{ color: m.accountColor || undefined }}> · {m.accountEmoji || ''} {m.accountBankName} ···{m.accountLastFour}</span>
+            )}
+          </div>
+        </div>
+      </div>
+      <div style={{ flexShrink: 0, marginLeft: 8 }}>
+        <span style={{
+          fontSize: 15, fontWeight: 600,
+          color: m.type === 'income' ? '#4ade80' : '#f87171',
+          whiteSpace: 'nowrap',
+        }}>
+          {m.type === 'income' ? '+' : '-'}{formatCurrency(m.amount, m.currency)}
+        </span>
+        {m.currency === 'USD' && (
+          <div style={{ fontSize: 11, color: '#52525b', textAlign: 'right', marginTop: 1 }}>
+            USD
+          </div>
+        )}
+      </div>
+    </div>
+  )
+})
+
 function getAccountIconFromType(accountType: string): string {
   switch (accountType) {
     case 'Crédito': return '💳'
@@ -95,14 +191,30 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
   const [selectedAccountId, setSelectedAccountId] = useState<string>('cash')
   const [paymentMode, setPaymentMode] = useState<'new' | 'existing'>('new')
   const [selectedExistingIncomeId, setSelectedExistingIncomeId] = useState<string | null>(null)
+  const [showUserMenu, setShowUserMenu] = useState(false)
   const reviewCount = pendingReviewCount
+  const userInitial = email.charAt(0).toUpperCase()
 
-  function openPaymentDialog(id: string) {
+  // Memoize filtered movements to prevent recalculation on unrelated state changes
+  const filteredMovements = useMemo(
+    () => receivableFilter
+      ? movements.filter(m => m.receivable && !m.received)
+      : movements,
+    [movements, receivableFilter]
+  )
+
+  // Stable callback for opening payment dialog
+  const openPaymentDialog = useCallback((id: string) => {
     setSelectedAccountId('cash')
     setPaymentMode('new')
     setSelectedExistingIncomeId(null)
     setPaymentDialogId(id)
-  }
+  }, [])
+
+  // Stable callback for navigating to edit
+  const handleNavigateToEdit = useCallback((id: string) => {
+    router.push(`/edit/${id}`)
+  }, [router])
 
   async function handleConfirmPayment() {
     if (!paymentDialogId) return
@@ -122,10 +234,6 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
   }
 
   const canConfirmPayment = paymentMode === 'new' || (paymentMode === 'existing' && selectedExistingIncomeId !== null)
-
-  const filteredMovements = receivableFilter
-    ? movements.filter(m => m.receivable && !m.received)
-    : movements
 
   async function handleDelete(id: string) {
     if (!confirm('¿Eliminar este movimiento?')) return
@@ -165,18 +273,66 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               </span>
             )}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 13, color: '#71717a', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</span>
+          <div style={{ position: 'relative' }}>
             <button
-              onClick={() => logout()}
+              onClick={() => setShowUserMenu(m => !m)}
               style={{
-                padding: '6px 12px', borderRadius: 8,
-                border: '1px solid #2a2a2a', backgroundColor: '#1a1a1a',
-                fontSize: 13, fontWeight: 500, color: '#a1a1aa', cursor: 'pointer',
+                width: 36, height: 36, borderRadius: '50%',
+                background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                border: '2px solid #1e40af',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 15, fontWeight: 700, color: '#fff', cursor: 'pointer',
               }}
+              title={email}
             >
-              Salir
+              {userInitial}
             </button>
+            {showUserMenu && (
+              <>
+                <div
+                  onClick={() => setShowUserMenu(false)}
+                  style={{ position: 'fixed', inset: 0, zIndex: 19 }}
+                />
+                <div style={{
+                  position: 'absolute', top: 44, right: 0, zIndex: 20,
+                  backgroundColor: '#1a1a1a', border: '1px solid #2a2a2a',
+                  borderRadius: 12, padding: '8px 0', minWidth: 180,
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                }}>
+                  <div style={{ padding: '8px 14px', borderBottom: '1px solid #2a2a2a', marginBottom: 4 }}>
+                    <div style={{ fontSize: 13, color: '#a1a1aa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {email}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setShowUserMenu(false); router.push('/settings') }}
+                    style={{
+                      width: '100%', padding: '10px 14px', border: 'none',
+                      backgroundColor: 'transparent', color: '#e5e5e5',
+                      fontSize: 14, cursor: 'pointer', textAlign: 'left',
+                      display: 'flex', alignItems: 'center', gap: 8,
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#27272a')}
+                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  >
+                    ⚙️ Configuración
+                  </button>
+                  <button
+                    onClick={() => { setShowUserMenu(false); logout() }}
+                    style={{
+                      width: '100%', padding: '10px 14px', border: 'none',
+                      backgroundColor: 'transparent', color: '#f87171',
+                      fontSize: 14, cursor: 'pointer', textAlign: 'left',
+                      display: 'flex', alignItems: 'center', gap: 8,
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#27272a')}
+                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  >
+                    🚪 Cerrar sesión
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -233,13 +389,14 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               scrollbarWidth: 'none',
             }}>
               {accountBalances.map((acc) => (
-                <div key={acc.id} style={{
+                <div key={acc.id} data-testid={`account-card-${acc.id}`} onClick={() => router.push(`/account/${acc.id}`)} style={{
                   minWidth: 160,
                   backgroundColor: '#1a1a1a',
                   borderRadius: 14,
                   padding: '14px 14px 12px',
                   border: `1px solid ${acc.color ? acc.color + '40' : '#2a2a2a'}`,
                   flexShrink: 0,
+                  cursor: 'pointer',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
                     <span style={{ fontSize: 16 }}>{acc.emoji || getAccountIconFromType(acc.accountType)}</span>
@@ -366,98 +523,13 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {filteredMovements.map((m) => (
-                <div
+                <MovementCard
                   key={m.id}
-                  onClick={() => router.push(`/edit/${m.id}`)}
-                  style={{
-                    backgroundColor: m.receivable && !m.received ? '#2a2000' : m.received ? '#1a1a1a' : '#1a1a1a',
-                    borderRadius: 12,
-                    padding: '12px 14px',
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    border: m.receivable && !m.received ? '1px solid #854d0e' : '1px solid #2a2a2a',
-                    opacity: deletingId === m.id || markingReceived === m.id ? 0.4 : m.received ? 0.5 : 1,
-                    transition: 'opacity 0.2s ease',
-                    textDecoration: m.received ? 'line-through' : 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-                    {m.receivable && !m.received && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); openPaymentDialog(m.id) }}
-                        disabled={markingReceived === m.id}
-                        style={{
-                          width: 24, height: 24, borderRadius: 6,
-                          border: '2px solid #fbbf24', backgroundColor: 'transparent',
-                          cursor: 'pointer', flexShrink: 0,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        }}
-                        title="Marcar como cobrado"
-                      />
-                    )}
-                    {m.received && (
-                      <div style={{
-                        width: 24, height: 24, borderRadius: 6,
-                        border: '2px solid #4ade80', backgroundColor: '#052e16',
-                        flexShrink: 0,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 14, color: '#4ade80',
-                      }}>✓</div>
-                    )}
-                    <div style={{
-                      width: 36, height: 36, borderRadius: 10,
-                      backgroundColor: m.categoryEmoji ? '#27272a' : (m.type === 'income' ? '#052e16' : '#450a0a'),
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 16, flexShrink: 0,
-                    }}>
-                      {m.categoryEmoji || (m.type === 'income' ? '↑' : '↓')}
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{
-                        fontSize: 15, fontWeight: 500, color: '#e5e5e5',
-                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                      }}>
-                        {m.name}
-                      </div>
-                      {m.originalName && m.originalName !== m.name && (
-                        <div style={{ fontSize: 11, color: '#3f3f46', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {m.originalName}
-                        </div>
-                      )}
-                      <div style={{ fontSize: 12, color: '#52525b', marginTop: 1 }}>
-                        {formatDateDisplay(m.date)}{m.time && ` · ${m.time}`}
-                        {m.categoryName && (
-                          <span> · {m.categoryName}</span>
-                        )}
-                        {m.accountBankName && (
-                          <span style={{ color: m.accountColor || undefined }}> · {m.accountEmoji || ''} {m.accountBankName} ···{m.accountLastFour}</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 8 }}>
-                    <span style={{
-                      fontSize: 15, fontWeight: 600,
-                      color: m.type === 'income' ? '#4ade80' : '#f87171',
-                      whiteSpace: 'nowrap',
-                    }}>
-                      {m.type === 'income' ? '+' : '-'}{formatCurrency(m.amount, 'CLP')}
-                    </span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleDelete(m.id) }}
-                      disabled={deletingId === m.id}
-                      style={{
-                        width: 30, height: 30, borderRadius: 8,
-                        border: 'none', backgroundColor: 'transparent',
-                        cursor: 'pointer', display: 'flex',
-                        alignItems: 'center', justifyContent: 'center',
-                        color: '#3f3f46',
-                      }}
-                    >
-                      <TrashIcon />
-                    </button>
-                  </div>
-                </div>
+                  movement={m}
+                  isMarking={markingReceived === m.id}
+                  onOpenPaymentDialog={openPaymentDialog}
+                  onNavigate={handleNavigateToEdit}
+                />
               ))}
             </div>
           )}
