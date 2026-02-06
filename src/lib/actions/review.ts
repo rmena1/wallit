@@ -56,6 +56,31 @@ export async function confirmMovement(id: string, data: {
   time?: string | null
 }) {
   const session = await requireAuth()
+
+  // Verify account belongs to the current user (IDOR protection)
+  if (data.accountId) {
+    const [ownedAccount] = await db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(and(eq(accounts.id, data.accountId), eq(accounts.userId, session.id)))
+      .limit(1)
+    if (!ownedAccount) {
+      return { success: false, error: 'Invalid account' }
+    }
+  }
+
+  // Verify category belongs to the current user (IDOR protection)
+  if (data.categoryId) {
+    const [ownedCategory] = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(and(eq(categories.id, data.categoryId), eq(categories.userId, session.id)))
+      .limit(1)
+    if (!ownedCategory) {
+      return { success: false, error: 'Invalid category' }
+    }
+  }
+
   await db
     .update(movements)
     .set({

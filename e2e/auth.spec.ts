@@ -71,7 +71,7 @@ test.describe('Auth - Register Flow', () => {
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill('testpass123')
     await page.getByRole('button', { name: 'Create account' }).click()
-    await expect(page.getByText('An account with this email already exists')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/Could not create account|already exists|email already/i)).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'auth-register-04-duplicate-email')
 
     // 5. Navigate to login

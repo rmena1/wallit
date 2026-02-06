@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useMemo, memo, useCallback } from 'react'
+import { useState, useMemo, memo, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { logout } from '@/lib/actions/auth'
-import { deleteMovement } from '@/lib/actions/movements'
+import { deleteMovement, getMovementsPaginated } from '@/lib/actions/movements'
 import { markAsReceived, markAsReceivedWithExisting } from '@/lib/actions/review'
 import { formatDateDisplay, formatCurrency } from '@/lib/utils'
 import type { AccountWithBalance } from '@/lib/actions/balances'
@@ -31,6 +31,8 @@ interface MovementWithCategory {
   receivableId: string | null
   time: string | null
   originalName: string | null
+  transferId: string | null
+  transferPairId: string | null
 }
 
 interface UserAccount {
@@ -84,15 +86,17 @@ interface MovementCardProps {
 }
 
 const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpenPaymentDialog, onNavigate }: MovementCardProps) {
+  const isTransfer = !!m.transferId
+
   return (
     <div
       onClick={() => onNavigate(m.id)}
       style={{
-        backgroundColor: m.receivable && !m.received ? '#2a2000' : m.received ? '#1a1a1a' : '#1a1a1a',
+        backgroundColor: isTransfer ? '#1a1a2a' : m.receivable && !m.received ? '#2a2000' : m.received ? '#1a1a1a' : '#1a1a1a',
         borderRadius: 12,
         padding: '12px 14px',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        border: m.receivable && !m.received ? '1px solid #854d0e' : '1px solid #2a2a2a',
+        border: isTransfer ? '1px solid #3b4d8a' : m.receivable && !m.received ? '1px solid #854d0e' : '1px solid #2a2a2a',
         opacity: isMarking ? 0.4 : m.received ? 0.5 : 1,
         transition: 'opacity 0.2s ease',
         textDecoration: m.received ? 'line-through' : 'none',
@@ -100,7 +104,7 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-        {m.receivable && !m.received && (
+        {m.receivable && !m.received && !isTransfer && (
           <button
             onClick={(e) => { e.stopPropagation(); onOpenPaymentDialog(m.id) }}
             disabled={isMarking}
@@ -113,7 +117,7 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
             title="Marcar como cobrado"
           />
         )}
-        {m.received && (
+        {m.received && !isTransfer && (
           <div style={{
             width: 24, height: 24, borderRadius: 6,
             border: '2px solid #4ade80', backgroundColor: '#052e16',
@@ -124,11 +128,11 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
         )}
         <div style={{
           width: 36, height: 36, borderRadius: 10,
-          backgroundColor: m.categoryEmoji ? '#27272a' : (m.type === 'income' ? '#052e16' : '#450a0a'),
+          backgroundColor: isTransfer ? '#1e3a5f' : m.categoryEmoji ? '#27272a' : (m.type === 'income' ? '#052e16' : '#450a0a'),
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: 16, flexShrink: 0,
         }}>
-          {m.categoryEmoji || (m.type === 'income' ? '↑' : '↓')}
+          {isTransfer ? '↔️' : m.categoryEmoji || (m.type === 'income' ? '↑' : '↓')}
         </div>
         <div style={{ minWidth: 0 }}>
           <div style={{
@@ -144,11 +148,11 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
           )}
           <div style={{ fontSize: 12, color: '#52525b', marginTop: 1 }}>
             {formatDateDisplay(m.date)}{m.time && ` · ${m.time}`}
-            {m.categoryName && (
+            {!isTransfer && m.categoryName && (
               <span> · {m.categoryName}</span>
             )}
             {m.accountBankName && (
-              <span style={{ color: m.accountColor || undefined }}> · {m.accountEmoji || ''} {m.accountBankName} ···{m.accountLastFour}</span>
+              <span style={{ color: isTransfer ? '#60a5fa' : m.accountColor || undefined }}> · {m.accountEmoji || ''} {m.accountBankName} ···{m.accountLastFour}</span>
             )}
           </div>
         </div>
@@ -156,10 +160,10 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
       <div style={{ flexShrink: 0, marginLeft: 8 }}>
         <span style={{
           fontSize: 15, fontWeight: 600,
-          color: m.type === 'income' ? '#4ade80' : '#f87171',
+          color: isTransfer ? '#60a5fa' : m.type === 'income' ? '#4ade80' : '#f87171',
           whiteSpace: 'nowrap',
         }}>
-          {m.type === 'income' ? '+' : '-'}{formatCurrency(m.amount, m.currency)}
+          {isTransfer ? '' : m.type === 'income' ? '+' : '-'}{formatCurrency(m.amount, m.currency)}
         </span>
         {m.currency === 'USD' && (
           <div style={{ fontSize: 11, color: '#52525b', textAlign: 'right', marginTop: 1 }}>
@@ -182,7 +186,9 @@ function getAccountIconFromType(accountType: string): string {
   }
 }
 
-export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements, pendingReviewCount, usdClpRate, userAccounts, recentUnlinkedIncomes }: HomePageProps) {
+const PAGE_SIZE = 20
+
+export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, pendingReviewCount, usdClpRate, userAccounts, recentUnlinkedIncomes }: HomePageProps) {
   const router = useRouter()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [receivableFilter, setReceivableFilter] = useState(false)
@@ -195,13 +201,63 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
   const reviewCount = pendingReviewCount
   const userInitial = email.charAt(0).toUpperCase()
 
-  // Memoize filtered movements to prevent recalculation on unrelated state changes
-  const filteredMovements = useMemo(
-    () => receivableFilter
-      ? movements.filter(m => m.receivable && !m.received)
-      : movements,
-    [movements, receivableFilter]
-  )
+  // Pagination state
+  const [displayedMovements, setDisplayedMovements] = useState<MovementWithCategory[]>(initialMovements)
+  const [hasMore, setHasMore] = useState(initialMovements.length >= PAGE_SIZE)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const [offset, setOffset] = useState(initialMovements.length)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
+
+  // Reset movements when filter changes (fetch from backend)
+  useEffect(() => {
+    async function fetchFiltered() {
+      setIsLoadingMore(true)
+      try {
+        const result = await getMovementsPaginated(0, PAGE_SIZE, receivableFilter ? 'receivables' : 'all')
+        setDisplayedMovements(result.data)
+        setHasMore(result.hasMore)
+        setOffset(result.data.length)
+      } finally {
+        setIsLoadingMore(false)
+      }
+    }
+    fetchFiltered()
+  }, [receivableFilter])
+
+  // Load more movements when scrolling to bottom
+  const loadMore = useCallback(async () => {
+    if (isLoadingMore || !hasMore) return
+    setIsLoadingMore(true)
+    try {
+      const result = await getMovementsPaginated(offset, PAGE_SIZE, receivableFilter ? 'receivables' : 'all')
+      setDisplayedMovements(prev => [...prev, ...result.data])
+      setHasMore(result.hasMore)
+      setOffset(prev => prev + result.data.length)
+    } finally {
+      setIsLoadingMore(false)
+    }
+  }, [isLoadingMore, hasMore, offset, receivableFilter])
+
+  // Intersection Observer for infinite scroll
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
+          loadMore()
+        }
+      },
+      { threshold: 0.1 }
+    )
+
+    if (loadMoreRef.current) {
+      observer.observe(loadMoreRef.current)
+    }
+
+    return () => observer.disconnect()
+  }, [hasMore, isLoadingMore, loadMore])
+
+  // Use displayed movements (managed state) instead of prop
+  const filteredMovements = displayedMovements
 
   // Stable callback for opening payment dialog
   const openPaymentDialog = useCallback((id: string) => {
@@ -228,6 +284,16 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
         const accountId = selectedAccountId === 'cash' ? undefined : selectedAccountId
         await markAsReceived(id, accountId)
       }
+      // Update local state: mark as received or remove if receivables filter is on
+      setDisplayedMovements(prev => {
+        if (receivableFilter) {
+          // Remove from list when filtering by receivables
+          return prev.filter(m => m.id !== id)
+        } else {
+          // Mark as received in the list
+          return prev.map(m => m.id === id ? { ...m, received: true } : m)
+        }
+      })
     } finally {
       setMarkingReceived(null)
     }
@@ -531,6 +597,16 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                   onNavigate={handleNavigateToEdit}
                 />
               ))}
+              
+              {/* Load more trigger */}
+              <div ref={loadMoreRef} style={{ padding: '20px 0', textAlign: 'center' }}>
+                {isLoadingMore && (
+                  <div style={{ color: '#71717a', fontSize: 13 }}>Cargando más...</div>
+                )}
+                {!hasMore && filteredMovements.length > 0 && (
+                  <div style={{ color: '#52525b', fontSize: 12 }}>No hay más movimientos</div>
+                )}
+              </div>
             </div>
           )}
         </div>

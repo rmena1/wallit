@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { updateMovement, deleteMovement } from '@/lib/actions/movements'
 import { markAsReceivable, unmarkReceivable, splitMovement } from '@/lib/actions/review'
+import { convertToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { formatCurrency, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
@@ -76,6 +77,47 @@ export function EditClient({ movement, accounts, categories }: Props) {
   const [splitItems, setSplitItems] = useState<{ name: string; amount: string }[]>([])
   const [showCreateCategory, setShowCreateCategory] = useState(false)
   const [localCategories, setLocalCategories] = useState(categories)
+  
+  // Transfer mode state
+  const [isTransferMode, setIsTransferMode] = useState(false)
+  const [transferToAccountId, setTransferToAccountId] = useState('')
+  const [transferToAmount, setTransferToAmount] = useState('')
+  const [transferNote, setTransferNote] = useState('')
+  const [exchangeRate, setExchangeRate] = useState<number | null>(null)
+
+  // Get exchange rate for currency conversion
+  useEffect(() => {
+    getCurrentExchangeRate().then(setExchangeRate).catch(() => {})
+  }, [])
+
+  // Get currencies for transfer calculation
+  const fromAccount = accounts.find(a => a.id === formAccountId)
+  const toAccountForTransfer = accounts.find(a => a.id === transferToAccountId)
+  const fromCurrency = fromAccount?.currency || 'CLP'
+  const toCurrencyTransfer = toAccountForTransfer?.currency || 'CLP'
+  const currenciesDifferTransfer = fromCurrency !== toCurrencyTransfer
+
+  // Auto-calculate transfer toAmount when formAmount or accounts change
+  useEffect(() => {
+    if (!isTransferMode || !transferToAccountId || !formAmount) return
+    
+    const fromCents = parseMoney(formAmount)
+    if (fromCents <= 0) return
+    
+    if (currenciesDifferTransfer && exchangeRate) {
+      let toCents: number
+      if (fromCurrency === 'USD' && toCurrencyTransfer === 'CLP') {
+        toCents = Math.round(fromCents * exchangeRate / 100)
+      } else if (fromCurrency === 'CLP' && toCurrencyTransfer === 'USD') {
+        toCents = Math.round(fromCents * 100 / exchangeRate)
+      } else {
+        toCents = fromCents
+      }
+      setTransferToAmount((toCents / 100).toString())
+    } else if (!currenciesDifferTransfer) {
+      setTransferToAmount(formAmount)
+    }
+  }, [isTransferMode, formAmount, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
 
   async function handleSave() {
     setLoading(true)
@@ -84,6 +126,64 @@ export function EditClient({ movement, accounts, categories }: Props) {
       const amountCents = parseMoney(formAmount)
       if (amountCents <= 0) { setError('Monto inválido'); setLoading(false); return }
 
+      // If in transfer mode, convert to transfer
+      if (isTransferMode) {
+        if (!formAccountId) {
+          setError('Selecciona una cuenta origen')
+          setLoading(false)
+          return
+        }
+        if (!transferToAccountId) {
+          setError('Selecciona una cuenta destino')
+          setLoading(false)
+          return
+        }
+        if (formAccountId === transferToAccountId) {
+          setError('Las cuentas deben ser diferentes')
+          setLoading(false)
+          return
+        }
+        const toAmountCents = parseMoney(transferToAmount)
+        if (toAmountCents <= 0) {
+          setError('Monto destino inválido')
+          setLoading(false)
+          return
+        }
+        
+        // First update the movement
+        await updateMovement(movement.id, {
+          name: formName.trim(),
+          date: formDate,
+          amount: amountCents,
+          type: 'expense', // Transfers are always expense from origin
+          currency: formCurrency,
+          accountId: formAccountId,
+          categoryId: null, // Transfers don't have category
+          amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
+          exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
+          time: formTime || null,
+        })
+        
+        // Then convert to transfer
+        const result = await convertToTransfer({
+          movementId: movement.id,
+          toAccountId: transferToAccountId,
+          toAmount: toAmountCents,
+          toCurrency: toCurrencyTransfer,
+          note: transferNote.trim() || undefined,
+        })
+        
+        if (!result.success) {
+          setError(result.error || 'Error al convertir a transferencia')
+          setLoading(false)
+          return
+        }
+        
+        router.push('/')
+        return
+      }
+
+      // Normal update
       await updateMovement(movement.id, {
         name: formName.trim(),
         date: formDate,
@@ -216,35 +316,109 @@ export function EditClient({ movement, accounts, categories }: Props) {
           border: '1px solid #2a2a2a',
         }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {/* Type toggle */}
+            {/* Type toggle with transfer option */}
             <div style={{
               display: 'flex', backgroundColor: '#111', borderRadius: 12,
               padding: 4, gap: 4, border: '1px solid #2a2a2a',
             }}>
-              {(['expense', 'income'] as const).map(t => (
-                <button key={t} type="button" onClick={() => setFormType(t)} style={{
+              {(['expense', 'income', 'transfer'] as const).map(t => (
+                <button key={t} type="button" onClick={() => {
+                  if (t === 'transfer') {
+                    setIsTransferMode(true)
+                    setFormType('expense') // Transfers start as expense
+                  } else {
+                    setIsTransferMode(false)
+                    setFormType(t)
+                  }
+                }} style={{
                   flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
-                  fontSize: 15, fontWeight: 500, cursor: 'pointer',
-                  backgroundColor: formType === t ? '#27272a' : 'transparent',
-                  color: formType === t ? (t === 'expense' ? '#f87171' : '#4ade80') : '#52525b',
-                  boxShadow: formType === t ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
+                  fontSize: 14, fontWeight: 500, cursor: 'pointer',
+                  backgroundColor: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '#27272a' : 'transparent',
+                  color: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) 
+                    ? (t === 'expense' ? '#f87171' : t === 'income' ? '#4ade80' : '#60a5fa') 
+                    : '#52525b',
+                  boxShadow: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
                   transition: 'all 0.2s ease',
                 }}>
-                  {t === 'expense' ? '↓ Gasto' : '↑ Ingreso'}
+                  {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transfer'}
                 </button>
               ))}
             </div>
 
-            {/* Account */}
-            <div>
-              <label style={labelStyle}>Cuenta</label>
-              <select value={formAccountId} onChange={e => setFormAccountId(e.target.value)} style={selectStyle}>
-                <option value="">Sin cuenta</option>
-                {accounts.map(a => (
-                  <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} · {a.accountType} · ···{a.lastFourDigits}</option>
-                ))}
-              </select>
-            </div>
+            {/* Account or Transfer accounts */}
+            {isTransferMode ? (
+              <>
+                {/* Transfer: From Account */}
+                <div>
+                  <label style={labelStyle}>Desde cuenta (origen)</label>
+                  <select value={formAccountId} onChange={e => setFormAccountId(e.target.value)} style={{
+                    ...selectStyle,
+                    ...(formAccountId === '' ? { border: '1px solid #f59e0b40', backgroundColor: '#1a1812' } : {})
+                  }}>
+                    <option value="">Seleccionar cuenta origen</option>
+                    {accounts.map(a => (
+                      <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} ···{a.lastFourDigits} ({a.currency})</option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Transfer: To Account */}
+                <div>
+                  <label style={labelStyle}>Hacia cuenta (destino)</label>
+                  <select value={transferToAccountId} onChange={e => setTransferToAccountId(e.target.value)} style={{
+                    ...selectStyle,
+                    ...(transferToAccountId === '' ? { border: '1px solid #f59e0b40', backgroundColor: '#1a1812' } : {})
+                  }}>
+                    <option value="">Seleccionar cuenta destino</option>
+                    {accounts.filter(a => a.id !== formAccountId).map(a => (
+                      <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} ···{a.lastFourDigits} ({a.currency})</option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Transfer: Destination Amount (if currencies differ) */}
+                {currenciesDifferTransfer && (
+                  <div>
+                    <label style={labelStyle}>Monto destino ({toCurrencyTransfer})</label>
+                    <input
+                      type="text"
+                      placeholder="0.00"
+                      inputMode="decimal"
+                      value={transferToAmount}
+                      onChange={e => setTransferToAmount(e.target.value)}
+                      style={inputStyle}
+                    />
+                    {exchangeRate && (
+                      <div style={{ fontSize: 11, color: '#71717a', marginTop: 4 }}>
+                        💱 Tipo de cambio: 1 USD = {(exchangeRate / 100).toFixed(2)} CLP
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {/* Transfer: Note (optional) */}
+                <div>
+                  <label style={labelStyle}>Nota de transferencia (opcional)</label>
+                  <input
+                    type="text"
+                    placeholder="ej: Pago tarjeta de crédito"
+                    value={transferNote}
+                    onChange={e => setTransferNote(e.target.value)}
+                    style={inputStyle}
+                  />
+                </div>
+              </>
+            ) : (
+              <div>
+                <label style={labelStyle}>Cuenta</label>
+                <select value={formAccountId} onChange={e => setFormAccountId(e.target.value)} style={selectStyle}>
+                  <option value="">Sin cuenta</option>
+                  {accounts.map(a => (
+                    <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} · {a.accountType} · ···{a.lastFourDigits}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Name */}
             <div>
@@ -311,24 +485,26 @@ export function EditClient({ movement, accounts, categories }: Props) {
               </div>
             )}
 
-            {/* Category */}
-            <div>
-              <label style={labelStyle}>Categoría</label>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <select value={formCategoryId} onChange={e => setFormCategoryId(e.target.value)} style={{ ...selectStyle, flex: 1 }}>
-                  <option value="">Sin categoría</option>
-                  {localCategories.map(c => (
-                    <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
-                  ))}
-                </select>
-                <button type="button" onClick={() => setShowCreateCategory(true)} style={{
-                  width: 48, height: 48, borderRadius: 12, border: '1px solid #2a2a2a',
-                  backgroundColor: '#1a1a1a', color: '#22c55e', fontSize: 20,
-                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  flexShrink: 0,
-                }}>+</button>
+            {/* Category (hidden in transfer mode) */}
+            {!isTransferMode && (
+              <div>
+                <label style={labelStyle}>Categoría</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <select value={formCategoryId} onChange={e => setFormCategoryId(e.target.value)} style={{ ...selectStyle, flex: 1 }}>
+                    <option value="">Sin categoría</option>
+                    {localCategories.map(c => (
+                      <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={() => setShowCreateCategory(true)} style={{
+                    width: 48, height: 48, borderRadius: 12, border: '1px solid #2a2a2a',
+                    backgroundColor: '#1a1a1a', color: '#22c55e', fontSize: 20,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>+</button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
@@ -336,12 +512,16 @@ export function EditClient({ movement, accounts, categories }: Props) {
         <div style={{ marginTop: 20 }}>
           <button onClick={handleSave} disabled={loading} style={{
             width: '100%', height: 48, borderRadius: 12, border: 'none',
-            background: loading ? '#27272a' : 'linear-gradient(135deg, #22c55e, #16a34a)',
+            background: loading ? '#27272a' : isTransferMode 
+              ? 'linear-gradient(135deg, #3b82f6, #2563eb)'
+              : 'linear-gradient(135deg, #22c55e, #16a34a)',
             color: '#fff', fontSize: 15, fontWeight: 600,
             cursor: loading ? 'not-allowed' : 'pointer',
-            boxShadow: loading ? 'none' : '0 4px 12px rgba(34,197,94,0.3)',
+            boxShadow: loading ? 'none' : isTransferMode 
+              ? '0 4px 12px rgba(59,130,246,0.3)'
+              : '0 4px 12px rgba(34,197,94,0.3)',
           }}>
-            {loading ? 'Guardando...' : 'Guardar cambios ✓'}
+            {loading ? 'Guardando...' : isTransferMode ? '↔️ Convertir a Transferencia' : 'Guardar cambios ✓'}
           </button>
         </div>
 

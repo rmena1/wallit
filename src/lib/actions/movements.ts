@@ -36,9 +36,9 @@ export async function createMovement(formData: FormData): Promise<MovementAction
     return { success: false, error: 'Account is required' }
   }
 
-  // Verify account belongs to the current user
+  // Verify account belongs to the current user and get its currency
   const [ownedAccount] = await db
-    .select({ id: accounts.id })
+    .select({ id: accounts.id, currency: accounts.currency })
     .from(accounts)
     .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
     .limit(1)
@@ -59,16 +59,30 @@ export async function createMovement(formData: FormData): Promise<MovementAction
   const { name, date, amount, type, currency } = parsed.data
 
   // Handle currency conversion
+  // Ensures amountUsd is always set for USD accounts (required for correct balance calculation)
   let finalAmount = amount
   let amountUsd: number | null = null
   let exchangeRate: number | null = null
 
   if (currency === 'USD') {
+    // USD input - convert to CLP for storage, keep USD in amountUsd
     try {
       const conversion = await convertUsdToClp(amount)
       amountUsd = amount
       finalAmount = conversion.clpCents
       exchangeRate = conversion.rate
+    } catch {
+      return { success: false, error: 'Error al obtener tipo de cambio' }
+    }
+  } else if (ownedAccount.currency === 'USD') {
+    // CLP input on USD account - convert CLP to USD for amountUsd
+    // This ensures balance calculation works correctly for USD accounts
+    try {
+      const { getUsdToClpRate } = await import('@/lib/exchange-rate')
+      const rate = await getUsdToClpRate()
+      amountUsd = Math.round(amount * 100 / rate) // Convert CLP cents to USD cents
+      finalAmount = amount // Keep CLP cents in amount field
+      exchangeRate = rate
     } catch {
       return { success: false, error: 'Error al obtener tipo de cambio' }
     }
@@ -118,6 +132,8 @@ export async function getMovementById(id: string) {
       needsReview: movements.needsReview,
       time: movements.time,
       originalName: movements.originalName,
+      transferId: movements.transferId,
+      transferPairId: movements.transferPairId,
       categoryName: categories.name,
       categoryEmoji: categories.emoji,
       accountBankName: accounts.bankName,
@@ -146,6 +162,31 @@ export async function updateMovement(id: string, data: {
   time?: string | null
 }): Promise<MovementActionResult> {
   const session = await requireAuth()
+
+  // Verify account belongs to the current user (IDOR protection)
+  if (data.accountId) {
+    const [ownedAccount] = await db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(and(eq(accounts.id, data.accountId), eq(accounts.userId, session.id)))
+      .limit(1)
+    if (!ownedAccount) {
+      return { success: false, error: 'Invalid account' }
+    }
+  }
+
+  // Verify category belongs to the current user (IDOR protection)
+  if (data.categoryId) {
+    const [ownedCategory] = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(and(eq(categories.id, data.categoryId), eq(categories.userId, session.id)))
+      .limit(1)
+    if (!ownedCategory) {
+      return { success: false, error: 'Invalid category' }
+    }
+  }
+
   await db
     .update(movements)
     .set({
@@ -217,4 +258,68 @@ export async function getMovements() {
     .leftJoin(accounts, eq(movements.accountId, accounts.id))
     .where(eq(movements.userId, session.id))
     .orderBy(desc(movements.date), desc(movements.createdAt))
+}
+
+/**
+ * Get paginated movements with optional filter
+ * @param offset - number of records to skip
+ * @param limit - number of records to return
+ * @param filter - 'all' for all movements, 'receivables' for only pending receivables
+ */
+export async function getMovementsPaginated(
+  offset: number,
+  limit: number,
+  filter: 'all' | 'receivables' = 'all'
+) {
+  const session = await requireAuth()
+  
+  const baseSelect = {
+    id: movements.id,
+    userId: movements.userId,
+    categoryId: movements.categoryId,
+    accountId: movements.accountId,
+    name: movements.name,
+    date: movements.date,
+    amount: movements.amount,
+    type: movements.type,
+    createdAt: movements.createdAt,
+    updatedAt: movements.updatedAt,
+    categoryName: categories.name,
+    categoryEmoji: categories.emoji,
+    accountBankName: accounts.bankName,
+    accountLastFour: accounts.lastFourDigits,
+    accountColor: accounts.color,
+    accountEmoji: accounts.emoji,
+    currency: movements.currency,
+    receivable: movements.receivable,
+    received: movements.received,
+    receivableId: movements.receivableId,
+    time: movements.time,
+    originalName: movements.originalName,
+    transferId: movements.transferId,
+    transferPairId: movements.transferPairId,
+  }
+
+  const whereCondition = filter === 'receivables'
+    ? and(
+        eq(movements.userId, session.id),
+        eq(movements.receivable, true),
+        eq(movements.received, false)
+      )
+    : eq(movements.userId, session.id)
+
+  const results = await db
+    .select(baseSelect)
+    .from(movements)
+    .leftJoin(categories, eq(movements.categoryId, categories.id))
+    .leftJoin(accounts, eq(movements.accountId, accounts.id))
+    .where(whereCondition)
+    .orderBy(desc(movements.date), desc(movements.createdAt))
+    .offset(offset)
+    .limit(limit + 1) // Fetch one extra to know if there's more
+
+  const hasMore = results.length > limit
+  const data = hasMore ? results.slice(0, limit) : results
+
+  return { data, hasMore }
 }

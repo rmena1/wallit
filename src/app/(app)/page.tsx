@@ -13,20 +13,22 @@ export default async function Home() {
     redirect('/login')
   }
 
-  // Run all data fetches in parallel for faster page load
+  // First fetch account balances (needed to determine if we need USD rate)
+  const accountBalances = await getAccountBalances()
+  
+  // Only fetch USD rate if user has at least one USD account (avoids unnecessary API calls)
+  const hasUsdAccount = accountBalances.some(a => a.currency === 'USD')
+
+  // Run remaining data fetches in parallel for faster page load
   const [
     usdClpRate,
-    accountBalances,
     recentMovements,
     totalsResult,
     reviewResult,
     recentUnlinkedIncomes,
   ] = await Promise.all([
-    // Exchange rate
-    getUsdToClpRate().catch(() => null as number | null),
-
-    // Account balances
-    getAccountBalances(),
+    // Exchange rate - only fetch if needed
+    hasUsdAccount ? getUsdToClpRate().catch(() => null as number | null) : Promise.resolve(null),
 
     // Recent movements (last 20)
     db
@@ -53,6 +55,8 @@ export default async function Home() {
         receivableId: movements.receivableId,
         time: movements.time,
         originalName: movements.originalName,
+        transferId: movements.transferId,
+        transferPairId: movements.transferPairId,
       })
       .from(movements)
       .leftJoin(categories, eq(movements.categoryId, categories.id))
@@ -61,11 +65,11 @@ export default async function Home() {
       .orderBy(desc(movements.date), desc(movements.createdAt))
       .limit(20),
 
-    // Totals
+    // Totals (excluding transfers and receivables)
     db
       .select({
-        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) THEN amount ELSE 0 END), 0)`,
-        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
       })
       .from(movements)
       .where(eq(movements.userId, session.id)),

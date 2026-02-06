@@ -78,6 +78,9 @@ export const movements = sqliteTable('movements', {
   receivableId: text('receivable_id'), // links income payment to original receivable expense
   time: text('time'), // HH:MM format, nullable
   originalName: text('original_name'), // original name from bank email
+  // Transfer fields: link two movements as a transfer pair
+  transferId: text('transfer_id'), // shared ID between both movements of a transfer (nanoid)
+  transferPairId: text('transfer_pair_id'), // ID of the paired movement
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, (table) => [
@@ -86,6 +89,7 @@ export const movements = sqliteTable('movements', {
   index('idx_movements_category').on(table.categoryId),
   index('idx_movements_account').on(table.accountId),
   index('idx_movements_review').on(table.userId, table.needsReview),
+  index('idx_movements_transfer').on(table.transferId),
 ])
 
 // ============================================================================

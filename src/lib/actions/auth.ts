@@ -40,6 +40,7 @@ export async function register(formData: FormData): Promise<AuthActionResult> {
   }
   
   // Check if user already exists
+  // Use a generic error message to prevent email enumeration attacks
   const existingUser = await db
     .select({ id: users.id })
     .from(users)
@@ -49,7 +50,7 @@ export async function register(formData: FormData): Promise<AuthActionResult> {
   if (existingUser.length > 0) {
     return {
       success: false,
-      error: 'An account with this email already exists',
+      error: 'Could not create account. Please try again or use a different email.',
     }
   }
   

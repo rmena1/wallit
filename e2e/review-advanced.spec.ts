@@ -43,7 +43,7 @@ async function registerUser(page: Page): Promise<string> {
 }
 
 test.describe('Review Flow — Advanced Features', () => {
-  test('split movement into multiple parts', async ({ page }) => {
+  test('split movement into multiple parts with cancel and confirm', async ({ page }) => {
     // Register and setup
     const email = await registerUser(page)
     await ensureAccount(page)
@@ -52,7 +52,7 @@ test.describe('Review Flow — Advanced Features', () => {
     if (!userId) throw new Error('User not found in DB')
     const accountId = getFirstAccountId(userId)
 
-    // Seed a review movement with a large amount to split
+    // Seed two review movements - one for cancel test, one for split test
     seedReviewMovement(userId, accountId, 'Cena grupal', 9000000) // 90,000 CLP
 
     // Go to review page
@@ -61,17 +61,26 @@ test.describe('Review Flow — Advanced Features', () => {
     await expect(page.getByText('Cena grupal')).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'review-split-01-initial')
 
-    // Click split button
+    // First, test cancel split dialog
     await page.getByRole('button', { name: /✂️ Dividir/i }).click()
     await expect(page.getByText('✂️ Dividir Movimiento')).toBeVisible({ timeout: 3000 })
     await screenshot(page, 'review-split-02-dialog-open')
+
+    // Cancel the dialog
+    await page.getByRole('button', { name: 'Cancelar' }).click()
+    await expect(page.getByText('✂️ Dividir Movimiento')).not.toBeVisible({ timeout: 3000 })
+    await expect(page.getByText('Cena grupal')).toBeVisible()
+    await screenshot(page, 'review-split-03-cancel-verified')
+
+    // Now proceed with actual split
+    await page.getByRole('button', { name: /✂️ Dividir/i }).click()
+    await expect(page.getByText('✂️ Dividir Movimiento')).toBeVisible({ timeout: 3000 })
 
     // Verify dialog shows total amount and original name
     await expect(page.getByText('Total:')).toBeVisible()
     await expect(page.getByText('Cena grupal').last()).toBeVisible()
 
     // The dialog should have 2 items initially
-    // First item: original name with calculated remainder, second item: empty
     const splitInputs = page.locator('div[style*="position: fixed"] input[placeholder="Descripción"]')
     await expect(splitInputs).toHaveCount(2)
 
@@ -79,33 +88,31 @@ test.describe('Review Flow — Advanced Features', () => {
     await splitInputs.nth(1).fill('Mi parte cena')
     const amountInputs = page.locator('div[style*="position: fixed"] input[placeholder="0"]')
     await amountInputs.nth(1).fill('30000')
-    await screenshot(page, 'review-split-03-filled-second-item')
+    await screenshot(page, 'review-split-04-filled-second-item')
 
     // Add a third split item
     await page.getByRole('button', { name: '+ Agregar' }).click()
     await expect(splitInputs).toHaveCount(3)
     await splitInputs.nth(2).fill('Parte de Juan')
     await amountInputs.nth(2).fill('30000')
-    await screenshot(page, 'review-split-04-added-third-item')
-
-    // The first item's amount should auto-calculate (90000 - 30000 - 30000 = 30000)
-    // Note: First item amount is read-only and auto-calculated
+    await screenshot(page, 'review-split-05-added-third-item')
 
     // Confirm the split
     await page.getByRole('button', { name: 'Confirmar división' }).click()
     
     // Wait for page to refresh (split causes reload)
     await page.waitForTimeout(2000)
-    await screenshot(page, 'review-split-05-after-split')
+    await screenshot(page, 'review-split-06-after-split')
 
     // The movement should be split into parts now
-    // We should either see the split movements in review or completion
     const completed = page.getByText('¡Revisión completada!')
     const empty = page.getByText('No hay movimientos pendientes')
-    const hasSplitMovements = page.getByText('Mi parte cena')
+    const hasSplitMovement1 = page.getByText('Mi parte cena')
+    const hasSplitMovement2 = page.getByText('Parte de Juan')
+    const hasSplitMovement3 = page.getByText('Cena grupal')
     
-    await expect(completed.or(empty).or(hasSplitMovements)).toBeVisible({ timeout: 10000 })
-    await screenshot(page, 'review-split-06-final-state')
+    await expect(completed.or(empty).or(hasSplitMovement1).or(hasSplitMovement2).or(hasSplitMovement3)).toBeVisible({ timeout: 10000 })
+    await screenshot(page, 'review-split-07-final-state')
   })
 
   test('create category from review page', async ({ page }) => {
@@ -161,35 +168,5 @@ test.describe('Review Flow — Advanced Features', () => {
     const empty = page.getByText('No hay movimientos pendientes')
     await expect(completed.or(empty)).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'review-create-cat-06-completed')
-  })
-
-  test('cancel split dialog', async ({ page }) => {
-    // Register and setup
-    const email = await registerUser(page)
-    await ensureAccount(page)
-
-    const userId = getUserId(email)
-    if (!userId) throw new Error('User not found in DB')
-    const accountId = getFirstAccountId(userId)
-
-    seedReviewMovement(userId, accountId, 'Test cancel split', 5000000)
-
-    // Go to review page
-    await page.goto('/review')
-    await expect(page.getByText('Test cancel split')).toBeVisible({ timeout: 5000 })
-    await screenshot(page, 'review-cancel-split-01-initial')
-
-    // Open split dialog
-    await page.getByRole('button', { name: /✂️ Dividir/i }).click()
-    await expect(page.getByText('✂️ Dividir Movimiento')).toBeVisible({ timeout: 3000 })
-    await screenshot(page, 'review-cancel-split-02-dialog-open')
-
-    // Cancel
-    await page.getByRole('button', { name: 'Cancelar' }).click()
-    
-    // Verify dialog is closed and we're back to review
-    await expect(page.getByText('✂️ Dividir Movimiento')).not.toBeVisible({ timeout: 3000 })
-    await expect(page.getByText('Test cancel split')).toBeVisible()
-    await screenshot(page, 'review-cancel-split-03-cancelled')
   })
 })

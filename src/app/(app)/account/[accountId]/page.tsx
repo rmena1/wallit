@@ -2,7 +2,49 @@ import { getSession } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import { db, accounts, movements, categories } from '@/lib/db'
 import { eq, and, desc, sql, asc } from 'drizzle-orm'
-import { AccountDetailClient } from './account-detail-client'
+import dynamic from 'next/dynamic'
+
+// Lazy-load the client component to defer Recharts bundle (~350KB) until needed
+const AccountDetailClient = dynamic(
+  () => import('./account-detail-client').then(m => m.AccountDetailClient),
+  { loading: () => <AccountDetailSkeleton /> }
+)
+
+function AccountDetailSkeleton() {
+  const shimmer: React.CSSProperties = {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 14,
+    border: '1px solid #2a2a2a',
+    animation: 'pulse 1.5s ease-in-out infinite',
+  }
+  return (
+    <>
+      <style>{`@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }`}</style>
+      <header style={{
+        backgroundColor: '#111111', borderBottom: '1px solid #1e1e1e',
+        padding: '12px 16px', position: 'sticky', top: 0, zIndex: 10,
+      }}>
+        <div style={{ maxWidth: 540, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ ...shimmer, width: 36, height: 36, borderRadius: 10 }} />
+          <div>
+            <div style={{ ...shimmer, width: 100, height: 16, marginBottom: 4 }} />
+            <div style={{ ...shimmer, width: 80, height: 12 }} />
+          </div>
+        </div>
+      </header>
+      <main style={{ maxWidth: 540, margin: '0 auto', padding: '16px 16px 96px' }}>
+        <div style={{ ...shimmer, height: 100, marginBottom: 16, borderRadius: 20 }} />
+        <div style={{ ...shimmer, height: 240, marginBottom: 16 }} />
+        <div style={{ ...shimmer, height: 14, width: 120, marginBottom: 10 }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {[1, 2, 3, 4, 5].map(i => (
+            <div key={i} style={{ ...shimmer, height: 64 }} />
+          ))}
+        </div>
+      </main>
+    </>
+  )
+}
 
 const MOVEMENTS_PAGE_SIZE = 50
 
