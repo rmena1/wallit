@@ -144,9 +144,18 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
 function buildIncomeChart(dailyData: DailyData[], startDate: string, endDate: string) {
   const days = daysInRange(startDate, endDate)
   const map = new Map(dailyData.map(d => [d.date, d.income]))
+  const today = fmt(new Date())
+  
+  // Find the last day we have actual data for (up to today)
+  const lastActualDay = days.filter(d => d <= today).pop() || today
+  
   let cumulative = 0
   return days.map(day => {
     cumulative += (map.get(day) || 0)
+    // Only show income data up to today (lastActualDay)
+    if (day > lastActualDay) {
+      return { label: day.slice(5), income: null }
+    }
     return { label: day.slice(5), income: cumulative / 100 }
   })
 }
@@ -155,9 +164,18 @@ function buildBalanceChart(dailyData: DailyData[], startDate: string, endDate: s
   const days = daysInRange(startDate, endDate)
   const incMap = new Map(dailyData.map(d => [d.date, d.income]))
   const expMap = new Map(dailyData.map(d => [d.date, d.expense]))
+  const today = fmt(new Date())
+  
+  // Find the last day we have actual data for (up to today)
+  const lastActualDay = days.filter(d => d <= today).pop() || today
+  
   let balance = 0
   return days.map(day => {
     balance += (incMap.get(day) || 0) - (expMap.get(day) || 0)
+    // Only show balance data up to today (lastActualDay)
+    if (day > lastActualDay) {
+      return { label: day.slice(5), balance: null }
+    }
     return { label: day.slice(5), balance: balance / 100 }
   })
 }
@@ -458,7 +476,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
             {/* Chart 2: Income */}
             <div style={cardStyle}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: '0 0 12px' }}>📈 Ingresos</h2>
-              {incomeChart.every(d => d.income === 0) ? (
+              {incomeChart.every(d => d.income === 0 || d.income === null) ? (
                 <div style={{ textAlign: 'center', color: '#52525b', padding: '32px 0', fontSize: 13 }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>📈</div>
                   Sin ingresos en este período
@@ -481,7 +499,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
             {/* Chart 3: Balance */}
             <div style={cardStyle}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: '0 0 12px' }}>💰 Balance</h2>
-              {balanceChart.every(d => d.balance === 0) ? (
+              {balanceChart.every(d => d.balance === 0 || d.balance === null) ? (
                 <div style={{ textAlign: 'center', color: '#52525b', padding: '32px 0', fontSize: 13 }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>💰</div>
                   Sin movimientos en este período
