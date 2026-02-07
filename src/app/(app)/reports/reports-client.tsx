@@ -94,18 +94,14 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
     hasTrend = true
   } else if (actualDaysCount === 1) {
     // Single data point: extrapolate linearly from 0 through the single point
-    // trend(x) = (totalActualExpense/100 / actualDayIndex) * x
-    // Find which day index the single actual day is at
     const singleDayIndex = days.indexOf([...cumulativeByDay.keys()].pop()!) + 1
     trendSlope = (totalActualExpense / 100) / singleDayIndex
     trendIntercept = 0
     hasTrend = true
   }
 
-  // Build data array for ALL days in range
-  const dailyRate = actualDaysCount > 0 ? totalActualExpense / actualDaysCount : 0
-  let projCumulative = totalActualExpense
-  const data: { date: string; label: string; actual: number | null; projected: number | null; trend: number | null }[] = []
+  // Build data array for ALL days in range (only actual + trend, no projected)
+  const data: { date: string; label: string; actual: number | null; trend: number | null }[] = []
 
   for (let i = 0; i < days.length; i++) {
     const day = days[i]
@@ -121,23 +117,21 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
       data.push({
         date: day, label: day.slice(5),
         actual: actualVal,
-        projected: day === today ? actualVal : null, // connect projection start at today
         trend: trendVal,
       })
     } else {
-      // Future projected day - NO actual data
-      projCumulative += dailyRate
+      // Future day - only trend line extends here
       data.push({
         date: day, label: day.slice(5),
-        actual: null,  // MUST be null for future days
-        projected: projCumulative / 100,
+        actual: null,
         trend: trendVal,
       })
     }
   }
 
-  // Gasto esperado = (totalGasto / díasTranscurridos) * díasTotalesDelPeriodo
-  const projectedTotal = actualDaysCount > 0 ? (totalActualExpense / actualDaysCount) * days.length : 0
+  // Gasto esperado = trend value at end of period (last day's trend)
+  const lastDayIndex = days.length
+  const projectedTotal = hasTrend ? Math.max(0, (trendSlope * lastDayIndex + trendIntercept) * 100) : 0
   return { data, projectedTotal }
 }
 
@@ -450,7 +444,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                   </span>
                 )}
               </div>
-              {expenseChart.data.every(d => !d.actual && !d.projected) ? (
+              {expenseChart.data.every(d => !d.actual) ? (
                 <div style={{ textAlign: 'center', color: '#52525b', padding: '32px 0', fontSize: 13 }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>📉</div>
                   Sin gastos en este período
@@ -465,7 +459,6 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                         tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
                       <Tooltip content={<ChartTooltip color="#ef4444" />} />
                       <Line type="monotone" dataKey="actual" stroke="#ef4444" strokeWidth={2} dot={false} connectNulls={false} />
-                      <Line type="monotone" dataKey="projected" stroke="#ef4444" strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls={false} />
                       <Line type="monotone" dataKey="trend" stroke="#eab308" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
                     </LineChart>
                   </ResponsiveContainer>
