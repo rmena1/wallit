@@ -55,9 +55,6 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
   const map = new Map(dailyData.map(d => [d.date, d.expense]))
   const today = fmt(new Date())
 
-  // Find the last day we have actual data for (up to today)
-  const lastActualDay = days.filter(d => d <= today).pop() || today
-
   // Build cumulative actual values for all days up to today
   let cumulative = 0
   let totalActualExpense = 0
@@ -65,7 +62,7 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
   const cumulativeByDay = new Map<string, number>()
 
   for (const day of days) {
-    if (day > lastActualDay) break
+    if (day > today) break  // Stop at today - no future data
     const val = map.get(day) || 0
     cumulative += val
     cumulativeByDay.set(day, cumulative)
@@ -83,7 +80,7 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
     const points: { x: number; y: number }[] = []
     let idx = 0
     for (const day of days) {
-      if (day > lastActualDay) break
+      if (day > today) break  // Only use data up to today for trend calc
       idx++
       points.push({ x: idx, y: (cumulativeByDay.get(day) || 0) / 100 })
     }
@@ -114,22 +111,25 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
     const day = days[i]
     const dayIndex = i + 1
     const trendVal = hasTrend ? Math.max(0, trendSlope * dayIndex + trendIntercept) : null
+    
+    // Check if this day is in the future (after today)
+    const isFutureDay = day > today
 
-    if (day <= lastActualDay) {
-      // Actual data day
+    if (!isFutureDay) {
+      // Actual data day (today or past)
       const actualVal = (cumulativeByDay.get(day) || 0) / 100
       data.push({
         date: day, label: day.slice(5),
         actual: actualVal,
-        projected: day === lastActualDay ? actualVal : null, // connect projection start
+        projected: day === today ? actualVal : null, // connect projection start at today
         trend: trendVal,
       })
     } else {
-      // Future projected day
+      // Future projected day - NO actual data
       projCumulative += dailyRate
       data.push({
         date: day, label: day.slice(5),
-        actual: null,
+        actual: null,  // MUST be null for future days
         projected: projCumulative / 100,
         trend: trendVal,
       })
