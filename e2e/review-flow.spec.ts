@@ -88,12 +88,12 @@ test.describe('Review Flow — Complete', () => {
     await page.waitForTimeout(1000) // Wait for re-render
     await screenshot(page, 'review-04-after-confirm')
 
-    // 7. Skip the current movement
+    // 7. Skip the current movement (it will come back later since skipped items stay pending)
     await page.getByRole('button', { name: /Después/i }).click()
     await page.waitForTimeout(500)
     await screenshot(page, 'review-05-after-skip')
 
-    // 8. Delete the current movement (or we may be at completion)
+    // 8. Delete the current movement (movement 3)
     const deleteBtn = page.getByRole('button', { name: /🗑 Eliminar/i })
     if (await deleteBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await deleteBtn.click()
@@ -103,16 +103,35 @@ test.describe('Review Flow — Complete', () => {
       await page.waitForTimeout(1000)
     }
 
-    // 9. Should show completion screen (or empty state if re-rendered)
+    // 9. After exhausting the initial batch, the page refetches pending reviews
+    // The skipped movement should return since it's still pending (needsReview=true)
+    // Wait for the loading state to complete and movement to appear
+    await page.waitForTimeout(1500) // Allow time for refetch
+    const skippedMovement = page.getByText('Transferencia recibida')
+    const loadingMore = page.getByText('Buscando más movimientos pendientes...')
+    
+    // Either we see the skipped movement returned, or loading state
+    if (await loadingMore.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await expect(skippedMovement).toBeVisible({ timeout: 5000 })
+    }
+    
+    // Now confirm the skipped movement that returned
+    if (await skippedMovement.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await screenshot(page, 'review-07-skipped-returned')
+      await page.getByRole('button', { name: '✓ Confirmar' }).click()
+      await page.waitForTimeout(1000)
+    }
+
+    // 10. Now should show completion screen
     const completed = page.getByText('¡Revisión completada!')
     const empty = page.getByText('No hay movimientos pendientes')
     await expect(completed.or(empty)).toBeVisible({ timeout: 5000 })
-    await screenshot(page, 'review-07-completed')
+    await screenshot(page, 'review-08-completed')
 
-    // 10. Navigate back to home
+    // 11. Navigate back to home
     await page.getByRole('button', { name: 'Volver al inicio' }).click()
     await page.waitForURL('**/', { timeout: 5000 })
-    await screenshot(page, 'review-08-back-home')
+    await screenshot(page, 'review-09-back-home')
   })
 
   test('mark movement as receivable and edit fields before confirming', async ({ page }) => {
