@@ -1,0 +1,33 @@
+------WebKitFormBoundaryfU5fqXApCChbplU5
+Content-Disposition: form-data; name="1_bankName"
+
+BCI
+------WebKitFormBoundaryfU5fqXApCChbplU5
+Content-Disposition: form-data; name="1_accountType"
+
+Corriente
+------WebKitFormBoundaryfU5fqXApCChbplU5
+Content-Disposition: form-data; name="1_lastFourDigits"
+
+9999
+------WebKitFormBoundaryfU5fqXApCChbplU5
+Content-Disposition: form-data; name="1_currency"
+
+CLP
+------WebKitFormBoundaryfU5fqXApCChbplU5
+Content-Disposition: form-data; name="1_initialBalance"
+
+100000
+------WebKitFormBoundaryfU5fqXApCChbplU5
+Content-Disposition: form-data; name="1_emoji"
+
+
+------WebKitFormBoundaryfU5fqXApCChbplU5
+Content-Disposition: form-data; name="1_color"
+
+#3b82f6
+------WebKitFormBoundaryfU5fqXApCChbplU5
+Content-Disposition: form-data; name="0"
+
+["$K1"]
+------WebKitFormBoundaryfU5fqXApCChbplU5--

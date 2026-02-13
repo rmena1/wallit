@@ -1,0 +1,1 @@
+["uyl4ipk39tcqb4tpgsrmr",{"name":"Será ingreso","date":"2026-02-13","amount":3000000,"type":"income","currency":"CLP","accountId":"nvgcdlhw69bajpzm582ph","categoryId":null,"amountUsd":null,"exchangeRate":null,"time":null}]

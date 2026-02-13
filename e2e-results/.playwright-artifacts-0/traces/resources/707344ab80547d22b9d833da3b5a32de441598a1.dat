@@ -1,0 +1,29 @@
+------WebKitFormBoundarylVqATMINFDIxzMkz
+Content-Disposition: form-data; name="1_type"
+
+expense
+------WebKitFormBoundarylVqATMINFDIxzMkz
+Content-Disposition: form-data; name="1_accountId"
+
+nsyz8o3lfl1vj5wdnma8l
+------WebKitFormBoundarylVqATMINFDIxzMkz
+Content-Disposition: form-data; name="1_name"
+
+Decimales extremos
+------WebKitFormBoundarylVqATMINFDIxzMkz
+Content-Disposition: form-data; name="1_amount"
+
+12400
+------WebKitFormBoundarylVqATMINFDIxzMkz
+Content-Disposition: form-data; name="1_currency"
+
+CLP
+------WebKitFormBoundarylVqATMINFDIxzMkz
+Content-Disposition: form-data; name="1_date"
+
+2026-02-13
+------WebKitFormBoundarylVqATMINFDIxzMkz
+Content-Disposition: form-data; name="0"
+
+["$K1"]
+------WebKitFormBoundarylVqATMINFDIxzMkz--

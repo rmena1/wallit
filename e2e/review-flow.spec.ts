@@ -45,8 +45,8 @@ async function registerUser(page: Page): Promise<string> {
   const email = `e2e-review-${Date.now()}-${Math.random().toString(36).slice(2, 5)}@wallit.app`
   await page.goto('/register')
   await page.getByLabel('Email').fill(email)
-  await page.getByLabel('Password').fill('testpass123')
-  await page.getByRole('button', { name: 'Create account' }).click()
+  await page.getByLabel('Contraseña').fill('testpass123')
+  await page.getByRole('button', { name: 'Crear cuenta' }).click()
   await page.waitForURL('**/', { timeout: 10000 })
   return email
 }

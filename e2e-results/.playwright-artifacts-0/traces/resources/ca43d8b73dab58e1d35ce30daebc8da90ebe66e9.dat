@@ -1,0 +1,37 @@
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms
+Content-Disposition: form-data; name="1_type"
+
+expense
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms
+Content-Disposition: form-data; name="1_accountId"
+
+8owzom4a5zc47yxwbl6t4
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms
+Content-Disposition: form-data; name="1_name"
+
+Café de la tarde
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms
+Content-Disposition: form-data; name="1_amount"
+
+350000
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms
+Content-Disposition: form-data; name="1_currency"
+
+CLP
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms
+Content-Disposition: form-data; name="1_date"
+
+2026-02-13
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms
+Content-Disposition: form-data; name="1_time"
+
+14:30
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms
+Content-Disposition: form-data; name="1_categoryId"
+
+j5y5xbzv4lcefmk8p45sv
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms
+Content-Disposition: form-data; name="0"
+
+["$K1"]
+------WebKitFormBoundaryKiuwW4FuF5R8s8Ms--

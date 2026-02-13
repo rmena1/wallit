@@ -340,7 +340,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                   boxShadow: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
                   transition: 'all 0.2s ease',
                 }}>
-                  {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transfer'}
+                  {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transferencia'}
                 </button>
               ))}
             </div>

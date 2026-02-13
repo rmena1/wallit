@@ -197,7 +197,7 @@ test.describe('Error Handling & Edge Cases — Comprehensive Flow', () => {
     await page.reload()
     
     // Should redirect to login
-    await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('heading', { name: 'Bienvenido de nuevo' })).toBeVisible({ timeout: 10000 })
     await screenshot(page, 'error-handling-19-session-expired-redirect')
   })
 })

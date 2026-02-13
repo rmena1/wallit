@@ -523,7 +523,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                     : '#9ca3af',
                   transition: 'all 0.15s ease',
                 }}>
-                  {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transfer'}
+                  {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transferencia'}
                 </button>
               ))}
             </div>
@@ -714,7 +714,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
               ? '0 2px 8px rgba(59,130,246,0.3)'
               : '0 2px 8px rgba(34,197,94,0.3)',
           }}>
-            {loading ? '...' : isTransferMode ? '↔️ Crear Transfer' : '✓ Confirmar'}
+            {loading ? '...' : isTransferMode ? '↔️ Crear Transferencia' : '✓ Confirmar'}
           </button>
         </div>
 

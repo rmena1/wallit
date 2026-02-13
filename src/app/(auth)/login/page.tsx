@@ -94,7 +94,7 @@ export default function LoginPage() {
               margin: 0,
             }}
           >
-            Welcome back
+            Bienvenido de nuevo
           </h1>
           <p
             style={{
@@ -104,7 +104,7 @@ export default function LoginPage() {
               lineHeight: 1.5,
             }}
           >
-            Sign in to continue to wallit
+            Inicia sesión para continuar
           </p>
         </div>
 
@@ -166,7 +166,7 @@ export default function LoginPage() {
                   letterSpacing: '0.01em',
                 }}
               >
-                Password
+                Contraseña
               </label>
               <input
                 id="password"
@@ -194,7 +194,7 @@ export default function LoginPage() {
                 padding: '4px 0'
               }}
             >
-              Forgot password?
+              ¿Olvidaste tu contraseña?
             </Link>
           </div>
 
@@ -236,7 +236,7 @@ export default function LoginPage() {
                 <path d="M12 2a10 10 0 0 1 10 10" stroke="white" strokeWidth="3" strokeLinecap="round" />
               </svg>
             )}
-            {loading ? 'Signing in...' : 'Sign in'}
+            {loading ? 'Iniciando sesión...' : 'Iniciar sesión'}
           </button>
         </form>
 
@@ -249,9 +249,9 @@ export default function LoginPage() {
             lineHeight: 1.5,
           }}
         >
-          Don&apos;t have an account?{' '}
+          ¿No tienes cuenta?{' '}
           <Link href="/register" style={{ color: '#22c55e', fontWeight: 600, textDecoration: 'none' }}>
-            Create one
+            Crear una
           </Link>
         </p>
       </div>

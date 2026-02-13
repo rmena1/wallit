@@ -1,0 +1,13 @@
+------WebKitFormBoundaryIXF0uLpezoSM43SJ
+Content-Disposition: form-data; name="1_email"
+
+e2e-1771025167310-7zqp@wallit.app
+------WebKitFormBoundaryIXF0uLpezoSM43SJ
+Content-Disposition: form-data; name="1_password"
+
+testpass123
+------WebKitFormBoundaryIXF0uLpezoSM43SJ
+Content-Disposition: form-data; name="0"
+
+["$K1"]
+------WebKitFormBoundaryIXF0uLpezoSM43SJ--

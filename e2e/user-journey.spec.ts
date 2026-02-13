@@ -28,16 +28,16 @@ test.describe('Complete User Journey', () => {
     
     // 1.1 Navigate to register page
     await page.goto('/register')
-    await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Crea tu cuenta' })).toBeVisible()
     await screenshot(page, 'journey-01-register-page')
 
     // 1.2 Fill registration form
     await page.getByLabel('Email').fill(email)
-    await page.getByLabel('Password').fill(password)
+    await page.getByLabel('Contraseña').fill(password)
     await screenshot(page, 'journey-02-register-filled')
 
     // 1.3 Submit and verify redirect to home
-    await page.getByRole('button', { name: 'Create account' }).click()
+    await page.getByRole('button', { name: 'Crear cuenta' }).click()
     await page.waitForURL('**/', { timeout: 10000 })
     await screenshot(page, 'journey-03-first-login')
 
@@ -269,8 +269,8 @@ test.describe('Complete User Journey', () => {
 
     // 10.3 Log back in
     await page.getByLabel('Email').fill(email)
-    await page.getByLabel('Password').fill(password)
-    await page.getByRole('button', { name: 'Sign in' }).click()
+    await page.getByLabel('Contraseña').fill(password)
+    await page.getByRole('button', { name: 'Iniciar sesión' }).click()
     await page.waitForURL('**/', { timeout: 10000 })
     await screenshot(page, 'journey-32-logged-back-in')
 

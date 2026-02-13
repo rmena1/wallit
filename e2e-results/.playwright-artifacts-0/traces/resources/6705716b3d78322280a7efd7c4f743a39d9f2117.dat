@@ -1,0 +1,33 @@
+------WebKitFormBoundaryuBVGsJHCIbqYBiLe
+Content-Disposition: form-data; name="1_bankName"
+
+Santander
+------WebKitFormBoundaryuBVGsJHCIbqYBiLe
+Content-Disposition: form-data; name="1_accountType"
+
+Vista
+------WebKitFormBoundaryuBVGsJHCIbqYBiLe
+Content-Disposition: form-data; name="1_lastFourDigits"
+
+5678
+------WebKitFormBoundaryuBVGsJHCIbqYBiLe
+Content-Disposition: form-data; name="1_currency"
+
+CLP
+------WebKitFormBoundaryuBVGsJHCIbqYBiLe
+Content-Disposition: form-data; name="1_initialBalance"
+
+
+------WebKitFormBoundaryuBVGsJHCIbqYBiLe
+Content-Disposition: form-data; name="1_emoji"
+
+
+------WebKitFormBoundaryuBVGsJHCIbqYBiLe
+Content-Disposition: form-data; name="1_color"
+
+#3b82f6
+------WebKitFormBoundaryuBVGsJHCIbqYBiLe
+Content-Disposition: form-data; name="0"
+
+["$K1"]
+------WebKitFormBoundaryuBVGsJHCIbqYBiLe--

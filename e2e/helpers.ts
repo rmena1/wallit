@@ -10,8 +10,8 @@ export async function registerAndLogin(page: Page) {
   const email = `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@wallit.app`
   await page.goto('/register')
   await page.getByLabel('Email').fill(email)
-  await page.getByLabel('Password').fill(TEST_PASSWORD)
-  await page.getByRole('button', { name: 'Create account' }).click()
+  await page.getByLabel('Contraseña').fill(TEST_PASSWORD)
+  await page.getByRole('button', { name: 'Crear cuenta' }).click()
   await page.waitForURL('**/', { timeout: 10000 })
 }
 

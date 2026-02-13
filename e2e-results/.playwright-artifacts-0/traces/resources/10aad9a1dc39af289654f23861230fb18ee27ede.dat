@@ -1,0 +1,33 @@
+------WebKitFormBoundaryMx4lrWbZ6g8csj0R
+Content-Disposition: form-data; name="1_type"
+
+expense
+------WebKitFormBoundaryMx4lrWbZ6g8csj0R
+Content-Disposition: form-data; name="1_accountId"
+
+xlbh2cd2wi33gytjku67b
+------WebKitFormBoundaryMx4lrWbZ6g8csj0R
+Content-Disposition: form-data; name="1_name"
+
+Compra con tarjeta
+------WebKitFormBoundaryMx4lrWbZ6g8csj0R
+Content-Disposition: form-data; name="1_amount"
+
+5000000
+------WebKitFormBoundaryMx4lrWbZ6g8csj0R
+Content-Disposition: form-data; name="1_currency"
+
+CLP
+------WebKitFormBoundaryMx4lrWbZ6g8csj0R
+Content-Disposition: form-data; name="1_date"
+
+2026-02-13
+------WebKitFormBoundaryMx4lrWbZ6g8csj0R
+Content-Disposition: form-data; name="1_categoryId"
+
+5rbhb3rlhjws5t5lubigp
+------WebKitFormBoundaryMx4lrWbZ6g8csj0R
+Content-Disposition: form-data; name="0"
+
+["$K1"]
+------WebKitFormBoundaryMx4lrWbZ6g8csj0R--

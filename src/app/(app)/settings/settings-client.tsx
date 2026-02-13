@@ -313,7 +313,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                   onChange={(e) => setNewAccountIsInvestment(e.target.checked)}
                   style={{ width: 16, height: 16, margin: 0 }}
                 />
-                Investment account
+                Cuenta de inversión
               </label>
 
               <div style={{ display: 'flex', gap: 8 }}>
@@ -337,7 +337,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                 <input
                   name="initialBalance"
                   type="text"
-                  placeholder={newAccountIsInvestment ? 'Current invested value' : 'Saldo inicial'}
+                  placeholder={newAccountIsInvestment ? 'Valor invertido actual' : 'Saldo inicial'}
                   inputMode="decimal"
                   style={{ ...inputStyle, flex: 1 }}
                 />
@@ -429,7 +429,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                             onChange={(e) => setEditingAccountIsInvestment((prev) => ({ ...prev, [acc.id]: e.target.checked }))}
                             style={{ width: 16, height: 16, margin: 0 }}
                           />
-                          Investment account
+                          Cuenta de inversión
                         </label>
                         <div style={{ display: 'flex', gap: 8 }}>
                           <input
@@ -452,7 +452,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                           <input
                             name="initialBalance" type="text"
                             defaultValue={(acc.initialBalance / 100).toFixed(2)}
-                            inputMode="decimal" placeholder={isEditingInvestment ? 'Current invested value' : 'Saldo inicial'}
+                            inputMode="decimal" placeholder={isEditingInvestment ? 'Valor invertido actual' : 'Saldo inicial'}
                             style={{ ...inputStyle, flex: 1 }}
                           />
                           <input

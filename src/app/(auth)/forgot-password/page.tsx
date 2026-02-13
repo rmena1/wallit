@@ -80,7 +80,7 @@ export default function ForgotPasswordPage() {
                 margin: '0 0 12px 0',
               }}
             >
-              Check your email
+              Revisa tu correo
             </h1>
             <p
               style={{
@@ -90,7 +90,7 @@ export default function ForgotPasswordPage() {
                 marginBottom: '32px',
               }}
             >
-              We've sent password reset instructions to{' '}
+              Hemos enviado instrucciones para restablecer tu contraseña a{' '}
               <span style={{ color: '#22c55e', fontWeight: 500 }}>{email}</span>
             </p>
             
@@ -112,7 +112,7 @@ export default function ForgotPasswordPage() {
                 justifyContent: 'center',
               }}
             >
-              Back to sign in
+              Volver a iniciar sesión
             </Link>
             
             <p
@@ -123,7 +123,7 @@ export default function ForgotPasswordPage() {
                 lineHeight: 1.5,
               }}
             >
-              Didn't receive an email? Check your spam folder or{' '}
+              ¿No recibiste el correo? Revisa tu carpeta de spam o{' '}
               <button
                 onClick={() => setSubmitted(false)}
                 style={{
@@ -136,7 +136,7 @@ export default function ForgotPasswordPage() {
                   textDecoration: 'underline',
                 }}
               >
-                try again
+                intenta de nuevo
               </button>
             </p>
           </div>
@@ -191,7 +191,7 @@ export default function ForgotPasswordPage() {
               margin: 0,
             }}
           >
-            Reset your password
+            Restablecer tu contraseña
           </h1>
           <p
             style={{
@@ -201,7 +201,7 @@ export default function ForgotPasswordPage() {
               lineHeight: 1.5,
             }}
           >
-            Enter your email and we'll send you reset instructions
+            Ingresa tu correo y te enviaremos instrucciones
           </p>
         </div>
 
@@ -271,7 +271,7 @@ export default function ForgotPasswordPage() {
                 <path d="M12 2a10 10 0 0 1 10 10" stroke="white" strokeWidth="3" strokeLinecap="round" />
               </svg>
             )}
-            {loading ? 'Sending...' : 'Send reset instructions'}
+            {loading ? 'Enviando...' : 'Enviar instrucciones'}
           </button>
         </form>
 
@@ -283,9 +283,9 @@ export default function ForgotPasswordPage() {
             lineHeight: 1.5,
           }}
         >
-          Remember your password?{' '}
+          ¿Recuerdas tu contraseña?{' '}
           <Link href="/login" style={{ color: '#22c55e', fontWeight: 600, textDecoration: 'none' }}>
-            Back to sign in
+            Volver a iniciar sesión
           </Link>
         </p>
       </div>

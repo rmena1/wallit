@@ -1,0 +1,29 @@
+------WebKitFormBoundaryCcT538JK439J5ikY
+Content-Disposition: form-data; name="1_type"
+
+expense
+------WebKitFormBoundaryCcT538JK439J5ikY
+Content-Disposition: form-data; name="1_accountId"
+
+tn6g7qlq2773csx9cf7ur
+------WebKitFormBoundaryCcT538JK439J5ikY
+Content-Disposition: form-data; name="1_name"
+
+Regular expense
+------WebKitFormBoundaryCcT538JK439J5ikY
+Content-Disposition: form-data; name="1_amount"
+
+1000000
+------WebKitFormBoundaryCcT538JK439J5ikY
+Content-Disposition: form-data; name="1_currency"
+
+CLP
+------WebKitFormBoundaryCcT538JK439J5ikY
+Content-Disposition: form-data; name="1_date"
+
+2026-02-13
+------WebKitFormBoundaryCcT538JK439J5ikY
+Content-Disposition: form-data; name="0"
+
+["$K1"]
+------WebKitFormBoundaryCcT538JK439J5ikY--

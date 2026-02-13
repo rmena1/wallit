@@ -56,7 +56,7 @@ test.describe('Investment Accounts', () => {
     await lastDigitsInput.fill('1234')
     
     // Initial balance = 500,000 CLP (enter as display value)
-    await page.getByPlaceholder(/Current invested value|Saldo inicial/i).fill('500000')
+    await page.getByPlaceholder(/Valor invertido actual|Saldo inicial/i).fill('500000')
     
     await screenshot(page, 'invest-03-form-filled')
 
@@ -83,14 +83,14 @@ test.describe('Investment Accounts', () => {
     await page.waitForLoadState('networkidle')
     
     // Verify investment summary section is visible
-    await expect(page.getByText('Resumen de Inversion')).toBeVisible({ timeout: 5000 })
-    await expect(page.getByText('Current Value')).toBeVisible()
-    await expect(page.getByText('Total Deposited')).toBeVisible()
-    await expect(page.getByText('Gain/Loss')).toBeVisible()
+    await expect(page.getByText('Resumen de Inversión')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Valor Actual')).toBeVisible()
+    await expect(page.getByText('Total Depositado')).toBeVisible()
+    await expect(page.getByText('Ganancia/Pérdida')).toBeVisible()
     await screenshot(page, 'invest-06-account-detail')
 
     // 5. Click "Update Value" button to show the form
-    await page.getByRole('button', { name: 'Update Value' }).click()
+    await page.getByRole('button', { name: 'Actualizar Valor' }).click()
     await expect(page.getByText('Nuevo valor actual')).toBeVisible({ timeout: 3000 })
     await screenshot(page, 'invest-07-update-form-open')
 
@@ -109,7 +109,7 @@ test.describe('Investment Accounts', () => {
     await screenshot(page, 'invest-08-value-updated')
 
     // 7. Verify snapshots section shows at least one snapshot
-    await expect(page.getByText('Investment Snapshots')).toBeVisible({ timeout: 3000 })
+    await expect(page.getByText('Historial de Valores')).toBeVisible({ timeout: 3000 })
     // After creating the account with initial value AND updating, we should have at least 1 snapshot
     // (the update creates a snapshot)
     const snapshotItems = page.locator('text=/$[0-9]/')
@@ -160,7 +160,7 @@ test.describe('Investment Accounts', () => {
     await page.locator('select[name="accountType"]').selectOption('Ahorro')
     await page.locator('input[name="isInvestment"]').check()
     await page.getByPlaceholder(/Últimos 4 dígitos/).fill('5678')
-    await page.getByPlaceholder(/Current invested value|Saldo inicial/i).fill('100000')
+    await page.getByPlaceholder(/Valor invertido actual|Saldo inicial/i).fill('100000')
     await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
     await expect(page.getByText('Scotiabank')).toBeVisible({ timeout: 5000 })
     

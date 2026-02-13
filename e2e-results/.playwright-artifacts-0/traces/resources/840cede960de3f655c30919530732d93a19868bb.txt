@@ -1,0 +1,1 @@
+[{"movementId":"mov-convert-1771025147054","toAccountId":"ps4dnmx5e2wzfy0cpa55s","toAmount":10000000,"toCurrency":"CLP","note":"Converted from edit page"}]

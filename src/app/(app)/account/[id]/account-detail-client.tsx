@@ -136,14 +136,14 @@ export function AccountDetailClient({
   }
 
   function formatUpdatedAt(date: Date | null) {
-    if (!date) return 'Sin actualizacion'
+    if (!date) return 'Sin actualización'
     return new Date(date).toLocaleDateString('es-CL')
   }
 
   async function handleUpdateInvestmentValue() {
     const parsedValue = Number(investmentValueInput)
     if (!Number.isFinite(parsedValue) || parsedValue < 0) {
-      setUpdateError('Ingresa un valor valido')
+      setUpdateError('Ingresa un valor válido')
       return
     }
 
@@ -216,7 +216,7 @@ export function AccountDetailClient({
               marginBottom: 14,
             }}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: '#ffffff', margin: 0 }}>
-                Resumen de Inversion
+                Resumen de Inversión
               </h2>
               <button
                 onClick={() => {
@@ -235,19 +235,19 @@ export function AccountDetailClient({
                   cursor: 'pointer',
                 }}
               >
-                {showUpdateForm ? 'Cancelar' : 'Update Value'}
+                {showUpdateForm ? 'Cancelar' : 'Actualizar Valor'}
               </button>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
               <div style={{ backgroundColor: '#0a0a0a', borderRadius: 12, padding: '10px 12px', border: '1px solid #2a2a4a' }}>
-                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Current Value</div>
+                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Valor Actual</div>
                 <div style={{ fontSize: 18, fontWeight: 700, color: '#ffffff' }}>
                   {formatCurrency(investmentSummary.currentValue, account.currency)}
                 </div>
               </div>
               <div style={{ backgroundColor: '#0a0a0a', borderRadius: 12, padding: '10px 12px', border: '1px solid #2a2a4a' }}>
-                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Total Deposited</div>
+                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Total Depositado</div>
                 <div style={{ fontSize: 18, fontWeight: 700, color: '#ffffff' }}>
                   {formatCurrency(investmentSummary.totalDeposited, account.currency)}
                 </div>
@@ -261,7 +261,7 @@ export function AccountDetailClient({
               border: '1px solid #2a2a4a',
               marginBottom: 10,
             }}>
-              <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Gain/Loss</div>
+              <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Ganancia/Pérdida</div>
               <div style={{
                 fontSize: 18,
                 fontWeight: 700,
@@ -274,7 +274,7 @@ export function AccountDetailClient({
                 </span>
               </div>
               <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 6 }}>
-                Last updated: {formatUpdatedAt(investmentSummary.currentValueUpdatedAt)}
+                Última actualización: {formatUpdatedAt(investmentSummary.currentValueUpdatedAt)}
               </div>
             </div>
 
@@ -338,7 +338,7 @@ export function AccountDetailClient({
               padding: '12px',
             }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#f3f4f6', marginBottom: 8 }}>
-                Investment Snapshots
+                Historial de Valores
               </div>
               {investmentSnapshots.length === 0 ? (
                 <div style={{ fontSize: 12, color: '#9ca3af' }}>Sin snapshots registrados</div>

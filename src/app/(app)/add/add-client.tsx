@@ -325,7 +325,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                     fontSize: 14, fontWeight: 500,
                     transition: 'all 0.2s ease',
                   }}>
-                    {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transfer'}
+                    {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transferencia'}
                   </span>
                 </label>
               ))}
