@@ -2,7 +2,7 @@ import { getSession } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { db, movements, categories, accounts } from '@/lib/db'
 import { eq, desc, sql, and, isNull, gte } from 'drizzle-orm'
-import { getAccountBalances } from '@/lib/actions/balances'
+import { getAccountBalances, getNetLiquidity, type NetLiquidityData } from '@/lib/actions/balances'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { HomePage } from './home-client'
 
@@ -120,6 +120,7 @@ export default async function Home() {
 
   const totals = totalsResult[0] || { totalIncome: 0, totalExpense: 0 }
   const pendingReviewCount = reviewResult[0]?.count ?? 0
+  const netLiquidity: NetLiquidityData = await getNetLiquidity(usdClpRate ? usdClpRate / 100 : undefined)
 
   return (
     <HomePage
@@ -131,6 +132,7 @@ export default async function Home() {
       movements={recentMovements}
       pendingReviewCount={pendingReviewCount}
       usdClpRate={usdClpRate}
+      netLiquidity={netLiquidity}
       userAccounts={accountBalances.map(a => ({ id: a.id, bankName: a.bankName, lastFourDigits: a.lastFourDigits, emoji: a.emoji }))}
       recentUnlinkedIncomes={recentUnlinkedIncomes}
     />

@@ -6,7 +6,7 @@ import { logout } from '@/lib/actions/auth'
 import { deleteMovement, getMovementsPaginated } from '@/lib/actions/movements'
 import { markAsReceived, markAsReceivedWithExisting } from '@/lib/actions/review'
 import { formatDateDisplay, formatCurrency } from '@/lib/utils'
-import type { AccountWithBalance } from '@/lib/actions/balances'
+import type { AccountWithBalance, NetLiquidityData } from '@/lib/actions/balances'
 
 interface MovementWithCategory {
   id: string
@@ -65,6 +65,7 @@ interface HomePageProps {
   movements: MovementWithCategory[]
   pendingReviewCount: number
   usdClpRate: number | null
+  netLiquidity: NetLiquidityData
   userAccounts: UserAccount[]
   recentUnlinkedIncomes: UnlinkedIncome[]
 }
@@ -189,7 +190,7 @@ function getAccountIconFromType(accountType: string): string {
 
 const PAGE_SIZE = 20
 
-export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, pendingReviewCount, usdClpRate, userAccounts, recentUnlinkedIncomes }: HomePageProps) {
+export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes }: HomePageProps) {
   const router = useRouter()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [receivableFilter, setReceivableFilter] = useState(false)
@@ -455,6 +456,31 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
         </div>
         )}
 
+        {accountBalances.length > 0 && (
+          <div style={{
+            backgroundColor: '#1a1a2e', borderRadius: 14, padding: '14px 16px',
+            marginBottom: 16, border: '1px solid #2f2f4a',
+          }}>
+            <div style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, fontWeight: 500 }}>
+              💧 Liquidez Neta
+            </div>
+            <div style={{
+              fontSize: 22, fontWeight: 700,
+              color: netLiquidity.netLiquidity >= 0 ? '#4ade80' : '#f87171',
+              marginBottom: 8,
+            }}>
+              {formatCurrency(netLiquidity.netLiquidity, 'CLP')}
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: '#9ca3af' }}>
+              <span>Débito: {formatCurrency(netLiquidity.debitBalance, 'CLP')}</span>
+              <span>·</span>
+              <span>Por cobrar: {formatCurrency(netLiquidity.receivables, 'CLP')}</span>
+              <span>·</span>
+              <span>Deuda: {formatCurrency(netLiquidity.creditDebt, 'CLP')}</span>
+            </div>
+          </div>
+        )}
+
         {/* Account Cards */}
         {accountBalances.length > 0 && (
           <div style={{ marginBottom: 20 }}>
@@ -518,6 +544,11 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                     }}>
                       {formatCurrency(acc.balance, acc.currency)}
                     </div>
+                    {acc.accountType === 'Crédito' && acc.creditLimit && acc.creditLimit > 0 && (
+                      <div style={{ fontSize: 11, color: '#a1a1aa', marginTop: 2 }}>
+                        Cupo: {formatCurrency(Math.max(0, acc.creditLimit - acc.balance), acc.currency)} / {formatCurrency(acc.creditLimit, acc.currency)}
+                      </div>
+                    )}
                     <div style={{ fontSize: 11, color: '#9ca3af' }}>
                       {acc.accountType} · ···{acc.lastFourDigits}
                     </div>

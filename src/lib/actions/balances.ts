@@ -15,6 +15,7 @@ export interface AccountWithBalance {
   currentValue: number | null
   currentValueUpdatedAt: Date | null
   balance: number
+  creditLimit: number | null
   currency: 'CLP' | 'USD'
   color: string | null
   emoji: string | null
@@ -37,6 +38,7 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       isInvestment: accounts.isInvestment,
       currentValue: accounts.currentValue,
       currentValueUpdatedAt: accounts.currentValueUpdatedAt,
+      creditLimit: accounts.creditLimit,
       currency: accounts.currency,
       color: accounts.color,
       emoji: accounts.emoji,
@@ -62,6 +64,7 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
     balance: r.isInvestment
       ? (r.currentValue ?? r.initialBalance)
       : r.initialBalance + r.incomeSum - r.expenseSum,
+    creditLimit: r.creditLimit ?? null,
     currency: r.currency,
     color: r.color,
     emoji: r.emoji,
@@ -81,4 +84,55 @@ export async function getTotalBalance(usdToClpRate?: number): Promise<number> {
     }
     return sum + a.balance
   }, 0)
+}
+
+export interface NetLiquidityData {
+  debitBalance: number // sum of balances for debit accounts in CLP cents
+  receivables: number // sum of amounts for movements where receivable=true and received=false
+  creditDebt: number // sum of (creditLimit - balance) for credit accounts with creditLimit > 0
+  netLiquidity: number // debitBalance + receivables - creditDebt
+}
+
+export async function getNetLiquidity(usdToClpRate?: number): Promise<NetLiquidityData> {
+  const accountBalances = await getAccountBalances()
+  const debitTypes = ['Corriente', 'Vista', 'Ahorro', 'Prepago']
+
+  let debitBalance = 0
+  let creditDebt = 0
+
+  for (const a of accountBalances) {
+    const balanceInClp = a.currency === 'USD' && usdToClpRate
+      ? Math.round(a.balance * usdToClpRate / 100)
+      : a.balance
+
+    if (debitTypes.includes(a.accountType) && !a.isInvestment) {
+      debitBalance += balanceInClp
+    }
+
+    if (a.accountType === 'Crédito' && a.creditLimit && a.creditLimit > 0) {
+      const creditLimitClp = a.currency === 'USD' && usdToClpRate
+        ? Math.round(a.creditLimit * usdToClpRate / 100)
+        : a.creditLimit
+      creditDebt += Math.max(0, creditLimitClp - balanceInClp)
+    }
+  }
+
+  const session = await requireAuth()
+  const receivableResults = await db
+    .select({ total: sql<number>`COALESCE(SUM(${movements.amount}), 0)` })
+    .from(movements)
+    .where(and(
+      eq(movements.userId, session.id),
+      eq(movements.receivable, true),
+      eq(movements.received, false)
+    ))
+
+  const receivables = receivableResults[0]?.total ?? 0
+
+  return {
+    debitBalance,
+    receivables,
+    creditDebt,
+    netLiquidity: debitBalance + receivables - creditDebt,
+  }
 }

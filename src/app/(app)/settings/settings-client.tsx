@@ -74,7 +74,9 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
   const [deletingAccountId, setDeletingAccountId] = useState<string | null>(null)
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null)
   const [newAccountIsInvestment, setNewAccountIsInvestment] = useState(false)
+  const [newAccountType, setNewAccountType] = useState('')
   const [editingAccountIsInvestment, setEditingAccountIsInvestment] = useState<Record<string, boolean>>({})
+  const [editingAccountType, setEditingAccountType] = useState<Record<string, string>>({})
   const [showAddAccount, setShowAddAccount] = useState(accounts.length === 0)
   const [categoryLoading, setCategoryLoading] = useState(false)
   const [categoryError, setCategoryError] = useState<string | null>(null)
@@ -94,6 +96,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
       } else {
         form.reset()
         setNewAccountIsInvestment(false)
+        setNewAccountType('')
         setShowAddAccount(false)
       }
     } catch {
@@ -118,6 +121,11 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
         setEditingAccountId(null)
         if (updatedId) {
           setEditingAccountIsInvestment((prev) => {
+            const next = { ...prev }
+            delete next[updatedId]
+            return next
+          })
+          setEditingAccountType((prev) => {
             const next = { ...prev }
             delete next[updatedId]
             return next
@@ -230,7 +238,10 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
           {/* Add Account Toggle / Form */}
           {!showAddAccount ? (
             <button
-              onClick={() => setShowAddAccount(true)}
+              onClick={() => {
+                setNewAccountType('')
+                setShowAddAccount(true)
+              }}
               style={{
                 width: '100%', height: 44, borderRadius: 10,
                 border: '1px dashed #3f3f46', backgroundColor: 'transparent',
@@ -254,7 +265,10 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
               {accounts.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => setShowAddAccount(false)}
+                  onClick={() => {
+                    setNewAccountType('')
+                    setShowAddAccount(false)
+                  }}
                   style={{
                     background: 'none', border: 'none', color: '#a1a1aa',
                     fontSize: 13, cursor: 'pointer', padding: '2px 0',
@@ -272,7 +286,13 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                 ))}
               </select>
 
-              <select name="accountType" required defaultValue="" style={selectStyle}>
+              <select
+                name="accountType"
+                required
+                defaultValue=""
+                style={selectStyle}
+                onChange={(e) => setNewAccountType(e.target.value)}
+              >
                 <option value="" disabled>Tipo de cuenta</option>
                 {ACCOUNT_TYPES.map((type) => (
                   <option key={type} value={type}>{type}</option>
@@ -330,6 +350,16 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                 />
               </div>
 
+              {newAccountType === 'Crédito' && (
+                <input
+                  name="creditLimit"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Cupo total (ej: 2000000)"
+                  style={inputStyle}
+                />
+              )}
+
               <button
                 type="submit" disabled={accountLoading}
                 style={{
@@ -359,6 +389,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                 const balance = balanceData?.balance ?? 0
                 const isEditing = editingAccountId === acc.id
                 const isEditingInvestment = editingAccountIsInvestment[acc.id] ?? acc.isInvestment
+                const currentEditingAccountType = editingAccountType[acc.id] ?? acc.accountType
 
                 if (isEditing) {
                   return (
@@ -373,7 +404,13 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                             <option key={bank} value={bank}>{bank}</option>
                           ))}
                         </select>
-                        <select name="accountType" required defaultValue={acc.accountType} style={selectStyle}>
+                        <select
+                          name="accountType"
+                          required
+                          defaultValue={acc.accountType}
+                          style={selectStyle}
+                          onChange={(e) => setEditingAccountType((prev) => ({ ...prev, [acc.id]: e.target.value }))}
+                        >
                           {ACCOUNT_TYPES.map((type) => (
                             <option key={type} value={type}>{type}</option>
                           ))}
@@ -426,6 +463,16 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                             style={{ ...inputStyle, width: 52, flex: 'none', padding: 4, cursor: 'pointer' }}
                           />
                         </div>
+                        {currentEditingAccountType === 'Crédito' && (
+                          <input
+                            name="creditLimit"
+                            type="text"
+                            defaultValue={acc.creditLimit ? (acc.creditLimit / 100).toFixed(0) : ''}
+                            inputMode="decimal"
+                            placeholder="Cupo total (ej: 2000000)"
+                            style={inputStyle}
+                          />
+                        )}
                         <div style={{ display: 'flex', gap: 8 }}>
                           <button
                             type="submit" disabled={accountLoading}
@@ -442,6 +489,11 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                             onClick={() => {
                               setEditingAccountId(null)
                               setEditingAccountIsInvestment((prev) => {
+                                const next = { ...prev }
+                                delete next[acc.id]
+                                return next
+                              })
+                              setEditingAccountType((prev) => {
                                 const next = { ...prev }
                                 delete next[acc.id]
                                 return next
@@ -498,6 +550,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                         onClick={() => {
                           setEditingAccountId(acc.id)
                           setEditingAccountIsInvestment((prev) => ({ ...prev, [acc.id]: acc.isInvestment }))
+                          setEditingAccountType((prev) => ({ ...prev, [acc.id]: acc.accountType }))
                         }}
                         style={{
                           background: 'none', border: 'none',

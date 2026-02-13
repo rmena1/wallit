@@ -51,6 +51,7 @@ export const accounts = sqliteTable('accounts', {
   isInvestment: integer('is_investment', { mode: 'boolean' }).notNull().default(false),
   currentValue: integer('current_value'), // cents, nullable
   currentValueUpdatedAt: integer('current_value_updated_at', { mode: 'timestamp' }), // nullable
+  creditLimit: integer('credit_limit'),
   currency: text('currency', { enum: ['CLP', 'USD'] }).notNull().default('CLP'),
   color: text('color'), // hex color like "#4F46E5"
   emoji: text('emoji'), // emoji character like "💳"

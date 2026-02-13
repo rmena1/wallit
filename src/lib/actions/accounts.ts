@@ -22,6 +22,7 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
   const lastFourDigits = (formData.get('lastFourDigits') as string)?.trim()
   const isInvestment = formData.get('isInvestment') === 'on' || formData.get('isInvestment') === 'true'
   const initialBalanceStr = (formData.get('initialBalance') as string)?.trim()
+  const creditLimitStr = (formData.get('creditLimit') as string)?.trim()
   const currency = (formData.get('currency') as string)?.trim() || 'CLP'
   const color = (formData.get('color') as string)?.trim() || null
   const emoji = (formData.get('emoji') as string)?.trim() || null
@@ -54,6 +55,18 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
     }
   }
 
+  let creditLimit: number | null = null
+  if (creditLimitStr) {
+    const parsed = parseFloat(creditLimitStr.replace(/[$,]/g, ''))
+    if (!isNaN(parsed)) {
+      creditLimit = Math.round(parsed * 100)
+    }
+  }
+
+  if (accountType === 'Crédito' && creditLimit && creditLimit > 0 && initialBalance === 0) {
+    initialBalance = creditLimit
+  }
+
   const now = new Date()
 
   await db.insert(accounts).values({
@@ -66,6 +79,7 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
     isInvestment,
     currentValue: isInvestment ? initialBalance : null,
     currentValueUpdatedAt: isInvestment ? now : null,
+    creditLimit,
     currency: currency as 'CLP' | 'USD',
     color,
     emoji,
@@ -88,6 +102,7 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
   const lastFourDigits = (formData.get('lastFourDigits') as string)?.trim()
   const isInvestment = formData.get('isInvestment') === 'on' || formData.get('isInvestment') === 'true'
   const initialBalanceStr = (formData.get('initialBalance') as string)?.trim()
+  const creditLimitStr = (formData.get('creditLimit') as string)?.trim()
   const currency = (formData.get('currency') as string)?.trim() || 'CLP'
   const color = (formData.get('color') as string)?.trim() || null
   const emoji = (formData.get('emoji') as string)?.trim() || null
@@ -137,6 +152,18 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
     }
   }
 
+  let creditLimit: number | null = null
+  if (creditLimitStr) {
+    const parsed = parseFloat(creditLimitStr.replace(/[$,]/g, ''))
+    if (!isNaN(parsed)) {
+      creditLimit = Math.round(parsed * 100)
+    }
+  }
+
+  if (accountType === 'Crédito' && creditLimit && creditLimit > 0 && initialBalance === 0) {
+    initialBalance = creditLimit
+  }
+
   const now = new Date()
   let currentValue = existingAccount.currentValue
   let currentValueUpdatedAt = existingAccount.currentValueUpdatedAt
@@ -155,6 +182,7 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
       isInvestment,
       currentValue,
       currentValueUpdatedAt,
+      creditLimit,
       currency: currency as 'CLP' | 'USD',
       color,
       emoji,
