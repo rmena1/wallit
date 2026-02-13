@@ -63,7 +63,7 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
     }
   }
 
-  if (accountType === 'Crédito' && creditLimit && creditLimit > 0 && initialBalance === 0) {
+  if ((accountType === 'Crédito' || accountType === 'credit') && creditLimit && creditLimit > 0 && initialBalance === 0) {
     initialBalance = creditLimit
   }
 
@@ -160,7 +160,7 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
     }
   }
 
-  if (accountType === 'Crédito' && creditLimit && creditLimit > 0 && initialBalance === 0) {
+  if ((accountType === 'Crédito' || accountType === 'credit') && creditLimit && creditLimit > 0 && initialBalance === 0) {
     initialBalance = creditLimit
   }
 

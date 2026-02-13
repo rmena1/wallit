@@ -59,7 +59,8 @@ function EditIcon() {
 function getAccountIcon(account: Account): string {
   if (account.emoji) return account.emoji
   switch (account.accountType) {
-    case 'Crédito': return '💳'
+    case 'Crédito':
+    case 'credit': return '💳'
     case 'Corriente': return '🏦'
     case 'Vista': return '👁️'
     case 'Ahorro': return '🐷'
@@ -350,7 +351,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                 />
               </div>
 
-              {newAccountType === 'Crédito' && (
+              {(newAccountType === 'Crédito' || newAccountType === 'credit') && (
                 <input
                   name="creditLimit"
                   type="text"
@@ -463,7 +464,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                             style={{ ...inputStyle, width: 52, flex: 'none', padding: 4, cursor: 'pointer' }}
                           />
                         </div>
-                        {currentEditingAccountType === 'Crédito' && (
+                        {(currentEditingAccountType === 'Crédito' || currentEditingAccountType === 'credit') && (
                           <input
                             name="creditLimit"
                             type="text"
