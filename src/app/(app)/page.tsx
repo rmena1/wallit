@@ -2,7 +2,7 @@ import { getSession } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { db, movements, categories, accounts } from '@/lib/db'
 import { eq, desc, sql, and, isNull, gte } from 'drizzle-orm'
-import { getAccountBalances, getNetLiquidity, type NetLiquidityData } from '@/lib/actions/balances'
+import { getAccountBalances, getNetLiquidity, type AccountWithBalanceSerialized, type NetLiquidityData } from '@/lib/actions/balances'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { HomePage } from './home-client'
 
@@ -121,15 +121,25 @@ export default async function Home() {
   const totals = totalsResult[0] || { totalIncome: 0, totalExpense: 0 }
   const pendingReviewCount = reviewResult[0]?.count ?? 0
   const netLiquidity: NetLiquidityData = await getNetLiquidity(usdClpRate ? usdClpRate / 100 : undefined)
+  const serializedAccountBalances: AccountWithBalanceSerialized[] = accountBalances.map((account) => ({
+    ...account,
+    currentValueUpdatedAt: account.currentValueUpdatedAt?.toISOString() ?? null,
+  }))
+  // Serialize Date fields for client component
+  const serializedMovements = recentMovements.map((m) => ({
+    ...m,
+    createdAt: m.createdAt.toISOString(),
+    updatedAt: m.updatedAt.toISOString(),
+  }))
 
   return (
     <HomePage
       email={session.email}
-      accountBalances={accountBalances}
+      accountBalances={serializedAccountBalances}
       totalBalance={totalBalance}
       totalIncome={totals.totalIncome}
       totalExpense={totals.totalExpense}
-      movements={recentMovements}
+      movements={serializedMovements}
       pendingReviewCount={pendingReviewCount}
       usdClpRate={usdClpRate}
       netLiquidity={netLiquidity}

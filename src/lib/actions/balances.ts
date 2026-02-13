@@ -21,6 +21,10 @@ export interface AccountWithBalance {
   emoji: string | null
 }
 
+export type AccountWithBalanceSerialized = Omit<AccountWithBalance, 'currentValueUpdatedAt'> & {
+  currentValueUpdatedAt: string | null
+}
+
 /**
  * Get all accounts with calculated balances for the current user.
  * Balance = initialBalance + sum(income) - sum(expense)
@@ -95,7 +99,9 @@ export interface NetLiquidityData {
 
 export async function getNetLiquidity(usdToClpRate?: number): Promise<NetLiquidityData> {
   const accountBalances = await getAccountBalances()
-  const debitTypes = ['Corriente', 'Vista', 'Ahorro', 'Prepago']
+  // Support both Spanish types (current) and English types (legacy)
+  const debitTypes = ['Corriente', 'Vista', 'Ahorro', 'Prepago', 'debit']
+  const creditTypes = ['Crédito', 'credit']
 
   let debitBalance = 0
   let creditDebt = 0
@@ -109,7 +115,7 @@ export async function getNetLiquidity(usdToClpRate?: number): Promise<NetLiquidi
       debitBalance += balanceInClp
     }
 
-    if (a.accountType === 'Crédito' && a.creditLimit && a.creditLimit > 0) {
+    if (creditTypes.includes(a.accountType) && a.creditLimit && a.creditLimit > 0) {
       const creditLimitClp = a.currency === 'USD' && usdToClpRate
         ? Math.round(a.creditLimit * usdToClpRate / 100)
         : a.creditLimit

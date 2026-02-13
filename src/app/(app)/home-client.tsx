@@ -6,7 +6,7 @@ import { logout } from '@/lib/actions/auth'
 import { deleteMovement, getMovementsPaginated } from '@/lib/actions/movements'
 import { markAsReceived, markAsReceivedWithExisting } from '@/lib/actions/review'
 import { formatDateDisplay, formatCurrency } from '@/lib/utils'
-import type { AccountWithBalance, NetLiquidityData } from '@/lib/actions/balances'
+import type { AccountWithBalanceSerialized as AccountWithBalance, NetLiquidityData } from '@/lib/actions/balances'
 
 interface MovementWithCategory {
   id: string
@@ -18,8 +18,8 @@ interface MovementWithCategory {
   amount: number
   amountUsd: number | null
   type: 'income' | 'expense'
-  createdAt: Date
-  updatedAt: Date
+  createdAt: string  // ISO string (serialized from Date for client component)
+  updatedAt: string  // ISO string (serialized from Date for client component)
   categoryName: string | null
   categoryEmoji: string | null
   accountBankName: string | null
@@ -178,9 +178,12 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
 })
 
 function getAccountIconFromType(accountType: string): string {
+  // Support both Spanish (current) and English (legacy) account types
   switch (accountType) {
-    case 'Crédito': return '💳'
-    case 'Corriente': return '🏦'
+    case 'Crédito':
+    case 'credit': return '💳'
+    case 'Corriente':
+    case 'debit': return '🏦'
     case 'Vista': return '👁️'
     case 'Ahorro': return '🐷'
     case 'Prepago': return '💵'
@@ -544,7 +547,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                     }}>
                       {formatCurrency(acc.balance, acc.currency)}
                     </div>
-                    {acc.accountType === 'Crédito' && acc.creditLimit && acc.creditLimit > 0 && (
+                    {(acc.accountType === 'Crédito' || acc.accountType === 'credit') && acc.creditLimit && acc.creditLimit > 0 && (
                       <div style={{ fontSize: 11, color: '#a1a1aa', marginTop: 2 }}>
                         Cupo: {formatCurrency(Math.max(0, acc.creditLimit - acc.balance), acc.currency)} / {formatCurrency(acc.creditLimit, acc.currency)}
                       </div>

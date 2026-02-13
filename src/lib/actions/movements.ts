@@ -356,7 +356,14 @@ export async function getMovementsPaginated(
     .limit(limit + 1) // Fetch one extra to know if there's more
 
   const hasMore = results.length > limit
-  const data = hasMore ? results.slice(0, limit) : results
+  const rawData = hasMore ? results.slice(0, limit) : results
+  
+  // Serialize Date fields for client component
+  const data = rawData.map((m) => ({
+    ...m,
+    createdAt: m.createdAt.toISOString(),
+    updatedAt: m.updatedAt.toISOString(),
+  }))
 
   return { data, hasMore }
 }
