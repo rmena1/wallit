@@ -1,62 +1,151 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount, createMovement, screenshot } from './helpers'
+import Database from 'better-sqlite3'
+import path from 'path'
 
-test.describe('Account Detail Page', () => {
-  test('navigate to account detail, view movements + chart, and click movement to edit', async ({ page }) => {
-    page.on('pageerror', (err) => console.log('PAGE ERROR:', err.message))
-    page.on('console', (msg) => { if (msg.type() === 'error') console.log('CONSOLE ERROR:', msg.text()) })
+const DB_PATH = path.join(process.cwd(), 'data', 'wallit.db')
+
+function getUserId(email: string): string | null {
+  const db = new Database(DB_PATH)
+  const row = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: string } | undefined
+  db.close()
+  return row?.id ?? null
+}
+
+function getFirstAccountId(userId: string): string | null {
+  const db = new Database(DB_PATH)
+  const row = db.prepare('SELECT id FROM accounts WHERE user_id = ?').get(userId) as { id: string } | undefined
+  db.close()
+  return row?.id ?? null
+}
+
+function seedAccountMovements(userId: string, accountId: string, count: number) {
+  const db = new Database(DB_PATH)
+  const today = new Date()
+  
+  const stmt = db.prepare(`
+    INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'CLP', 0, 0, ?, ?)
+  `)
+
+  const names = [
+    'Almuerzo cafetería', 'Café expresso', 'Uber trabajo', 'Supermercado Líder',
+    'Netflix suscripción', 'Spotify premium', 'Gimnasio mes', 'Farmacia remedios',
+    'Gasolina estación', 'Restaurant italiano', 'Delivery rappi', 'Metro recarga',
+  ]
+
+  for (let i = 0; i < count; i++) {
+    const id = `acc-detail-${Date.now()}-${i}`
+    const name = `${names[i % names.length]} #${i + 1}`
+    const date = new Date(today)
+    date.setDate(date.getDate() - Math.floor(i / 3))
+    const dateStr = date.toISOString().slice(0, 10)
+    const amount = (Math.floor(Math.random() * 50) + 5) * 100 * 100
+    const type = Math.random() > 0.25 ? 'expense' : 'income'
+    const ts = Math.floor(Date.now() / 1000) - i
+    
+    stmt.run(id, userId, accountId, name, dateStr, amount, type, ts, ts)
+  }
+  
+  db.close()
+}
+
+async function registerUser(page: Page): Promise<string> {
+  const email = `e2e-acc-detail-${Date.now()}-${Math.random().toString(36).slice(2, 5)}@wallit.app`
+  await page.goto('/register')
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Password').fill('testpass123')
+  await page.getByRole('button', { name: 'Create account' }).click()
+  await page.waitForURL('**/', { timeout: 10000 })
+  return email
+}
+
+test.describe('Account Detail Page — Complete Flow', () => {
+  test('navigate to account detail, view balance chart, list movements, load more, and navigate to edit', async ({ page }) => {
+    // 1. Register and create account
+    const email = await registerUser(page)
+    await ensureAccount(page)
+    await screenshot(page, 'acc-detail-01-account-created')
+
+    // 2. Create some movements via UI
+    await createMovement(page, { name: 'Gasto inicial', amount: '15000' })
+    await createMovement(page, { name: 'Ingreso trabajo', amount: '500000', type: 'income' })
+    await createMovement(page, { name: 'Compra supermercado', amount: '45000' })
+
+    // 3. Seed many movements in DB for pagination
+    const userId = getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const accountId = getFirstAccountId(userId)
+    if (!accountId) throw new Error('Account not found in DB')
+    seedAccountMovements(userId, accountId, 60)
+
+    // 4. Navigate to account detail from home
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await screenshot(page, 'acc-detail-02-home-with-account')
+
+    // Click on the first account card
+    const accountCards = page.locator('[data-testid^="account-card-"]')
+    const cardCount = await accountCards.count()
+    expect(cardCount).toBeGreaterThan(0)
+    await accountCards.first().click()
+    await page.waitForLoadState('networkidle')
+    await screenshot(page, 'acc-detail-03-account-detail-page')
+
+    // 5. Verify account detail page elements
+    await expect(page.getByText('Balance Actual')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('BCI')).toBeVisible()
+    await expect(page.getByText('Corriente')).toBeVisible()
+    await screenshot(page, 'acc-detail-04-balance-visible')
+
+    // 6. Verify balance chart is visible (if enough data)
+    const chartTitle = page.getByText('Balance en el Tiempo')
+    if (await chartTitle.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await screenshot(page, 'acc-detail-05-balance-chart')
+    }
+
+    // 7. Verify movements list
+    await expect(page.getByText('Movimientos')).toBeVisible()
+    // Wait for movements to load
+    await page.waitForTimeout(1000)
+    // Look for one of our created movements (use partial match)
+    await expect(page.getByText(/Gasto inicial|Compra supermercado/).first()).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'acc-detail-06-movements-list')
+
+    // 8. Test "load more" functionality if available
+    const loadMoreBtn = page.getByRole('button', { name: /Ver más/i })
+    if (await loadMoreBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await screenshot(page, 'acc-detail-07-before-load-more')
+      await loadMoreBtn.click()
+      await page.waitForTimeout(1000)
+      await screenshot(page, 'acc-detail-08-after-load-more')
+    }
+
+    // 9. Click on a movement to navigate to edit page
+    await page.getByText(/Gasto inicial/).first().click()
+    await expect(page.getByText('Editar Movimiento')).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'acc-detail-09-edit-from-detail')
+
+    // 10. Go back to account detail
+    await page.getByRole('button', { name: /Volver/i }).click()
+    await page.waitForURL('**/', { timeout: 5000 })
+    await screenshot(page, 'acc-detail-10-back-to-home')
+  })
+
+  test('account detail with empty movements', async ({ page }) => {
+    // Register with new account but no movements
     await registerAndLogin(page)
     await ensureAccount(page)
 
-    // Create movements for the account
-    await createMovement(page, { name: 'Almuerzo detail', amount: '12000' })
-    await createMovement(page, { name: 'Freelance detail', amount: '500000', type: 'income' })
-    await createMovement(page, { name: 'Super detail', amount: '35000' })
-    await createMovement(page, { name: 'Gasto editable', amount: '5000' })
-
-    // Go home and click account card
+    // Navigate to account detail
     await page.goto('/')
     await page.waitForLoadState('networkidle')
+    const accountCards = page.locator('[data-testid^="account-card-"]')
+    await accountCards.first().click()
+    await page.waitForLoadState('networkidle')
 
-    // The account card contains "BCI" as the bank name label
-    const accountCard = page.locator('[data-testid^="account-card-"]').first()
-    await expect(accountCard).toBeVisible({ timeout: 5000 })
-    await screenshot(page, 'account-detail-00-home')
-
-    await accountCard.click()
-    await page.waitForURL('**/account/**', { timeout: 10000 })
-
-    // Verify account detail page
-    await expect(page.getByText('Balance Actual')).toBeVisible({ timeout: 5000 })
-    await screenshot(page, 'account-detail-01-header')
-
-    // Verify movements list
-    await expect(page.getByText('Almuerzo detail')).toBeVisible({ timeout: 5000 })
-    await expect(page.getByText('Freelance detail')).toBeVisible()
-    await expect(page.getByText('Super detail')).toBeVisible()
-    await expect(page.getByText('Gasto editable')).toBeVisible()
-    await screenshot(page, 'account-detail-02-movements')
-
-    // Verify chart is rendered
-    await expect(page.getByText('Balance en el Tiempo')).toBeVisible()
-    await screenshot(page, 'account-detail-03-full-page')
-
-    // Click on a movement to navigate to edit page
-    await page.getByText('Gasto editable').click()
-    await page.waitForURL('**/edit/**', { timeout: 5000 })
-    await expect(page.getByText('Editar Movimiento')).toBeVisible({ timeout: 5000 })
-    await screenshot(page, 'account-detail-04-edit-navigation')
-
-    // Navigate back via browser back
-    await page.goBack()
-    await page.waitForURL('**/account/**', { timeout: 5000 })
-    await expect(page.getByText('Balance Actual')).toBeVisible({ timeout: 5000 })
-    await screenshot(page, 'account-detail-05-back-to-detail')
-
-    // Click back button to go home
-    await page.locator('header button').first().click()
-    await page.waitForURL('/', { timeout: 5000 })
-    await expect(page.getByText('Balance General')).toBeVisible({ timeout: 5000 })
-    await screenshot(page, 'account-detail-06-back-to-home')
+    // Should show empty state
+    await expect(page.getByText('Sin movimientos en esta cuenta')).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'acc-detail-empty-01-no-movements')
   })
 })

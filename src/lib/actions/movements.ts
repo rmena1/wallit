@@ -163,16 +163,18 @@ export async function updateMovement(id: string, data: {
 }): Promise<MovementActionResult> {
   const session = await requireAuth()
 
-  // Verify account belongs to the current user (IDOR protection)
+  // Verify account belongs to the current user and get its currency (IDOR protection)
+  let accountCurrency: 'CLP' | 'USD' | null = null
   if (data.accountId) {
     const [ownedAccount] = await db
-      .select({ id: accounts.id })
+      .select({ id: accounts.id, currency: accounts.currency })
       .from(accounts)
       .where(and(eq(accounts.id, data.accountId), eq(accounts.userId, session.id)))
       .limit(1)
     if (!ownedAccount) {
       return { success: false, error: 'Invalid account' }
     }
+    accountCurrency = ownedAccount.currency
   }
 
   // Verify category belongs to the current user (IDOR protection)
@@ -187,18 +189,52 @@ export async function updateMovement(id: string, data: {
     }
   }
 
+  // Handle currency conversion to ensure amountUsd is correctly set for USD accounts
+  // This mirrors the logic in createMovement to prevent balance calculation bugs
+  let finalAmount = data.amount
+  let finalAmountUsd = data.amountUsd
+  let finalExchangeRate = data.exchangeRate
+
+  if (data.currency === 'USD') {
+    // USD input - convert to CLP for storage, keep USD in amountUsd
+    if (!data.amountUsd) {
+      // amountUsd not provided but currency is USD - use amount as amountUsd and convert
+      try {
+        const conversion = await convertUsdToClp(data.amount)
+        finalAmountUsd = data.amount
+        finalAmount = conversion.clpCents
+        finalExchangeRate = conversion.rate
+      } catch {
+        return { success: false, error: 'Error al obtener tipo de cambio' }
+      }
+    }
+  } else if (accountCurrency === 'USD' && data.currency === 'CLP') {
+    // CLP input on USD account - convert CLP to USD for amountUsd
+    // This ensures balance calculation works correctly for USD accounts
+    if (!data.amountUsd) {
+      try {
+        const { getUsdToClpRate } = await import('@/lib/exchange-rate')
+        const rate = await getUsdToClpRate()
+        finalAmountUsd = Math.round(data.amount * 100 / rate) // Convert CLP cents to USD cents
+        finalExchangeRate = rate
+      } catch {
+        return { success: false, error: 'Error al obtener tipo de cambio' }
+      }
+    }
+  }
+
   await db
     .update(movements)
     .set({
       name: data.name,
       date: data.date,
-      amount: data.amount,
+      amount: finalAmount,
       type: data.type,
       currency: data.currency,
       accountId: data.accountId,
       categoryId: data.categoryId,
-      amountUsd: data.amountUsd,
-      exchangeRate: data.exchangeRate,
+      amountUsd: finalAmountUsd,
+      exchangeRate: finalExchangeRate,
       time: data.time,
       updatedAt: new Date(),
     })
@@ -281,6 +317,7 @@ export async function getMovementsPaginated(
     name: movements.name,
     date: movements.date,
     amount: movements.amount,
+    amountUsd: movements.amountUsd,
     type: movements.type,
     createdAt: movements.createdAt,
     updatedAt: movements.updatedAt,

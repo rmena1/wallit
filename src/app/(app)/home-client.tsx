@@ -16,6 +16,7 @@ interface MovementWithCategory {
   name: string
   date: string
   amount: number
+  amountUsd: number | null
   type: 'income' | 'expense'
   createdAt: Date
   updatedAt: Date
@@ -142,11 +143,11 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
             {m.name}
           </div>
           {m.originalName && m.originalName !== m.name && (
-            <div style={{ fontSize: 11, color: '#3f3f46', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <div style={{ fontSize: 11, color: '#71717a', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {m.originalName}
             </div>
           )}
-          <div style={{ fontSize: 12, color: '#52525b', marginTop: 1 }}>
+          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 1 }}>
             {formatDateDisplay(m.date)}{m.time && ` · ${m.time}`}
             {!isTransfer && m.categoryName && (
               <span> · {m.categoryName}</span>
@@ -163,10 +164,10 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
           color: isTransfer ? '#60a5fa' : m.type === 'income' ? '#4ade80' : '#f87171',
           whiteSpace: 'nowrap',
         }}>
-          {isTransfer ? '' : m.type === 'income' ? '+' : '-'}{formatCurrency(m.amount, m.currency)}
+          {isTransfer ? '' : m.type === 'income' ? '+' : '-'}{formatCurrency(m.currency === 'USD' && m.amountUsd ? m.amountUsd : m.amount, m.currency)}
         </span>
         {m.currency === 'USD' && (
-          <div style={{ fontSize: 11, color: '#52525b', textAlign: 'right', marginTop: 1 }}>
+          <div style={{ fontSize: 11, color: '#9ca3af', textAlign: 'right', marginTop: 1 }}>
             USD
           </div>
         )}
@@ -207,9 +208,22 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [offset, setOffset] = useState(initialMovements.length)
   const loadMoreRef = useRef<HTMLDivElement>(null)
+  
+  // Track if this is the initial mount to skip unnecessary refetch
+  const isInitialMount = useRef(true)
 
   // Reset movements when filter changes (fetch from backend)
+  // Skip on initial mount since we already have SSR data for the default filter (all)
   useEffect(() => {
+    // On initial mount with default filter, we already have SSR data - skip fetch
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      // Only skip if filter is 'all' (default) - we have this data from SSR
+      if (!receivableFilter) {
+        return
+      }
+    }
+    
     async function fetchFiltered() {
       setIsLoadingMore(true)
       try {
@@ -454,35 +468,62 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               paddingBottom: 4,
               scrollbarWidth: 'none',
             }}>
-              {accountBalances.map((acc) => (
-                <div key={acc.id} data-testid={`account-card-${acc.id}`} onClick={() => router.push(`/account/${acc.id}`)} style={{
-                  minWidth: 160,
-                  backgroundColor: '#1a1a1a',
-                  borderRadius: 14,
-                  padding: '14px 14px 12px',
-                  border: `1px solid ${acc.color ? acc.color + '40' : '#2a2a2a'}`,
-                  flexShrink: 0,
-                  cursor: 'pointer',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                    <span style={{ fontSize: 16 }}>{acc.emoji || getAccountIconFromType(acc.accountType)}</span>
-                    <span style={{ fontSize: 12, color: acc.color || '#a1a1aa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {acc.bankName}
-                    </span>
-                  </div>
-                  <div style={{
-                    fontSize: 18, fontWeight: 700,
-                    color: acc.balance >= 0 ? '#e5e5e5' : '#f87171',
-                    whiteSpace: 'nowrap',
-                    marginBottom: 4,
+              {accountBalances.map((acc) => {
+                const showInvestmentBadge = Boolean(acc.isInvestment && acc.currentValue != null && acc.totalDeposited > 0)
+                const gainLossPercent = showInvestmentBadge
+                  ? ((acc.currentValue! - acc.totalDeposited) / acc.totalDeposited) * 100
+                  : 0
+                const gainLossSign = gainLossPercent > 0 ? '+' : ''
+                const gainLossColor = gainLossPercent >= 0 ? '#4ade80' : '#f87171'
+                const gainLossBg = gainLossPercent >= 0 ? '#052e16' : '#450a0a'
+
+                return (
+                  <div key={acc.id} data-testid={`account-card-${acc.id}`} onClick={() => router.push(`/account/${acc.id}`)} style={{
+                    minWidth: 160,
+                    backgroundColor: '#1a1a1a',
+                    borderRadius: 14,
+                    padding: '14px 14px 12px',
+                    border: `1px solid ${acc.color ? acc.color + '40' : '#2a2a2a'}`,
+                    flexShrink: 0,
+                    cursor: 'pointer',
+                    position: 'relative',
                   }}>
-                    {formatCurrency(acc.balance, acc.currency)}
+                    {showInvestmentBadge && (
+                      <span style={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 8,
+                        backgroundColor: gainLossBg,
+                        color: gainLossColor,
+                        border: `1px solid ${gainLossColor}66`,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        borderRadius: 999,
+                        padding: '2px 6px',
+                      }}>
+                        {gainLossSign}{gainLossPercent.toFixed(1)}%
+                      </span>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                      <span style={{ fontSize: 16 }}>{acc.emoji || getAccountIconFromType(acc.accountType)}</span>
+                      <span style={{ fontSize: 12, color: acc.color || '#a1a1aa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {acc.bankName}
+                      </span>
+                    </div>
+                    <div style={{
+                      fontSize: 18, fontWeight: 700,
+                      color: acc.balance >= 0 ? '#e5e5e5' : '#f87171',
+                      whiteSpace: 'nowrap',
+                      marginBottom: 4,
+                    }}>
+                      {formatCurrency(acc.balance, acc.currency)}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#9ca3af' }}>
+                      {acc.accountType} · ···{acc.lastFourDigits}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 11, color: '#52525b' }}>
-                    {acc.accountType} · ···{acc.lastFourDigits}
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}
@@ -556,7 +597,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               style={{
                 padding: '4px 12px', borderRadius: 8, border: 'none',
                 backgroundColor: receivableFilter ? '#92400e' : '#27272a',
-                color: receivableFilter ? '#fbbf24' : '#71717a',
+                color: receivableFilter ? '#fbbf24' : '#a1a1aa',
                 fontSize: 12, fontWeight: 600, cursor: 'pointer',
                 transition: 'all 0.2s ease',
               }}
@@ -568,7 +609,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
           {filteredMovements.length === 0 ? (
             <div style={{
               backgroundColor: '#1a1a1a', borderRadius: 16,
-              padding: '40px 20px', textAlign: 'center', color: '#71717a',
+              padding: '40px 20px', textAlign: 'center', color: '#a1a1aa',
               border: '1px solid #2a2a2a',
             }}>
               <span style={{ fontSize: 40, display: 'block', marginBottom: 8 }}>📊</span>
@@ -601,10 +642,10 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               {/* Load more trigger */}
               <div ref={loadMoreRef} style={{ padding: '20px 0', textAlign: 'center' }}>
                 {isLoadingMore && (
-                  <div style={{ color: '#71717a', fontSize: 13 }}>Cargando más...</div>
+                  <div style={{ color: '#a1a1aa', fontSize: 13 }}>Cargando más...</div>
                 )}
                 {!hasMore && filteredMovements.length > 0 && (
-                  <div style={{ color: '#52525b', fontSize: 12 }}>No hay más movimientos</div>
+                  <div style={{ color: '#9ca3af', fontSize: 12 }}>No hay más movimientos</div>
                 )}
               </div>
             </div>
@@ -633,7 +674,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             <div style={{ fontSize: 18, fontWeight: 700, color: '#e5e5e5', marginBottom: 4 }}>
               💰 Cobrar gasto
             </div>
-            <div style={{ fontSize: 13, color: '#71717a', marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 16 }}>
               ¿Cómo registrar el cobro?
             </div>
 
@@ -645,7 +686,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                   flex: 1, padding: '10px 8px', border: 'none', cursor: 'pointer',
                   fontSize: 13, fontWeight: 600,
                   backgroundColor: paymentMode === 'new' ? '#27272a' : '#111',
-                  color: paymentMode === 'new' ? '#4ade80' : '#71717a',
+                  color: paymentMode === 'new' ? '#4ade80' : '#a1a1aa',
                   borderBottom: paymentMode === 'new' ? '2px solid #4ade80' : '2px solid transparent',
                   transition: 'all 0.15s ease',
                 }}
@@ -658,7 +699,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                   flex: 1, padding: '10px 8px', border: 'none', cursor: 'pointer',
                   fontSize: 13, fontWeight: 600,
                   backgroundColor: paymentMode === 'existing' ? '#27272a' : '#111',
-                  color: paymentMode === 'existing' ? '#4ade80' : '#71717a',
+                  color: paymentMode === 'existing' ? '#4ade80' : '#a1a1aa',
                   borderBottom: paymentMode === 'existing' ? '2px solid #4ade80' : '2px solid transparent',
                   transition: 'all 0.15s ease',
                 }}
@@ -688,7 +729,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                 <span style={{ fontSize: 20 }}>💵</span>
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e5e5' }}>Efectivo</div>
-                  <div style={{ fontSize: 11, color: '#71717a' }}>No genera movimiento de ingreso</div>
+                  <div style={{ fontSize: 11, color: '#a1a1aa' }}>No genera movimiento de ingreso</div>
                 </div>
                 {selectedAccountId === 'cash' && (
                   <span style={{ marginLeft: 'auto', color: '#4ade80', fontSize: 16 }}>✓</span>
@@ -716,7 +757,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                   <span style={{ fontSize: 20 }}>{acc.emoji || '🏦'}</span>
                   <div>
                     <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e5e5' }}>{acc.bankName}</div>
-                    <div style={{ fontSize: 11, color: '#71717a' }}>···{acc.lastFourDigits}</div>
+                    <div style={{ fontSize: 11, color: '#a1a1aa' }}>···{acc.lastFourDigits}</div>
                   </div>
                   {selectedAccountId === acc.id && (
                     <span style={{ marginLeft: 'auto', color: '#4ade80', fontSize: 16 }}>✓</span>
@@ -727,7 +768,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24, maxHeight: 280, overflowY: 'auto' }}>
               {recentUnlinkedIncomes.length === 0 ? (
-                <div style={{ padding: '24px 16px', textAlign: 'center', color: '#71717a', fontSize: 13 }}>
+                <div style={{ padding: '24px 16px', textAlign: 'center', color: '#a1a1aa', fontSize: 13 }}>
                   No hay ingresos recientes sin vincular
                 </div>
               ) : (
@@ -753,7 +794,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                       <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e5e5', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {inc.name}
                       </div>
-                      <div style={{ fontSize: 11, color: '#71717a' }}>
+                      <div style={{ fontSize: 11, color: '#a1a1aa' }}>
                         {formatDateDisplay(inc.date)}
                         {inc.accountBankName && <span> · {inc.accountEmoji || ''} {inc.accountBankName}</span>}
                       </div>
@@ -788,7 +829,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                   flex: 1, padding: '12px', borderRadius: 12,
                   border: 'none',
                   background: canConfirmPayment ? 'linear-gradient(135deg, #22c55e, #16a34a)' : '#27272a',
-                  color: canConfirmPayment ? '#fff' : '#52525b',
+                  color: canConfirmPayment ? '#fff' : '#9ca3af',
                   fontSize: 14, fontWeight: 600,
                   cursor: canConfirmPayment ? 'pointer' : 'not-allowed',
                   boxShadow: canConfirmPayment ? '0 2px 8px rgba(34,197,94,0.25)' : 'none',

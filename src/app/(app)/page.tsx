@@ -40,6 +40,7 @@ export default async function Home() {
         name: movements.name,
         date: movements.date,
         amount: movements.amount,
+        amountUsd: movements.amountUsd,
         type: movements.type,
         createdAt: movements.createdAt,
         updatedAt: movements.updatedAt,

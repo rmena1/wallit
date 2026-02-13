@@ -50,7 +50,7 @@ const selectStyle: React.CSSProperties = {
   backgroundSize: '14px',
 }
 
-const labelStyle: React.CSSProperties = { fontSize: 11, color: '#71717a', marginBottom: 2, display: 'block' }
+const labelStyle: React.CSSProperties = { fontSize: 11, color: '#a1a1aa', marginBottom: 2, display: 'block' }
 
 function centsToDisplay(cents: number): string {
   return (cents / 100).toString()
@@ -447,7 +447,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                   backgroundColor: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '#27272a' : 'transparent',
                   color: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) 
                     ? (t === 'expense' ? '#f87171' : t === 'income' ? '#4ade80' : '#60a5fa') 
-                    : '#52525b',
+                    : '#9ca3af',
                   transition: 'all 0.15s ease',
                 }}>
                   {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transfer'}
@@ -537,7 +537,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                       style={inputStyle}
                     />
                     {exchangeRate && (
-                      <div style={{ fontSize: 10, color: '#71717a', marginTop: 2 }}>
+                      <div style={{ fontSize: 10, color: '#a1a1aa', marginTop: 2 }}>
                         💱 1 USD = {(exchangeRate / 100).toFixed(2)} CLP
                       </div>
                     )}
@@ -614,7 +614,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
 
             {/* Original Name */}
             {current!.originalName && (
-              <div style={{ fontSize: 11, color: '#52525b', padding: '4px 8px', backgroundColor: '#111', borderRadius: 6 }}>
+              <div style={{ fontSize: 11, color: '#9ca3af', padding: '4px 8px', backgroundColor: '#111', borderRadius: 6 }}>
                 Original: {current!.originalName}
               </div>
             )}
@@ -764,7 +764,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                 fontSize: 14, color: '#a1a1aa', marginBottom: 16,
                 padding: '8px 12px', backgroundColor: '#111', borderRadius: 8,
               }}>
-                Total: <strong style={{ color: '#e5e5e5' }}>{formatCurrency(current.amount, current.currency)}</strong>
+                Total: <strong style={{ color: '#e5e5e5' }}>{formatCurrency(current.currency === 'USD' && current.amountUsd ? current.amountUsd : current.amount, current.currency)}</strong>
                 {' · '}{current.name}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -774,13 +774,13 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                     padding: '10px 12px', backgroundColor: idx === 0 ? '#1a2a1a' : '#111',
                     borderRadius: 10, border: '1px solid #2a2a2a',
                   }}>
-                    <span style={{ fontSize: 13, color: '#71717a', width: 20, flexShrink: 0 }}>{idx + 1}</span>
+                    <span style={{ fontSize: 13, color: '#a1a1aa', width: 20, flexShrink: 0 }}>{idx + 1}</span>
                     <input value={item.name} onChange={e => updateSplitItem(idx, 'name', e.target.value)}
                       placeholder="Descripción" style={{ ...inputStyle, height: 40, fontSize: 14, flex: 2 }} />
                     <input value={item.amount} onChange={e => updateSplitItem(idx, 'amount', e.target.value)}
                       placeholder="0" inputMode="decimal" readOnly={idx === 0}
                       style={{ ...inputStyle, height: 40, fontSize: 14, flex: 1, textAlign: 'right',
-                        ...(idx === 0 ? { backgroundColor: '#0a0a0a', color: '#71717a' } : {}),
+                        ...(idx === 0 ? { backgroundColor: '#0a0a0a', color: '#a1a1aa' } : {}),
                       }} />
                   </div>
                 ))}

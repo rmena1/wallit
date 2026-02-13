@@ -336,7 +336,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
               <>
                 {/* From Account */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Desde cuenta</label>
+                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Desde cuenta</label>
                   <select 
                     value={fromAccountId} 
                     onChange={e => { setFromAccountId(e.target.value); clearFieldError('fromAccountId') }}
@@ -363,7 +363,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* To Account */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Hacia cuenta</label>
+                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Hacia cuenta</label>
                   <select 
                     value={toAccountId} 
                     onChange={e => { setToAccountId(e.target.value); clearFieldError('toAccountId') }}
@@ -391,7 +391,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                 {/* Amount(s) */}
                 <div style={{ display: 'flex', gap: 12 }}>
                   <div style={{ flex: 1 }}>
-                    <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>
+                    <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>
                       Monto origen {fromCurrency && `(${fromCurrency})`}
                     </label>
                     <input
@@ -416,7 +416,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                   </div>
                   {currenciesDiffer && (
                     <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>
+                      <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>
                         Monto destino ({toCurrency})
                       </label>
                       <input
@@ -444,15 +444,15 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* Exchange rate hint */}
                 {currenciesDiffer && exchangeRate && (
-                  <div style={{ fontSize: 12, color: '#71717a', marginTop: -8 }}>
+                  <div style={{ fontSize: 12, color: '#a1a1aa', marginTop: -8 }}>
                     💱 Tipo de cambio: 1 USD = {(exchangeRate / 100).toFixed(2)} CLP
-                    <span style={{ color: '#52525b' }}> (puedes ajustar el monto destino)</span>
+                    <span style={{ color: '#9ca3af' }}> (puedes ajustar el monto destino)</span>
                   </div>
                 )}
 
                 {/* Date */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Fecha</label>
+                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Fecha</label>
                   <input
                     type="date" 
                     value={date}
@@ -473,7 +473,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* Note (optional) */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Nota (opcional)</label>
+                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Nota (opcional)</label>
                   <input
                     type="text" 
                     placeholder="ej: Pago tarjeta de crédito"
@@ -489,7 +489,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
               <>
                 {/* Account selector */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Cuenta</label>
+                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Cuenta</label>
                   <select 
                     name="accountId"
                     value={accountId} 
@@ -517,7 +517,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* Name */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Descripción</label>
+                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Descripción</label>
                   <input
                     type="text" 
                     placeholder="¿En qué se gastó?"
@@ -541,7 +541,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                 {/* Amount + Currency */}
                 <div style={{ display: 'flex', gap: 12 }}>
                   <div style={{ flex: 2 }}>
-                    <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>{currency === 'USD' ? 'Monto pesos' : 'Monto'}</label>
+                    <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>{currency === 'USD' ? 'Monto pesos' : 'Monto'}</label>
                     <input
                       type="text" 
                       placeholder="0.00"
@@ -563,7 +563,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                     )}
                   </div>
                   <div style={{ flex: 1 }}>
-                    <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Moneda</label>
+                    <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Moneda</label>
                     <select name="currency" value={currency} onChange={e => setCurrency(e.target.value as 'CLP' | 'USD')} style={selectStyle}>
                       <option value="CLP">CLP</option>
                       <option value="USD">USD</option>
@@ -574,7 +574,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                 {/* Date + Time */}
                 <div style={{ display: 'flex', gap: 12 }}>
                   <div style={{ flex: 2 }}>
-                    <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Fecha</label>
+                    <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Fecha</label>
                     <input
                       type="date" 
                       value={date}
@@ -593,7 +593,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                     )}
                   </div>
                   <div style={{ flex: 1 }}>
-                    <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Hora</label>
+                    <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Hora</label>
                     <input
                       name="time"
                       type="time"
@@ -606,7 +606,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* Category */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Categoría</label>
+                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Categoría</label>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <select 
                       name="categoryId" 

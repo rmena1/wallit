@@ -76,7 +76,7 @@ export function CreateCategoryDialog({ open, onClose, onCreated }: Props) {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
-            <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Emoji</label>
+            <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Emoji</label>
             <input
               value={emoji} onChange={e => setEmoji(e.target.value)}
               placeholder="🍕" autoFocus
@@ -84,7 +84,7 @@ export function CreateCategoryDialog({ open, onClose, onCreated }: Props) {
             />
           </div>
           <div>
-            <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>Nombre</label>
+            <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Nombre</label>
             <input
               value={name} onChange={e => setName(e.target.value)}
               placeholder="Comida"

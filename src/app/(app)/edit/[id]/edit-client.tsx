@@ -48,7 +48,7 @@ const selectStyle: React.CSSProperties = {
   backgroundSize: '16px',
 }
 
-const labelStyle: React.CSSProperties = { fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }
+const labelStyle: React.CSSProperties = { fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }
 
 function centsToDisplay(cents: number): string {
   return (cents / 100).toString()
@@ -336,7 +336,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                   backgroundColor: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '#27272a' : 'transparent',
                   color: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) 
                     ? (t === 'expense' ? '#f87171' : t === 'income' ? '#4ade80' : '#60a5fa') 
-                    : '#52525b',
+                    : '#9ca3af',
                   boxShadow: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
                   transition: 'all 0.2s ease',
                 }}>
@@ -389,7 +389,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                       style={inputStyle}
                     />
                     {exchangeRate && (
-                      <div style={{ fontSize: 11, color: '#71717a', marginTop: 4 }}>
+                      <div style={{ fontSize: 11, color: '#a1a1aa', marginTop: 4 }}>
                         💱 Tipo de cambio: 1 USD = {(exchangeRate / 100).toFixed(2)} CLP
                       </div>
                     )}
@@ -478,7 +478,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                 <label style={labelStyle}>Nombre original</label>
                 <div style={{
                   padding: '12px 14px', borderRadius: 12, backgroundColor: '#111',
-                  border: '1px solid #2a2a2a', fontSize: 14, color: '#71717a',
+                  border: '1px solid #2a2a2a', fontSize: 14, color: '#a1a1aa',
                 }}>
                   {movement.originalName}
                 </div>
@@ -674,7 +674,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                 fontSize: 14, color: '#a1a1aa', marginBottom: 16,
                 padding: '8px 12px', backgroundColor: '#111', borderRadius: 8,
               }}>
-                Total: <strong style={{ color: '#e5e5e5' }}>{formatCurrency(movement.amount, movement.currency)}</strong>
+                Total: <strong style={{ color: '#e5e5e5' }}>{formatCurrency(movement.currency === 'USD' && movement.amountUsd ? movement.amountUsd : movement.amount, movement.currency)}</strong>
                 {' · '}{movement.name}
               </div>
 
@@ -685,7 +685,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                     padding: '10px 12px', backgroundColor: idx === 0 ? '#1a2a1a' : '#111',
                     borderRadius: 10, border: '1px solid #2a2a2a',
                   }}>
-                    <span style={{ fontSize: 13, color: '#71717a', width: 20, flexShrink: 0 }}>{idx + 1}</span>
+                    <span style={{ fontSize: 13, color: '#a1a1aa', width: 20, flexShrink: 0 }}>{idx + 1}</span>
                     <input
                       value={item.name}
                       onChange={e => updateSplitItem(idx, 'name', e.target.value)}
@@ -700,7 +700,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                       readOnly={idx === 0}
                       style={{
                         ...inputStyle, height: 40, fontSize: 14, flex: 1, textAlign: 'right',
-                        ...(idx === 0 ? { backgroundColor: '#0a0a0a', color: '#71717a' } : {}),
+                        ...(idx === 0 ? { backgroundColor: '#0a0a0a', color: '#a1a1aa' } : {}),
                       }}
                     />
                   </div>

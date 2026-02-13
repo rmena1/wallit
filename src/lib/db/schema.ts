@@ -48,6 +48,9 @@ export const accounts = sqliteTable('accounts', {
   accountType: text('account_type').notNull(),
   lastFourDigits: text('last_four_digits').notNull(),
   initialBalance: integer('initial_balance').notNull().default(0), // cents
+  isInvestment: integer('is_investment', { mode: 'boolean' }).notNull().default(false),
+  currentValue: integer('current_value'), // cents, nullable
+  currentValueUpdatedAt: integer('current_value_updated_at', { mode: 'timestamp' }), // nullable
   currency: text('currency', { enum: ['CLP', 'USD'] }).notNull().default('CLP'),
   color: text('color'), // hex color like "#4F46E5"
   emoji: text('emoji'), // emoji character like "💳"
@@ -55,6 +58,21 @@ export const accounts = sqliteTable('accounts', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, (table) => [
   index('idx_accounts_user').on(table.userId),
+])
+
+// ============================================================================
+// INVESTMENT SNAPSHOTS
+// ============================================================================
+export const investmentSnapshots = sqliteTable('investment_snapshots', {
+  id: text('id').primaryKey(), // nanoid
+  accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  value: integer('value').notNull(), // cents
+  date: text('date').notNull(), // YYYY-MM-DD
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  index('idx_snapshots_account').on(table.accountId),
+  index('idx_snapshots_user').on(table.userId),
 ])
 
 // ============================================================================
@@ -118,6 +136,9 @@ export type NewCategory = typeof categories.$inferInsert
 
 export type Account = typeof accounts.$inferSelect
 export type NewAccount = typeof accounts.$inferInsert
+
+export type InvestmentSnapshot = typeof investmentSnapshots.$inferSelect
+export type NewInvestmentSnapshot = typeof investmentSnapshots.$inferInsert
 
 export type Movement = typeof movements.$inferSelect
 export type NewMovement = typeof movements.$inferInsert

@@ -73,6 +73,8 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
   const [accountError, setAccountError] = useState<string | null>(null)
   const [deletingAccountId, setDeletingAccountId] = useState<string | null>(null)
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null)
+  const [newAccountIsInvestment, setNewAccountIsInvestment] = useState(false)
+  const [editingAccountIsInvestment, setEditingAccountIsInvestment] = useState<Record<string, boolean>>({})
   const [showAddAccount, setShowAddAccount] = useState(accounts.length === 0)
   const [categoryLoading, setCategoryLoading] = useState(false)
   const [categoryError, setCategoryError] = useState<string | null>(null)
@@ -91,6 +93,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
         setAccountError(result.error || 'Error al crear cuenta')
       } else {
         form.reset()
+        setNewAccountIsInvestment(false)
         setShowAddAccount(false)
       }
     } catch {
@@ -107,11 +110,19 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
     try {
       const form = e.currentTarget
       const formData = new FormData(form)
+      const updatedId = formData.get('id') as string | null
       const result = await updateAccount(formData)
       if (!result.success) {
         setAccountError(result.error || 'Error al actualizar cuenta')
       } else {
         setEditingAccountId(null)
+        if (updatedId) {
+          setEditingAccountIsInvestment((prev) => {
+            const next = { ...prev }
+            delete next[updatedId]
+            return next
+          })
+        }
       }
     } catch {
       setAccountError('Ocurrió un error')
@@ -198,9 +209,9 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
       <main style={{ maxWidth: 540, margin: '0 auto', padding: '16px 16px 96px' }}>
         {/* Accounts Section */}
         <div style={{
-          backgroundColor: '#1a1a1a', borderRadius: 16,
+          backgroundColor: '#1a1a2e', borderRadius: 16,
           padding: 16, marginBottom: 20,
-          border: '1px solid #2a2a2a',
+          border: '1px solid #2f2f4a',
         }}>
           <h2 style={{ fontSize: 16, fontWeight: 600, color: '#e5e5e5', margin: '0 0 14px' }}>
             🏦 Cuentas Bancarias
@@ -235,8 +246,8 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
           ) : (
           <form onSubmit={handleAccountSubmit} style={{
             marginBottom: 16,
-            backgroundColor: '#111111', borderRadius: 12, padding: 14,
-            border: '1px solid #3f3f46',
+            backgroundColor: '#121225', borderRadius: 12, padding: 14,
+            border: '1px solid #3f3f62',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: '#a1a1aa' }}>Nueva cuenta</span>
@@ -245,7 +256,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                   type="button"
                   onClick={() => setShowAddAccount(false)}
                   style={{
-                    background: 'none', border: 'none', color: '#71717a',
+                    background: 'none', border: 'none', color: '#a1a1aa',
                     fontSize: 13, cursor: 'pointer', padding: '2px 0',
                   }}
                 >
@@ -268,10 +279,31 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                 ))}
               </select>
 
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                backgroundColor: '#1a1a2e', border: '1px solid #323251',
+                borderRadius: 10, padding: '10px 12px', color: '#d4d4d8',
+                fontSize: 13, fontWeight: 500, cursor: 'pointer',
+              }}>
+                <input
+                  name="isInvestment"
+                  type="checkbox"
+                  checked={newAccountIsInvestment}
+                  onChange={(e) => setNewAccountIsInvestment(e.target.checked)}
+                  style={{ width: 16, height: 16, margin: 0 }}
+                />
+                Investment account
+              </label>
+
               <div style={{ display: 'flex', gap: 8 }}>
                 <input
-                  name="lastFourDigits" type="text" placeholder="Últimos 4 dígitos"
-                  required maxLength={4} pattern="\d{4}" inputMode="numeric"
+                  name="lastFourDigits"
+                  type="text"
+                  placeholder={newAccountIsInvestment ? 'Últimos 4 dígitos (opcional)' : 'Últimos 4 dígitos'}
+                  required={!newAccountIsInvestment}
+                  maxLength={4}
+                  pattern="\d{4}"
+                  inputMode="numeric"
                   style={{ ...inputStyle, flex: 1 }}
                 />
                 <select name="currency" defaultValue="CLP" style={{ ...selectStyle, flex: 1 }}>
@@ -282,7 +314,9 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
 
               <div style={{ display: 'flex', gap: 8 }}>
                 <input
-                  name="initialBalance" type="text" placeholder="Saldo inicial"
+                  name="initialBalance"
+                  type="text"
+                  placeholder={newAccountIsInvestment ? 'Current invested value' : 'Saldo inicial'}
                   inputMode="decimal"
                   style={{ ...inputStyle, flex: 1 }}
                 />
@@ -315,7 +349,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
 
           {/* Account List */}
           {accounts.length === 0 ? (
-            <div style={{ textAlign: 'center', color: '#52525b', padding: '16px 0', fontSize: 13 }}>
+            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '16px 0', fontSize: 13 }}>
               Sin cuentas aún
             </div>
           ) : (
@@ -324,12 +358,13 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                 const balanceData = accountBalances.find(b => b.id === acc.id)
                 const balance = balanceData?.balance ?? 0
                 const isEditing = editingAccountId === acc.id
+                const isEditingInvestment = editingAccountIsInvestment[acc.id] ?? acc.isInvestment
 
                 if (isEditing) {
                   return (
                     <form key={acc.id} onSubmit={handleAccountUpdate} style={{
-                      backgroundColor: '#111111', borderRadius: 12,
-                      padding: 12, border: '1px solid #3f3f46',
+                      backgroundColor: '#121225', borderRadius: 12,
+                      padding: 12, border: '1px solid #3f3f62',
                     }}>
                       <input type="hidden" name="id" value={acc.id} />
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -343,11 +378,31 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                             <option key={type} value={type}>{type}</option>
                           ))}
                         </select>
+                        <label style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          backgroundColor: '#1a1a2e', border: '1px solid #323251',
+                          borderRadius: 10, padding: '10px 12px', color: '#d4d4d8',
+                          fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                        }}>
+                          <input
+                            name="isInvestment"
+                            type="checkbox"
+                            checked={isEditingInvestment}
+                            onChange={(e) => setEditingAccountIsInvestment((prev) => ({ ...prev, [acc.id]: e.target.checked }))}
+                            style={{ width: 16, height: 16, margin: 0 }}
+                          />
+                          Investment account
+                        </label>
                         <div style={{ display: 'flex', gap: 8 }}>
                           <input
-                            name="lastFourDigits" type="text" defaultValue={acc.lastFourDigits}
-                            required maxLength={4} pattern="\d{4}" inputMode="numeric"
-                            placeholder="Últimos 4 dígitos"
+                            name="lastFourDigits"
+                            type="text"
+                            defaultValue={acc.lastFourDigits}
+                            required={!isEditingInvestment}
+                            maxLength={4}
+                            pattern="\d{4}"
+                            inputMode="numeric"
+                            placeholder={isEditingInvestment ? 'Últimos 4 dígitos (opcional)' : 'Últimos 4 dígitos'}
                             style={{ ...inputStyle, flex: 1 }}
                           />
                           <select name="currency" defaultValue={acc.currency} style={{ ...selectStyle, flex: 1 }}>
@@ -359,7 +414,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                           <input
                             name="initialBalance" type="text"
                             defaultValue={(acc.initialBalance / 100).toFixed(2)}
-                            inputMode="decimal" placeholder="Saldo inicial"
+                            inputMode="decimal" placeholder={isEditingInvestment ? 'Current invested value' : 'Saldo inicial'}
                             style={{ ...inputStyle, flex: 1 }}
                           />
                           <input
@@ -384,7 +439,14 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                           </button>
                           <button
                             type="button"
-                            onClick={() => setEditingAccountId(null)}
+                            onClick={() => {
+                              setEditingAccountId(null)
+                              setEditingAccountIsInvestment((prev) => {
+                                const next = { ...prev }
+                                delete next[acc.id]
+                                return next
+                              })
+                            }}
                             style={{
                               flex: 1, height: 38, borderRadius: 8,
                               border: '1px solid #2a2a2a', backgroundColor: '#1a1a1a',
@@ -402,9 +464,9 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                 return (
                   <div key={acc.id} style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    backgroundColor: '#111111', borderRadius: 12,
+                    backgroundColor: '#121225', borderRadius: 12,
                     padding: '12px 14px',
-                    border: '1px solid #2a2a2a',
+                    border: '1px solid #2f2f4a',
                     opacity: deletingAccountId === acc.id ? 0.4 : 1,
                   }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -414,13 +476,13 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                           <div style={{ fontSize: 14, fontWeight: 600, color: acc.color || '#e5e5e5' }}>
                             {acc.bankName}
                           </div>
-                          <div style={{ fontSize: 12, color: '#71717a' }}>
-                            {acc.accountType} · ···{acc.lastFourDigits} · {acc.currency}
+                          <div style={{ fontSize: 12, color: '#a1a1aa' }}>
+                            {acc.accountType} · ···{acc.lastFourDigits} · {acc.currency}{acc.isInvestment ? ' · Inversión' : ''}
                           </div>
                         </div>
                       </div>
                       <div style={{ marginTop: 6, display: 'flex', gap: 12 }}>
-                        <div style={{ fontSize: 12, color: '#52525b' }}>
+                        <div style={{ fontSize: 12, color: '#9ca3af' }}>
                           Saldo inicial: {formatCurrency(acc.initialBalance, acc.currency)}
                         </div>
                         <div style={{
@@ -433,10 +495,13 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                     </div>
                     <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
                       <button
-                        onClick={() => setEditingAccountId(acc.id)}
+                        onClick={() => {
+                          setEditingAccountId(acc.id)
+                          setEditingAccountIsInvestment((prev) => ({ ...prev, [acc.id]: acc.isInvestment }))
+                        }}
                         style={{
                           background: 'none', border: 'none',
-                          color: '#71717a', cursor: 'pointer', padding: 6,
+                          color: '#a1a1aa', cursor: 'pointer', padding: 6,
                         }}
                       >
                         <EditIcon />
@@ -446,7 +511,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                         disabled={deletingAccountId === acc.id}
                         style={{
                           background: 'none', border: 'none',
-                          color: '#52525b', cursor: 'pointer', padding: 6,
+                          color: '#9ca3af', cursor: 'pointer', padding: 6,
                         }}
                       >
                         <TrashIcon />
@@ -509,7 +574,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
           </form>
 
           {categories.length === 0 ? (
-            <div style={{ textAlign: 'center', color: '#52525b', padding: '16px 0', fontSize: 13 }}>
+            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '16px 0', fontSize: 13 }}>
               Sin categorías aún
             </div>
           ) : (
@@ -582,7 +647,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                         onClick={(e) => { e.stopPropagation(); setEditingCategoryId(cat.id) }}
                         style={{
                           background: 'none', border: 'none',
-                          color: '#71717a', cursor: 'pointer', padding: 6,
+                          color: '#a1a1aa', cursor: 'pointer', padding: 6,
                         }}
                       >
                         <EditIcon />
@@ -592,7 +657,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                         disabled={deletingCategoryId === cat.id}
                         style={{
                           background: 'none', border: 'none',
-                          color: '#52525b', cursor: 'pointer', padding: 6,
+                          color: '#9ca3af', cursor: 'pointer', padding: 6,
                         }}
                       >
                         <TrashIcon />

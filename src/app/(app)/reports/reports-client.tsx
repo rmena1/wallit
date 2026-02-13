@@ -428,7 +428,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                   flex: 1, backgroundColor: '#1a1a1a', borderRadius: 14,
                   padding: '14px 8px', border: '1px solid #2a2a2a', textAlign: 'center',
                 }}>
-                  <div style={{ fontSize: 11, color: '#71717a', marginBottom: 4 }}>{c.label}</div>
+                  <div style={{ fontSize: 11, color: '#a1a1aa', marginBottom: 4 }}>{c.label}</div>
                   <div style={{ fontSize: 16, fontWeight: 700, color: c.color }}>{formatCurrency(Math.abs(c.value), 'CLP')}</div>
                 </div>
               ))}
@@ -445,7 +445,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                 )}
               </div>
               {expenseChart.data.every(d => !d.actual) ? (
-                <div style={{ textAlign: 'center', color: '#52525b', padding: '32px 0', fontSize: 13 }}>
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '32px 0', fontSize: 13 }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>📉</div>
                   Sin gastos en este período
                 </div>
@@ -470,7 +470,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
             <div style={cardStyle}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: '0 0 12px' }}>📈 Ingresos</h2>
               {incomeChart.every(d => d.income === 0 || d.income === null) ? (
-                <div style={{ textAlign: 'center', color: '#52525b', padding: '32px 0', fontSize: 13 }}>
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '32px 0', fontSize: 13 }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>📈</div>
                   Sin ingresos en este período
                 </div>
@@ -493,7 +493,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
             <div style={cardStyle}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: '0 0 12px' }}>💰 Balance</h2>
               {balanceChart.every(d => d.balance === 0 || d.balance === null) ? (
-                <div style={{ textAlign: 'center', color: '#52525b', padding: '32px 0', fontSize: 13 }}>
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '32px 0', fontSize: 13 }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>💰</div>
                   Sin movimientos en este período
                 </div>
@@ -517,7 +517,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
             <div style={cardStyle}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: '0 0 14px' }}>Gastos por Categoría</h2>
               {data.categorySpending.length === 0 ? (
-                <div style={{ textAlign: 'center', color: '#52525b', padding: '20px 0', fontSize: 13 }}>Sin gastos en este período</div>
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '20px 0', fontSize: 13 }}>Sin gastos en este período</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {data.categorySpending.map((cat, i) => {
@@ -528,7 +528,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <span style={{ fontSize: 16 }}>{cat.emoji}</span>
                             <span style={{ fontSize: 14, color: '#d4d4d8' }}>{cat.name}</span>
-                            <span style={{ fontSize: 11, color: '#52525b' }}>({cat.count})</span>
+                            <span style={{ fontSize: 11, color: '#9ca3af' }}>({cat.count})</span>
                           </div>
                           <span style={{ fontSize: 14, fontWeight: 600, color: '#f87171' }}>{formatCurrency(cat.total, 'CLP')}</span>
                         </div>

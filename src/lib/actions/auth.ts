@@ -92,6 +92,10 @@ export async function register(formData: FormData): Promise<AuthActionResult> {
   redirect('/')
 }
 
+// Dummy hash for timing-safe login (prevents email enumeration via timing side-channel)
+// Pre-computed bcrypt hash of a random password with cost factor 12
+const DUMMY_HASH = '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4.VTtYxq.tVqJ9Xu'
+
 /**
  * Log in an existing user
  */
@@ -128,16 +132,12 @@ export async function login(formData: FormData): Promise<AuthActionResult> {
     .where(eq(users.email, email.toLowerCase()))
     .limit(1)
   
-  if (user.length === 0) {
-    return {
-      success: false,
-      error: 'Invalid email or password',
-    }
-  }
+  // SECURITY: Always run bcrypt verification to prevent timing-based email enumeration.
+  // If user doesn't exist, verify against a dummy hash to maintain consistent timing.
+  const hashToVerify = user.length > 0 ? user[0].passwordHash : DUMMY_HASH
+  const isValid = await verifyPassword(password, hashToVerify)
   
-  // Verify password
-  const isValid = await verifyPassword(password, user[0].passwordHash)
-  if (!isValid) {
+  if (user.length === 0 || !isValid) {
     return {
       success: false,
       error: 'Invalid email or password',

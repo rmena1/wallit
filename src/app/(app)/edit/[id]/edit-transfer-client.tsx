@@ -42,7 +42,7 @@ const inputStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 }
 
-const labelStyle: React.CSSProperties = { fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }
+const labelStyle: React.CSSProperties = { fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }
 
 function centsToDisplay(cents: number): string {
   return (cents / 100).toString()
@@ -195,7 +195,7 @@ export function EditTransferClient({ transfer, accounts }: Props) {
             <span style={{ fontSize: 24 }}>↔️</span>
             <div>
               <div style={{ fontSize: 15, fontWeight: 600, color: '#60a5fa' }}>Transferencia entre cuentas</div>
-              <div style={{ fontSize: 12, color: '#71717a' }}>
+              <div style={{ fontSize: 12, color: '#a1a1aa' }}>
                 {fromAccount?.emoji || '🏦'} {fromAccount?.bankName} → {toAccount?.emoji || '🏦'} {toAccount?.bankName}
               </div>
             </div>
@@ -228,7 +228,7 @@ export function EditTransferClient({ transfer, accounts }: Props) {
 
             {/* Exchange rate hint */}
             {currenciesDiffer && exchangeRate && (
-              <div style={{ fontSize: 12, color: '#71717a', marginTop: -8 }}>
+              <div style={{ fontSize: 12, color: '#a1a1aa', marginTop: -8 }}>
                 💱 Tipo de cambio: 1 USD = {(exchangeRate / 100).toFixed(2)} CLP
               </div>
             )}

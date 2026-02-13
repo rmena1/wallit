@@ -69,7 +69,7 @@ export function BottomNav() {
               gap: 2,
               padding: '6px 12px',
               textDecoration: 'none',
-              color: isActive ? '#4ade80' : '#71717a',
+              color: isActive ? '#4ade80' : '#a1a1aa',
               transition: 'color 0.2s ease',
               minWidth: 60,
             }}
