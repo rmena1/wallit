@@ -120,7 +120,7 @@ export default async function Home() {
 
   const totals = totalsResult[0] || { totalIncome: 0, totalExpense: 0 }
   const pendingReviewCount = reviewResult[0]?.count ?? 0
-  const netLiquidity: NetLiquidityData = await getNetLiquidity(usdClpRate ? usdClpRate / 100 : undefined)
+  const netLiquidity: NetLiquidityData = await getNetLiquidity(usdClpRate ? usdClpRate / 100 : undefined, accountBalances)
   const serializedAccountBalances: AccountWithBalanceSerialized[] = accountBalances.map((account) => ({
     ...account,
     currentValueUpdatedAt: account.currentValueUpdatedAt?.toISOString() ?? null,

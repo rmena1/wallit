@@ -45,6 +45,18 @@ export async function createMovement(formData: FormData): Promise<MovementAction
   if (!ownedAccount) {
     return { success: false, error: 'Invalid account' }
   }
+
+  // Verify category belongs to the current user (IDOR protection)
+  if (categoryId) {
+    const [ownedCategory] = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(and(eq(categories.id, categoryId), eq(categories.userId, session.id)))
+      .limit(1)
+    if (!ownedCategory) {
+      return { success: false, error: 'Invalid category' }
+    }
+  }
   
   // Validate input
   const parsed = createMovementSchema.safeParse(rawData)

@@ -1,1 +1,0 @@
-["rev-convert-1771025142240",{"name":"Pago tarjeta BCI","date":"2026-02-13","amount":5000000,"type":"expense","currency":"CLP","accountId":"1h1vfbo3sb40s5jfcix5r","categoryId":null,"amountUsd":null,"exchangeRate":null,"time":null}]

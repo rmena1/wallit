@@ -1,1 +1,0 @@
-["sy27i1lvlc3fyzre7xjy6",{"name":"Gasto para editar","date":"2026-02-13","amount":2500000,"type":"expense","currency":"CLP","accountId":"cynxa1lh5d1ih0u02g9cd","categoryId":null,"amountUsd":null,"exchangeRate":null,"time":null}]

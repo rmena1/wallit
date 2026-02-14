@@ -1,1 +1,0 @@
-["3z1ye95xhecoq4mcarslk",{"name":"Ingreso actualizado","date":"2026-02-12","amount":5000000,"type":"income","currency":"CLP","accountId":"ue6wmcnao2sxhghxt9gqc","categoryId":"o77gx9tp4c4kzzrvhp3a0","amountUsd":null,"exchangeRate":null,"time":"14:30"}]

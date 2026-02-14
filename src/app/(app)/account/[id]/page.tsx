@@ -1,7 +1,7 @@
 import { getSession } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import { db, accounts, movements, categories } from '@/lib/db'
-import { eq, and, desc, asc, sql, isNotNull } from 'drizzle-orm'
+import { eq, and, desc, asc, sql, isNotNull, gte } from 'drizzle-orm'
 import dynamic from 'next/dynamic'
 import { getAccountBalances } from '@/lib/actions/balances'
 import { getInvestmentSummary, getInvestmentSnapshots } from '@/lib/actions/investments'
@@ -134,8 +134,9 @@ export default async function AccountDetailPage({ params }: Props) {
   if (account.isInvestment && investmentSnapshots.length > 0) {
     balanceHistory = [...investmentSnapshots].reverse().map((s) => ({ date: s.date, balance: s.value }))
   } else {
-    // Get all movements sorted by date asc for balance history
-    const allMovements = await db.select({ date: movements.date, amount: movements.amount, type: movements.type, amountUsd: movements.amountUsd }).from(movements).where(and(eq(movements.accountId, id), eq(movements.userId, session.id))).orderBy(asc(movements.date), asc(movements.createdAt))
+    // Get movements from last 180 days sorted by date asc for balance history
+    const cutoffDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const allMovements = await db.select({ date: movements.date, amount: movements.amount, type: movements.type, amountUsd: movements.amountUsd }).from(movements).where(and(eq(movements.accountId, id), eq(movements.userId, session.id), gte(movements.date, cutoffDate))).orderBy(asc(movements.date), asc(movements.createdAt))
     let running = account.initialBalance
     const byDate = new Map<string, number>()
     for (const m of allMovements) {

@@ -1,1 +1,0 @@
-[{"movementId":"rev-convert-1771025142240","toAccountId":"cd5y0ceiv6zg8flze6vg7","toAmount":5000000,"toCurrency":"CLP","note":"Test transfer from review"}]

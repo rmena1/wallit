@@ -217,6 +217,27 @@ export async function splitMovement(originalId: string, splits: { name: string; 
     return { success: false, error: 'Split amounts must equal the original amount' }
   }
   
+  // Calculate amountUsd for each split with remainder-based rounding
+  // This ensures the sum of split USD amounts equals the original exactly
+  let usdSplits: (number | null)[] = []
+  if (original.currency === 'USD' && original.amountUsd) {
+    const originalUsd = original.amountUsd
+    let usdAllocated = 0
+    for (let i = 0; i < splits.length; i++) {
+      if (i === splits.length - 1) {
+        // Last split gets the remainder to ensure exact sum
+        usdSplits.push(originalUsd - usdAllocated)
+      } else {
+        const proportion = totalOriginal !== 0 ? splits[i].amount / totalOriginal : 0
+        const usdAmount = Math.round(originalUsd * proportion)
+        usdSplits.push(usdAmount)
+        usdAllocated += usdAmount
+      }
+    }
+  } else {
+    usdSplits = splits.map(() => null)
+  }
+
   // Use a transaction to ensure atomicity — if any insert fails,
   // the original movement is preserved (no data loss)
   // Note: better-sqlite3 is synchronous, so no async/await inside transaction
@@ -225,8 +246,8 @@ export async function splitMovement(originalId: string, splits: { name: string; 
     tx.delete(movements).where(eq(movements.id, originalId)).run()
     
     // Create split movements
-    for (const split of splits) {
-      const proportion = totalOriginal !== 0 ? split.amount / totalOriginal : 0
+    for (let i = 0; i < splits.length; i++) {
+      const split = splits[i]
       tx.insert(movements).values({
         id: generateId(),
         userId: session.id,
@@ -237,9 +258,7 @@ export async function splitMovement(originalId: string, splits: { name: string; 
         amount: split.amount,
         type: original.type,
         currency: original.currency,
-        amountUsd: original.currency === 'USD' && original.amountUsd
-          ? Math.round(original.amountUsd * proportion)
-          : null,
+        amountUsd: usdSplits[i],
         exchangeRate: original.exchangeRate,
         time: original.time,
         originalName: original.originalName,

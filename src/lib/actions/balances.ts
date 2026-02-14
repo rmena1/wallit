@@ -97,8 +97,8 @@ export interface NetLiquidityData {
   netLiquidity: number // debitBalance + receivables - creditDebt
 }
 
-export async function getNetLiquidity(usdToClpRate?: number): Promise<NetLiquidityData> {
-  const accountBalances = await getAccountBalances()
+export async function getNetLiquidity(usdToClpRate?: number, precomputedBalances?: AccountWithBalance[]): Promise<NetLiquidityData> {
+  const accountBalances = precomputedBalances ?? await getAccountBalances()
   // Support both Spanish types (current) and English types (legacy)
   const debitTypes = ['Corriente', 'Vista', 'Ahorro', 'Prepago', 'debit']
   const creditTypes = ['Crédito', 'credit']

@@ -1,8 +1,0 @@
-1:"$Sreact.fragment"
-2:I[97367,["/_next/static/chunks/ff1a16fafef87110.js","/_next/static/chunks/a2dfb6fc5208ab9b.js"],"ViewportBoundary"]
-4:I[97367,["/_next/static/chunks/ff1a16fafef87110.js","/_next/static/chunks/a2dfb6fc5208ab9b.js"],"MetadataBoundary"]
-5:"$Sreact.suspense"
-0:{"b":"QahjttS7lcncYG-oj-cyR","f":[[["",{"children":["(app)",{"children":["__PAGE__",{}]}]},"$undefined","$undefined",true],null,["$","$1","h",{"children":[null,["$","$L2","QdSJGN8TU9aUF3OOdbiO7v",{"children":"$L3"}],["$","div","QdSJGN8TU9aUF3OOdbiO7m",{"hidden":true,"children":["$","$L4",null,{"children":["$","$5",null,{"name":"Next.Metadata","children":"$L6"}]}]}]]}],false]],"q":"","i":false,"S":false}
-3:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no"}],["$","meta","2",{"name":"theme-color","content":"#0a0a0a"}]]
-7:I[27201,["/_next/static/chunks/ff1a16fafef87110.js","/_next/static/chunks/a2dfb6fc5208ab9b.js"],"IconMark"]
-6:[["$","title","0",{"children":"wallit"}],["$","meta","1",{"name":"description","content":"Simple expense tracking"}],["$","link","2",{"rel":"icon","href":"/favicon.svg","type":"image/svg+xml"}],["$","link","3",{"rel":"icon","href":"/favicon-32.png","sizes":"32x32","type":"image/png"}],["$","link","4",{"rel":"apple-touch-icon","href":"/apple-touch-icon.png"}],["$","$L7","5",{}]]

@@ -1,1 +1,0 @@
-["mov-convert-1771025147054",{"name":"Transferencia manual","date":"2026-02-13","amount":10000000,"type":"expense","currency":"CLP","accountId":"kqdlkqmf302dhcracurh6","categoryId":null,"amountUsd":null,"exchangeRate":null,"time":null}]
