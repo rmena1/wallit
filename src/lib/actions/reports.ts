@@ -35,6 +35,7 @@ export async function getReportData(
     sql`(${movements.receivable} = 0 OR ${movements.receivable} IS NULL)`,
     sql`${movements.receivableId} IS NULL`,
     sql`${movements.transferId} IS NULL`, // Exclude transfers from reports
+    sql`(${movements.emergency} = 0 OR ${movements.emergency} IS NULL)`, // Exclude emergency expenses
   ]
   if (categoryId) filters.push(sql`${movements.categoryId} = ${categoryId}`)
   if (accountId) filters.push(sql`${movements.accountId} = ${accountId}`)

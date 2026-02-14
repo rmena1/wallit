@@ -68,6 +68,7 @@ interface HomePageProps {
   netLiquidity: NetLiquidityData
   userAccounts: UserAccount[]
   recentUnlinkedIncomes: UnlinkedIncome[]
+  unsettledEmergencyCount: number
 }
 
 function TrashIcon() {
@@ -193,7 +194,7 @@ function getAccountIconFromType(accountType: string): string {
 
 const PAGE_SIZE = 20
 
-export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes }: HomePageProps) {
+export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes, unsettledEmergencyCount }: HomePageProps) {
   const router = useRouter()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [receivableFilter, setReceivableFilter] = useState(false)
@@ -355,6 +356,15 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               <span style={{ fontSize: 12, color: '#22c55e', backgroundColor: '#1a2e1a', padding: '2px 8px', borderRadius: 6, fontWeight: 600, marginLeft: 4 }}>
                 USD {formatCurrency(usdClpRate, 'CLP')}
               </span>
+            )}
+            {unsettledEmergencyCount > 0 && (
+              <a href="/emergency" style={{
+                fontSize: 12, color: '#f87171', backgroundColor: '#2a1a1a',
+                padding: '2px 8px', borderRadius: 6, fontWeight: 700, marginLeft: 4,
+                textDecoration: 'none', border: '1px solid #dc262640',
+              }}>
+                🚨{unsettledEmergencyCount}
+              </a>
             )}
           </div>
           <div style={{ position: 'relative' }}>

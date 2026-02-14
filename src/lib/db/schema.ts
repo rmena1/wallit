@@ -100,6 +100,9 @@ export const movements = sqliteTable('movements', {
   // Transfer fields: link two movements as a transfer pair
   transferId: text('transfer_id'), // shared ID between both movements of a transfer (nanoid)
   transferPairId: text('transfer_pair_id'), // ID of the paired movement
+  // Emergency expense fields
+  emergency: integer('emergency', { mode: 'boolean' }).notNull().default(false),
+  emergencySettled: integer('emergency_settled', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, (table) => [
@@ -124,6 +127,22 @@ export const exchangeRates = sqliteTable('exchange_rates', {
 })
 
 // ============================================================================
+// EMERGENCY PAYMENTS
+// ============================================================================
+export const emergencyPayments = sqliteTable('emergency_payments', {
+  id: text('id').primaryKey(),
+  emergencyId: text('emergency_id').notNull().references(() => movements.id, { onDelete: 'cascade' }),
+  fromAccountId: text('from_account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  toAccountId: text('to_account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  amount: integer('amount').notNull(), // cents
+  date: text('date').notNull(), // YYYY-MM-DD
+  transferId: text('transfer_id'), // links to transfer movements created (nullable)
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  index('idx_emergency_payments_emergency').on(table.emergencyId),
+])
+
+// ============================================================================
 // TYPES
 // ============================================================================
 export type User = typeof users.$inferSelect
@@ -146,3 +165,6 @@ export type NewMovement = typeof movements.$inferInsert
 
 export type ExchangeRate = typeof exchangeRates.$inferSelect
 export type NewExchangeRate = typeof exchangeRates.$inferInsert
+
+export type EmergencyPayment = typeof emergencyPayments.$inferSelect
+export type NewEmergencyPayment = typeof emergencyPayments.$inferInsert

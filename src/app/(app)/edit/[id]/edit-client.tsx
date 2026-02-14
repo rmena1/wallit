@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { updateMovement, deleteMovement } from '@/lib/actions/movements'
 import { markAsReceivable, unmarkReceivable, splitMovement } from '@/lib/actions/review'
 import { convertToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
+import { hasEmergencyPayments } from '@/lib/actions/emergency'
 import { formatCurrency, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
@@ -24,6 +25,7 @@ interface MovementData {
   received: boolean
   time: string | null
   originalName: string | null
+  emergency: boolean
 }
 
 interface Props {
@@ -69,6 +71,8 @@ export function EditClient({ movement, accounts, categories }: Props) {
   const [formAmountUsd, setFormAmountUsd] = useState(movement.amountUsd ? centsToDisplay(movement.amountUsd) : '')
   const [formExchangeRate, setFormExchangeRate] = useState(movement.exchangeRate ? (movement.exchangeRate / 100).toString() : '')
   const [formTime, setFormTime] = useState(movement.time ?? '')
+
+  const [formEmergency, setFormEmergency] = useState(movement.emergency)
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReceivable, setShowReceivable] = useState(false)
@@ -118,6 +122,19 @@ export function EditClient({ movement, accounts, categories }: Props) {
       setTransferToAmount(formAmount)
     }
   }, [isTransferMode, formAmount, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
+
+  async function handleToggleEmergency(checked: boolean) {
+    if (!checked && movement.emergency) {
+      // Turning off - check if payments exist
+      const hasPayments = await hasEmergencyPayments(movement.id)
+      if (hasPayments) {
+        setError('No se puede desmarcar: ya existen abonos para este gasto de emergencia')
+        return
+      }
+    }
+    setFormEmergency(checked)
+    setError(null)
+  }
 
   async function handleSave() {
     setLoading(true)
@@ -195,6 +212,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
         amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
         exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
         time: formTime || null,
+        emergency: formEmergency,
       })
       router.push('/')
     } catch {
@@ -504,6 +522,32 @@ export function EditClient({ movement, accounts, categories }: Props) {
                   }}>+</button>
                 </div>
               </div>
+            )}
+
+            {/* Emergency expense checkbox (only for expenses, not transfers) */}
+            {!isTransferMode && formType === 'expense' && (
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                backgroundColor: formEmergency ? '#2a1a1a' : 'transparent',
+                border: formEmergency ? '1px solid #dc2626' : '1px solid #2a2a2a',
+                transition: 'all 0.2s ease',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={formEmergency}
+                  onChange={e => handleToggleEmergency(e.target.checked)}
+                  style={{ width: 18, height: 18, accentColor: '#dc2626', cursor: 'pointer' }}
+                />
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: formEmergency ? '#f87171' : '#e5e5e5' }}>
+                    🚨 Gasto de emergencia
+                  </div>
+                  <div style={{ fontSize: 11, color: '#a1a1aa' }}>
+                    No cuenta en reportes regulares. Se puede saldar parcialmente.
+                  </div>
+                </div>
+              </label>
             )}
           </div>
         </div>

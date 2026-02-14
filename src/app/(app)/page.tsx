@@ -4,6 +4,7 @@ import { db, movements, categories, accounts } from '@/lib/db'
 import { eq, desc, sql, and, isNull, gte } from 'drizzle-orm'
 import { getAccountBalances, getNetLiquidity, type AccountWithBalanceSerialized, type NetLiquidityData } from '@/lib/actions/balances'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
+import { getUnsettledEmergencyCount } from '@/lib/actions/emergency'
 import { HomePage } from './home-client'
 
 export default async function Home() {
@@ -25,6 +26,7 @@ export default async function Home() {
     recentMovements,
     totalsResult,
     reviewResult,
+    unsettledEmergencyCount,
     recentUnlinkedIncomes,
   ] = await Promise.all([
     // Exchange rate - only fetch if needed
@@ -69,8 +71,8 @@ export default async function Home() {
     // Totals (excluding transfers and receivables)
     db
       .select({
-        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
-        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) AND (${movements.transferId} IS NULL) AND (${movements.emergency} = 0 OR ${movements.emergency} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.transferId} IS NULL) AND (${movements.emergency} = 0 OR ${movements.emergency} IS NULL) THEN amount ELSE 0 END), 0)`,
       })
       .from(movements)
       .where(eq(movements.userId, session.id)),
@@ -80,6 +82,9 @@ export default async function Home() {
       .select({ count: sql<number>`COUNT(*)` })
       .from(movements)
       .where(and(eq(movements.userId, session.id), eq(movements.needsReview, true))),
+
+    // Unsettled emergency count
+    getUnsettledEmergencyCount().catch(() => 0),
 
     // Recent unlinked incomes (last 30 days, no receivableId, type=income)
     db
@@ -145,6 +150,7 @@ export default async function Home() {
       netLiquidity={netLiquidity}
       userAccounts={accountBalances.map(a => ({ id: a.id, bankName: a.bankName, lastFourDigits: a.lastFourDigits, emoji: a.emoji }))}
       recentUnlinkedIncomes={recentUnlinkedIncomes}
+      unsettledEmergencyCount={unsettledEmergencyCount}
     />
   )
 }
