@@ -182,9 +182,8 @@ export interface SettleLoanResult {
 export async function settleLoan(
   loanId: string,
   expenseMovementId: string | 'cash',
-  date?: string,
+  date: string,
 ): Promise<SettleLoanResult> {
-  const settleDate = date || new Date().toISOString().slice(0, 10)
   const session = await requireAuth()
 
   const [loan] = await db
@@ -258,6 +257,7 @@ export async function settleLoan(
     .update(movements)
     .set({
       loanId,
+      date,
       updatedAt: new Date(),
     })
     .where(and(eq(movements.id, expenseMovementId), eq(movements.userId, session.id)))

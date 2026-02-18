@@ -636,7 +636,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                   <select value={formAccountId} onChange={e => setFormAccountId(e.target.value)} style={selectStyle}>
                     <option value="">Sin cuenta</option>
                     {accounts.map(a => (
-                      <option key={a.id} value={a.id}>{a.emoji || '🏦'} ···{a.lastFourDigits}</option>
+                      <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} ···{a.lastFourDigits}</option>
                     ))}
                   </select>
                 </div>
