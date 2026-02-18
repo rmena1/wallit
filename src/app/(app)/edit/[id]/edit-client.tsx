@@ -6,6 +6,7 @@ import { updateMovement, deleteMovement } from '@/lib/actions/movements'
 import { markAsReceivable, unmarkReceivable, splitMovement } from '@/lib/actions/review'
 import { convertToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { hasEmergencyPayments } from '@/lib/actions/emergency'
+import { hasLoanPaybackExpenses } from '@/lib/actions/loans'
 import { formatCurrency, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
@@ -26,6 +27,7 @@ interface MovementData {
   time: string | null
   originalName: string | null
   emergency: boolean
+  loan: boolean
 }
 
 interface Props {
@@ -73,6 +75,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
   const [formTime, setFormTime] = useState(movement.time ?? '')
 
   const [formEmergency, setFormEmergency] = useState(movement.emergency)
+  const [formLoan, setFormLoan] = useState(movement.loan)
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReceivable, setShowReceivable] = useState(false)
@@ -133,6 +136,18 @@ export function EditClient({ movement, accounts, categories }: Props) {
       }
     }
     setFormEmergency(checked)
+    setError(null)
+  }
+
+  async function handleToggleLoan(checked: boolean) {
+    if (!checked && movement.loan) {
+      const hasPaybacks = await hasLoanPaybackExpenses(movement.id)
+      if (hasPaybacks) {
+        setError('No se puede desmarcar: ya existen devoluciones vinculadas a este préstamo')
+        return
+      }
+    }
+    setFormLoan(checked)
     setError(null)
   }
 
@@ -201,6 +216,15 @@ export function EditClient({ movement, accounts, categories }: Props) {
       }
 
       // Normal update
+      if (movement.loan && (formType !== 'income' || !formLoan)) {
+        const hasPaybacks = await hasLoanPaybackExpenses(movement.id)
+        if (hasPaybacks) {
+          setError('No se puede desmarcar: ya existen devoluciones vinculadas a este préstamo')
+          setLoading(false)
+          return
+        }
+      }
+
       await updateMovement(movement.id, {
         name: formName.trim(),
         date: formDate,
@@ -212,7 +236,8 @@ export function EditClient({ movement, accounts, categories }: Props) {
         amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
         exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
         time: formTime || null,
-        emergency: formEmergency,
+        emergency: formType === 'expense' ? formEmergency : false,
+        loan: formType === 'income' ? formLoan : false,
       })
       router.push('/')
     } catch {
@@ -545,6 +570,32 @@ export function EditClient({ movement, accounts, categories }: Props) {
                   </div>
                   <div style={{ fontSize: 11, color: '#a1a1aa' }}>
                     No cuenta en reportes regulares. Se puede saldar parcialmente.
+                  </div>
+                </div>
+              </label>
+            )}
+
+            {/* Loan income checkbox (only for incomes, not transfers) */}
+            {!isTransferMode && formType === 'income' && (
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                backgroundColor: formLoan ? '#221933' : 'transparent',
+                border: formLoan ? '1px solid #8b5cf6' : '1px solid #2a2a2a',
+                transition: 'all 0.2s ease',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={formLoan}
+                  onChange={e => handleToggleLoan(e.target.checked)}
+                  style={{ width: 18, height: 18, accentColor: '#8b5cf6', cursor: 'pointer' }}
+                />
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: formLoan ? '#c4b5fd' : '#e5e5e5' }}>
+                    💵 Préstamo
+                  </div>
+                  <div style={{ fontSize: 11, color: '#a1a1aa' }}>
+                    Ingreso que debes devolver después. No cuenta como ingreso en reportes.
                   </div>
                 </div>
               </label>

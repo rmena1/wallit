@@ -93,8 +93,9 @@ export async function getTotalBalance(usdToClpRate?: number): Promise<number> {
 export interface NetLiquidityData {
   debitBalance: number // sum of balances for debit accounts in CLP cents
   receivables: number // sum of amounts for movements where receivable=true and received=false
+  unsettledLoans: number // sum of amounts for movements where loan=true and loanSettled=false
   creditDebt: number // sum of (creditLimit - balance) for credit accounts with creditLimit > 0
-  netLiquidity: number // debitBalance + receivables - creditDebt
+  netLiquidity: number // debitBalance + receivables - creditDebt - unsettledLoans
 }
 
 export async function getNetLiquidity(usdToClpRate?: number, precomputedBalances?: AccountWithBalance[]): Promise<NetLiquidityData> {
@@ -124,21 +125,34 @@ export async function getNetLiquidity(usdToClpRate?: number, precomputedBalances
   }
 
   const session = await requireAuth()
-  const receivableResults = await db
-    .select({ total: sql<number>`COALESCE(SUM(${movements.amount}), 0)` })
-    .from(movements)
-    .where(and(
-      eq(movements.userId, session.id),
-      eq(movements.receivable, true),
-      eq(movements.received, false)
-    ))
+  const [receivableResults, unsettledLoanResults] = await Promise.all([
+    db
+      .select({ total: sql<number>`COALESCE(SUM(${movements.amount}), 0)` })
+      .from(movements)
+      .where(and(
+        eq(movements.userId, session.id),
+        eq(movements.receivable, true),
+        eq(movements.received, false)
+      )),
+    db
+      .select({ total: sql<number>`COALESCE(SUM(${movements.amount}), 0)` })
+      .from(movements)
+      .where(and(
+        eq(movements.userId, session.id),
+        eq(movements.type, 'income'),
+        eq(movements.loan, true),
+        eq(movements.loanSettled, false)
+      )),
+  ])
 
   const receivables = receivableResults[0]?.total ?? 0
+  const unsettledLoans = unsettledLoanResults[0]?.total ?? 0
 
   return {
     debitBalance,
     receivables,
+    unsettledLoans,
     creditDebt,
-    netLiquidity: debitBalance + receivables - creditDebt,
+    netLiquidity: debitBalance + receivables - creditDebt - unsettledLoans,
   }
 }

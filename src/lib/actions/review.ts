@@ -357,6 +357,7 @@ export async function markAsReceivedWithExisting(receivableId: string, existingI
   if (!receivable) return { success: false, error: 'Receivable not found' }
   if (!income) return { success: false, error: 'Income movement not found' }
   if (income.type !== 'income') return { success: false, error: 'Selected movement is not an income' }
+  if (income.loan) return { success: false, error: 'Selected movement is marked as a loan' }
   if (income.receivableId) return { success: false, error: 'Income is already linked to another receivable' }
   
   // Note: better-sqlite3 is synchronous, so no async/await inside transaction

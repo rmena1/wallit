@@ -148,6 +148,9 @@ export async function getMovementById(id: string) {
       transferPairId: movements.transferPairId,
       emergency: movements.emergency,
       emergencySettled: movements.emergencySettled,
+      loan: movements.loan,
+      loanSettled: movements.loanSettled,
+      loanId: movements.loanId,
       categoryName: categories.name,
       categoryEmoji: categories.emoji,
       accountBankName: accounts.bankName,
@@ -175,6 +178,7 @@ export async function updateMovement(id: string, data: {
   exchangeRate: number | null
   time?: string | null
   emergency?: boolean
+  loan?: boolean
 }): Promise<MovementActionResult> {
   const session = await requireAuth()
 
@@ -253,6 +257,10 @@ export async function updateMovement(id: string, data: {
       time: data.time,
       ...(data.emergency !== undefined ? { emergency: data.emergency } : {}),
       ...(data.emergency === false ? { emergencySettled: false } : {}),
+      ...(data.type === 'expense' ? { loan: false, loanSettled: false } : {}),
+      ...(data.type === 'income' ? { loanId: null } : {}),
+      ...(data.type === 'income' && data.loan !== undefined ? { loan: data.loan } : {}),
+      ...(data.type === 'income' && data.loan === false ? { loanSettled: false } : {}),
       updatedAt: new Date(),
     })
     .where(and(eq(movements.id, id), eq(movements.userId, session.id)))

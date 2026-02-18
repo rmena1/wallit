@@ -103,6 +103,10 @@ export const movements = sqliteTable('movements', {
   // Emergency expense fields
   emergency: integer('emergency', { mode: 'boolean' }).notNull().default(false),
   emergencySettled: integer('emergency_settled', { mode: 'boolean' }).notNull().default(false),
+  // Loan income fields
+  loan: integer('loan', { mode: 'boolean' }).notNull().default(false),
+  loanSettled: integer('loan_settled', { mode: 'boolean' }).notNull().default(false),
+  loanId: text('loan_id'), // links payback expense to original loan income
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, (table) => [

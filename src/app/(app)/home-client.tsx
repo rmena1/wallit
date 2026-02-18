@@ -69,6 +69,7 @@ interface HomePageProps {
   userAccounts: UserAccount[]
   recentUnlinkedIncomes: UnlinkedIncome[]
   unsettledEmergencyCount: number
+  unsettledLoanCount: number
 }
 
 function TrashIcon() {
@@ -194,7 +195,7 @@ function getAccountIconFromType(accountType: string): string {
 
 const PAGE_SIZE = 20
 
-export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes, unsettledEmergencyCount }: HomePageProps) {
+export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes, unsettledEmergencyCount, unsettledLoanCount }: HomePageProps) {
   const router = useRouter()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [receivableFilter, setReceivableFilter] = useState(false)
@@ -366,6 +367,15 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                 🚨{unsettledEmergencyCount}
               </a>
             )}
+            {unsettledLoanCount > 0 && (
+              <a href="/loans" style={{
+                fontSize: 12, color: '#93c5fd', backgroundColor: '#172554',
+                padding: '2px 8px', borderRadius: 6, fontWeight: 700, marginLeft: 4,
+                textDecoration: 'none', border: '1px solid #3b82f640',
+              }}>
+                🏦 Préstamos {unsettledLoanCount}
+              </a>
+            )}
           </div>
           <div style={{ position: 'relative' }}>
             <button
@@ -488,6 +498,8 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               <span>Débito: {formatCurrency(netLiquidity.debitBalance, 'CLP')}</span>
               <span>·</span>
               <span>Por cobrar: {formatCurrency(netLiquidity.receivables, 'CLP')}</span>
+              <span>·</span>
+              <span>Préstamos: {formatCurrency(netLiquidity.unsettledLoans, 'CLP')}</span>
               <span>·</span>
               <span>Deuda: {formatCurrency(netLiquidity.creditDebt, 'CLP')}</span>
             </div>
