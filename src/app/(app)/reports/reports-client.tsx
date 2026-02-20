@@ -70,35 +70,10 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
     actualDaysCount++
   }
 
-  // Linear regression / trend calculation
-  // With 1 point: use daily rate from that single point (slope = cumulative/dayIndex, intercept = 0)
-  // With 2+ points: standard linear regression on cumulative values
-  let trendSlope = 0, trendIntercept = 0
-  let hasTrend = false
-
-  if (actualDaysCount >= 2) {
-    const points: { x: number; y: number }[] = []
-    let idx = 0
-    for (const day of days) {
-      if (day > today) break  // Only use data up to today for trend calc
-      idx++
-      points.push({ x: idx, y: (cumulativeByDay.get(day) || 0) / 100 })
-    }
-    const n = points.length
-    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
-    for (const p of points) {
-      sumX += p.x; sumY += p.y; sumXY += p.x * p.y; sumX2 += p.x * p.x
-    }
-    trendSlope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX)
-    trendIntercept = (sumY - trendSlope * sumX) / n
-    hasTrend = true
-  } else if (actualDaysCount === 1) {
-    // Single data point: extrapolate linearly from 0 through the single point
-    const singleDayIndex = days.indexOf([...cumulativeByDay.keys()].pop()!) + 1
-    trendSlope = (totalActualExpense / 100) / singleDayIndex
-    trendIntercept = 0
-    hasTrend = true
-  }
+  // Daily average projection
+  // trend(dayIndex) = dailyAverage * dayIndex, from (0,0) to projected total
+  const dailyAverage = actualDaysCount > 0 ? (totalActualExpense / 100) / actualDaysCount : 0
+  const hasTrend = actualDaysCount > 0
 
   // Build data array for ALL days in range (only actual + trend, no projected)
   const data: { date: string; label: string; actual: number | null; trend: number | null }[] = []
@@ -106,7 +81,7 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
   for (let i = 0; i < days.length; i++) {
     const day = days[i]
     const dayIndex = i + 1
-    const trendVal = hasTrend ? Math.max(0, trendSlope * dayIndex + trendIntercept) : null
+    const trendVal = hasTrend ? Math.max(0, dailyAverage * dayIndex) : null
     
     // Check if this day is in the future (after today)
     const isFutureDay = day > today
@@ -130,8 +105,7 @@ function buildExpenseChart(dailyData: DailyData[], startDate: string, endDate: s
   }
 
   // Gasto esperado = trend value at end of period (last day's trend)
-  const lastDayIndex = days.length
-  const projectedTotal = hasTrend ? Math.max(0, (trendSlope * lastDayIndex + trendIntercept) * 100) : 0
+  const projectedTotal = hasTrend ? dailyAverage * days.length * 100 : 0
   return { data, projectedTotal }
 }
 
