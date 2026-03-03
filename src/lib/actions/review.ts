@@ -11,7 +11,7 @@ export async function getPendingReviewCount() {
     .select({ count: sql<number>`COUNT(*)` })
     .from(movements)
     .where(and(eq(movements.userId, session.id), eq(movements.needsReview, true)))
-  return result[0]?.count ?? 0
+  return Number(result[0]?.count ?? 0)
 }
 
 export async function getPendingReviewMovements() {

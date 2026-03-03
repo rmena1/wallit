@@ -48,7 +48,7 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
     accountType: r.accountType,
     lastFourDigits: r.lastFourDigits,
     initialBalance: r.initialBalance,
-    balance: r.initialBalance + r.incomeSum - r.expenseSum,
+    balance: r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum),
     currency: r.currency,
     color: r.color,
     emoji: r.emoji,

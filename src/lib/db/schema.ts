@@ -1,4 +1,4 @@
-import { pgTable, text, integer, boolean, timestamp, index } from 'drizzle-orm/pg-core'
+import { pgTable, text, integer, bigint, boolean, timestamp, index } from 'drizzle-orm/pg-core'
 
 // ============================================================================
 // USERS
@@ -67,7 +67,7 @@ export const movements = pgTable('movements', {
   accountId: text('account_id').references(() => accounts.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   date: text('date').notNull(), // YYYY-MM-DD
-  amount: integer('amount').notNull(), // cents (integer) — always in CLP
+  amount: bigint('amount', { mode: 'number' }).notNull(), // cents — always in CLP
   type: text('type').$type<'income' | 'expense'>().notNull(),
   needsReview: boolean('needs_review').notNull().default(false),
   currency: text('currency').$type<'CLP' | 'USD'>().notNull().default('CLP'),

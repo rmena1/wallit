@@ -75,15 +75,15 @@ export async function getReportData(
   const t = totals[0] || { totalIncome: 0, totalExpense: 0, count: 0 }
 
   return {
-    dailyData,
-    totalIncome: t.totalIncome,
-    totalExpense: t.totalExpense,
-    movementCount: t.count,
+    dailyData: dailyData.map(d => ({ ...d, income: Number(d.income), expense: Number(d.expense) })),
+    totalIncome: Number(t.totalIncome),
+    totalExpense: Number(t.totalExpense),
+    movementCount: Number(t.count),
     categorySpending: catSpending.map(c => ({
       name: c.categoryName || 'Sin categoría',
       emoji: c.categoryEmoji || '📦',
-      total: c.total,
-      count: c.count,
+      total: Number(c.total),
+      count: Number(c.count),
     })),
     categories: userCategories,
     accounts: userAccounts,
