@@ -68,8 +68,8 @@ export default async function Home() {
     // Totals (excluding transfers and receivables)
     db
       .select({
-        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
-        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = 0 OR ${movements.receivable} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = false OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = false OR ${movements.receivable} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
       })
       .from(movements)
       .where(eq(movements.userId, session.id)),
