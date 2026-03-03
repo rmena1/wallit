@@ -1,10 +1,10 @@
 [build]
 builder = "nixpacks"
-buildCommand = "npm ci && npx drizzle-kit push"
+buildCommand = "npm ci && npm run build"
 
 [deploy]
-startCommand = "npm run start"
-healthcheckPath = "/"
+startCommand = "npx drizzle-kit push && npm run start"
+healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
