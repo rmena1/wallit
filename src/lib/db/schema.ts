@@ -51,6 +51,10 @@ export const accounts = pgTable('accounts', {
   currency: text('currency').$type<'CLP' | 'USD'>().notNull().default('CLP'),
   color: text('color'), // hex color like "#4F46E5"
   emoji: text('emoji'), // emoji character like "💳"
+  isInvestment: boolean('is_investment').notNull().default(false),
+  currentValue: integer('current_value'),
+  currentValueUpdatedAt: timestamp('current_value_updated_at'),
+  creditLimit: integer('credit_limit'),
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [

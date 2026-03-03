@@ -10,6 +10,11 @@ export interface AccountWithBalance {
   accountType: string
   lastFourDigits: string
   initialBalance: number
+  totalDeposited: number
+  isInvestment: boolean
+  currentValue: number | null
+  currentValueUpdatedAt: Date | null
+  creditLimit: number | null
   balance: number
   currency: 'CLP' | 'USD'
   color: string | null
@@ -30,6 +35,10 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       accountType: accounts.accountType,
       lastFourDigits: accounts.lastFourDigits,
       initialBalance: accounts.initialBalance,
+      isInvestment: accounts.isInvestment,
+      currentValue: accounts.currentValue,
+      currentValueUpdatedAt: accounts.currentValueUpdatedAt,
+      creditLimit: accounts.creditLimit,
       currency: accounts.currency,
       color: accounts.color,
       emoji: accounts.emoji,
@@ -48,7 +57,12 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
     accountType: r.accountType,
     lastFourDigits: r.lastFourDigits,
     initialBalance: r.initialBalance,
-    balance: r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum),
+    totalDeposited: r.isInvestment ? r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum) : 0,
+    isInvestment: r.isInvestment,
+    currentValue: r.currentValue,
+    currentValueUpdatedAt: r.currentValueUpdatedAt,
+    creditLimit: r.creditLimit ?? null,
+    balance: r.isInvestment ? (r.currentValue ?? r.initialBalance) : r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum),
     currency: r.currency,
     color: r.color,
     emoji: r.emoji,
