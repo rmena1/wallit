@@ -1,23 +1,6 @@
 import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount, screenshot } from './helpers'
-import Database from 'better-sqlite3'
-import path from 'path'
-
-const DB_PATH = path.join(process.cwd(), 'data', 'wallit.db')
-
-function getUserId(email: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
-
-function getFirstAccountId(userId: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM accounts WHERE user_id = ?').get(userId) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
+import { getUserId, getFirstAccountId, getAccounts, seedReviewMovement, seedConfirmedMovement } from './db-helper'
 
 async function createTwoAccounts(page: Page) {
   await page.goto('/settings')
@@ -60,52 +43,22 @@ async function registerUser(page: Page): Promise<string> {
   return email
 }
 
-function seedReviewMovement(userId: string, accountId: string | null) {
-  const db = new Database(DB_PATH)
-  const today = new Date().toISOString().slice(0, 10)
-  const now = Math.floor(Date.now() / 1000)
-  const id = `rev-convert-${Date.now()}`
-  
-  db.prepare(`
-    INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'CLP', 0, 0, ?, ?)
-  `).run(id, userId, accountId, 'Pago tarjeta BCI', today, 5000000, 'expense', now, now)
-  db.close()
-  return id
-}
-
-function seedConfirmedMovement(userId: string, accountId: string | null) {
-  const db = new Database(DB_PATH)
-  const today = new Date().toISOString().slice(0, 10)
-  const now = Math.floor(Date.now() / 1000)
-  const id = `mov-convert-${Date.now()}`
-  
-  db.prepare(`
-    INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'CLP', 0, 0, ?, ?)
-  `).run(id, userId, accountId, 'Transferencia manual', today, 10000000, 'expense', now, now)
-  db.close()
-  return id
-}
-
 test.describe('Convert to Transfer - Review Page', () => {
   test('convert pending movement to transfer from review page', async ({ page }) => {
     // 1. Setup: Register and create two accounts
     const email = await registerUser(page)
     await createTwoAccounts(page)
     
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found')
     
     // Get the first account ID for the seeded movement
-    const db = new Database(DB_PATH)
-    const accounts = db.prepare('SELECT id, bank_name FROM accounts WHERE user_id = ?').all(userId) as { id: string, bank_name: string }[]
-    db.close()
+    const accounts = await getAccounts(userId)
     
     if (accounts.length < 2) throw new Error('Need at least 2 accounts')
     
     // 2. Seed a review movement assigned to first account
-    seedReviewMovement(userId, accounts[0].id)
+    await seedReviewMovement(userId, accounts[0].id, 'Pago tarjeta BCI', 5000000)
     
     // 3. Go to review page
     await page.goto('/review')
@@ -158,18 +111,16 @@ test.describe('Convert to Transfer - Edit Page', () => {
     const email = await registerUser(page)
     await createTwoAccounts(page)
     
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found')
     
     // Get accounts
-    const db = new Database(DB_PATH)
-    const accounts = db.prepare('SELECT id, bank_name FROM accounts WHERE user_id = ?').all(userId) as { id: string, bank_name: string }[]
-    db.close()
+    const accounts = await getAccounts(userId)
     
     if (accounts.length < 2) throw new Error('Need at least 2 accounts')
     
     // 2. Seed a confirmed (not pending review) movement
-    seedConfirmedMovement(userId, accounts[0].id)
+    await seedConfirmedMovement(userId, accounts[0].id, 'Transferencia manual', 10000000)
     
     // 3. Go to home and click on the movement to edit
     await page.goto('/')
@@ -227,14 +178,12 @@ test.describe('Convert to Transfer - Validation', () => {
     const email = await registerUser(page)
     await createTwoAccounts(page)
     
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found')
     
-    const db = new Database(DB_PATH)
-    const accounts = db.prepare('SELECT id FROM accounts WHERE user_id = ?').all(userId) as { id: string }[]
-    db.close()
+    const accounts = await getAccounts(userId)
     
-    seedReviewMovement(userId, accounts[0].id)
+    await seedReviewMovement(userId, accounts[0].id, 'Pago tarjeta BCI', 5000000)
     
     // Go to review
     await page.goto('/review')
@@ -273,14 +222,12 @@ test.describe('Convert to Transfer - Validation', () => {
     await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
     await expect(page.getByText('···5555')).toBeVisible({ timeout: 5000 })
     
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found')
     
-    const db = new Database(DB_PATH)
-    const accounts = db.prepare('SELECT id FROM accounts WHERE user_id = ?').all(userId) as { id: string }[]
-    db.close()
+    const accounts = await getAccounts(userId)
     
-    seedReviewMovement(userId, accounts[0].id)
+    await seedReviewMovement(userId, accounts[0].id, 'Pago tarjeta BCI', 5000000)
     
     // Go to review
     await page.goto('/review')

@@ -32,7 +32,7 @@ export async function getReportData(
     sql`${movements.userId} = ${session.id}`,
     sql`${movements.date} >= ${startDate}`,
     sql`${movements.date} <= ${endDate}`,
-    sql`(${movements.receivable} = 0 OR ${movements.receivable} IS NULL)`,
+    sql`(${movements.receivable} = false OR ${movements.receivable} IS NULL)`,
     sql`${movements.receivableId} IS NULL`,
     sql`${movements.transferId} IS NULL`, // Exclude transfers from reports
   ]

@@ -1,36 +1,6 @@
 import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount, screenshot } from './helpers'
-import Database from 'better-sqlite3'
-import path from 'path'
-
-const DB_PATH = path.join(process.cwd(), 'data', 'wallit.db')
-
-function getUserId(email: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
-
-function getFirstAccountId(userId: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM accounts WHERE user_id = ?').get(userId) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
-
-function seedReviewMovement(userId: string, accountId: string | null, name: string, amount: number): string {
-  const db = new Database(DB_PATH)
-  const now = Math.floor(Date.now() / 1000)
-  const today = new Date().toISOString().slice(0, 10)
-  const id = `rev-adv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-  db.prepare(`
-    INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'expense', 1, 'CLP', 0, 0, ?, ?)
-  `).run(id, userId, accountId, name, today, amount, now, now)
-  db.close()
-  return id
-}
+import { getUserId, getFirstAccountId, seedReviewMovement } from './db-helper'
 
 async function registerUser(page: Page): Promise<string> {
   const email = `e2e-review-adv-${Date.now()}-${Math.random().toString(36).slice(2, 5)}@wallit.app`
@@ -48,12 +18,12 @@ test.describe('Review Flow — Advanced Features', () => {
     const email = await registerUser(page)
     await ensureAccount(page)
 
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
-    const accountId = getFirstAccountId(userId)
+    const accountId = await getFirstAccountId(userId)
 
     // Seed two review movements - one for cancel test, one for split test
-    seedReviewMovement(userId, accountId, 'Cena grupal', 9000000) // 90,000 CLP
+    await seedReviewMovement(userId, accountId, 'Cena grupal', 9000000) // 90,000 CLP
 
     // Go to review page
     await page.goto('/review')
@@ -120,12 +90,12 @@ test.describe('Review Flow — Advanced Features', () => {
     const email = await registerUser(page)
     await ensureAccount(page)
 
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
-    const accountId = getFirstAccountId(userId)
+    const accountId = await getFirstAccountId(userId)
 
     // Seed a review movement
-    seedReviewMovement(userId, accountId, 'Compra ferretería', 2500000) // 25,000 CLP
+    await seedReviewMovement(userId, accountId, 'Compra ferretería', 2500000) // 25,000 CLP
 
     // Go to review page
     await page.goto('/review')

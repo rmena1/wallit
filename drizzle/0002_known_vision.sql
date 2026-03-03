@@ -1,1 +1,0 @@
-ALTER TABLE `accounts` ADD `initial_balance` integer DEFAULT 0 NOT NULL;

@@ -1,24 +1,24 @@
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core'
+import { pgTable, text, integer, boolean, timestamp, index } from 'drizzle-orm/pg-core'
 
 // ============================================================================
 // USERS
 // ============================================================================
-export const users = sqliteTable('users', {
+export const users = pgTable('users', {
   id: text('id').primaryKey(), // nanoid
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 })
 
 // ============================================================================
 // SESSIONS
 // ============================================================================
-export const sessions = sqliteTable('sessions', {
+export const sessions = pgTable('sessions', {
   id: text('id').primaryKey(), // session token
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
   index('idx_sessions_user').on(table.userId),
   index('idx_sessions_expires').on(table.expiresAt),
@@ -27,13 +27,13 @@ export const sessions = sqliteTable('sessions', {
 // ============================================================================
 // CATEGORIES
 // ============================================================================
-export const categories = sqliteTable('categories', {
+export const categories = pgTable('categories', {
   id: text('id').primaryKey(), // nanoid
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   emoji: text('emoji').notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
   index('idx_categories_user').on(table.userId),
 ])
@@ -41,18 +41,18 @@ export const categories = sqliteTable('categories', {
 // ============================================================================
 // ACCOUNTS
 // ============================================================================
-export const accounts = sqliteTable('accounts', {
+export const accounts = pgTable('accounts', {
   id: text('id').primaryKey(), // nanoid
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   bankName: text('bank_name').notNull(),
   accountType: text('account_type').notNull(),
   lastFourDigits: text('last_four_digits').notNull(),
   initialBalance: integer('initial_balance').notNull().default(0), // cents
-  currency: text('currency', { enum: ['CLP', 'USD'] }).notNull().default('CLP'),
+  currency: text('currency').$type<'CLP' | 'USD'>().notNull().default('CLP'),
   color: text('color'), // hex color like "#4F46E5"
   emoji: text('emoji'), // emoji character like "💳"
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
   index('idx_accounts_user').on(table.userId),
 ])
@@ -60,7 +60,7 @@ export const accounts = sqliteTable('accounts', {
 // ============================================================================
 // MOVEMENTS
 // ============================================================================
-export const movements = sqliteTable('movements', {
+export const movements = pgTable('movements', {
   id: text('id').primaryKey(), // nanoid
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   categoryId: text('category_id').references(() => categories.id, { onDelete: 'set null' }),
@@ -68,21 +68,21 @@ export const movements = sqliteTable('movements', {
   name: text('name').notNull(),
   date: text('date').notNull(), // YYYY-MM-DD
   amount: integer('amount').notNull(), // cents (integer) — always in CLP
-  type: text('type', { enum: ['income', 'expense'] }).notNull(),
-  needsReview: integer('needs_review', { mode: 'boolean' }).notNull().default(false),
-  currency: text('currency', { enum: ['CLP', 'USD'] }).notNull().default('CLP'),
+  type: text('type').$type<'income' | 'expense'>().notNull(),
+  needsReview: boolean('needs_review').notNull().default(false),
+  currency: text('currency').$type<'CLP' | 'USD'>().notNull().default('CLP'),
   amountUsd: integer('amount_usd'), // cents, only for USD movements
   exchangeRate: integer('exchange_rate'), // rate * 100 (e.g. 950.50 → 95050)
-  receivable: integer('receivable', { mode: 'boolean' }).notNull().default(false),
-  received: integer('received', { mode: 'boolean' }).notNull().default(false),
+  receivable: boolean('receivable').notNull().default(false),
+  received: boolean('received').notNull().default(false),
   receivableId: text('receivable_id'), // links income payment to original receivable expense
   time: text('time'), // HH:MM format, nullable
   originalName: text('original_name'), // original name from bank email
   // Transfer fields: link two movements as a transfer pair
   transferId: text('transfer_id'), // shared ID between both movements of a transfer (nanoid)
   transferPairId: text('transfer_pair_id'), // ID of the paired movement
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
   index('idx_movements_user').on(table.userId),
   index('idx_movements_date').on(table.userId, table.date),
@@ -95,13 +95,13 @@ export const movements = sqliteTable('movements', {
 // ============================================================================
 // EXCHANGE RATES
 // ============================================================================
-export const exchangeRates = sqliteTable('exchange_rates', {
+export const exchangeRates = pgTable('exchange_rates', {
   id: text('id').primaryKey(), // nanoid
   fromCurrency: text('from_currency').notNull(),
   toCurrency: text('to_currency').notNull(),
   rate: integer('rate').notNull(), // rate * 100 (e.g. 950.50 → 95050)
   source: text('source').notNull(),
-  fetchedAt: integer('fetched_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  fetchedAt: timestamp('fetched_at').notNull().$defaultFn(() => new Date()),
 })
 
 // ============================================================================

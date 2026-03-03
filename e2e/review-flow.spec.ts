@@ -1,46 +1,6 @@
 import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount, ensureCategory, screenshot } from './helpers'
-import Database from 'better-sqlite3'
-import path from 'path'
-
-const DB_PATH = path.join(process.cwd(), 'data', 'wallit.db')
-
-function getUserId(email: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
-
-function getFirstAccountId(userId: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM accounts WHERE user_id = ?').get(userId) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
-
-function seedReviewMovements(userId: string, accountId: string | null) {
-  const db = new Database(DB_PATH)
-  const today = new Date().toISOString().slice(0, 10)
-  const base = Date.now()
-
-  // Insert in reverse order so the first one has the latest createdAt (appears first in DESC order)
-  const movements = [
-    { id: `rev-${base}-3`, name: 'Compra Supermercado', amount: 4520000, type: 'expense', ts: Math.floor(base / 1000) - 2 },
-    { id: `rev-${base}-2`, name: 'Transferencia recibida', amount: 5000000, type: 'income', ts: Math.floor(base / 1000) - 1 },
-    { id: `rev-${base}-1`, name: 'Uber Eats - Pizza', amount: 1500000, type: 'expense', ts: Math.floor(base / 1000) },
-  ]
-
-  const stmt = db.prepare(`
-    INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'CLP', 0, 0, ?, ?)
-  `)
-
-  for (const m of movements) {
-    stmt.run(m.id, userId, accountId, m.name, today, m.amount, m.type, m.ts, m.ts)
-  }
-  db.close()
-}
+import { getUserId, getFirstAccountId, seedReviewMovements, seedReviewMovement } from './db-helper'
 
 async function registerUser(page: Page): Promise<string> {
   const email = `e2e-review-${Date.now()}-${Math.random().toString(36).slice(2, 5)}@wallit.app`
@@ -68,12 +28,12 @@ test.describe('Review Flow — Complete', () => {
     // 3. Set up account for the same user
     await ensureAccount(page)
 
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
-    const accountId = getFirstAccountId(userId)
+    const accountId = await getFirstAccountId(userId)
 
     // 4. Seed review movements
-    seedReviewMovements(userId, accountId)
+    await seedReviewMovements(userId, accountId)
 
     // 5. Go to review page with pending movements
     await page.goto('/review')
@@ -121,23 +81,13 @@ test.describe('Review Flow — Complete', () => {
     await ensureAccount(page)
     await ensureCategory(page, '🍔', 'Comida')
 
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
-    const accountId = getFirstAccountId(userId)
+    const accountId = await getFirstAccountId(userId)
 
     // Seed 2 review movements
-    const db = new Database(DB_PATH)
-    const now = Math.floor(Date.now() / 1000)
-    const today = new Date().toISOString().slice(0, 10)
-    db.prepare(`
-      INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'CLP', 0, 0, ?, ?)
-    `).run(`rev-a-${Date.now()}`, userId, accountId, 'Almuerzo con Juan', today, 2000000, 'expense', now + 1, now + 1)
-    db.prepare(`
-      INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'CLP', 0, 0, ?, ?)
-    `).run(`rev-b-${Date.now()}`, userId, accountId, 'Compra desconocida', today, 999900, 'expense', now, now)
-    db.close()
+    await seedReviewMovement(userId, accountId, 'Almuerzo con Juan', 2000000)
+    await seedReviewMovement(userId, accountId, 'Compra desconocida', 999900)
 
     await page.goto('/review')
     await expect(page.getByText('1/2')).toBeVisible({ timeout: 5000 })

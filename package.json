@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^12.6.2",
     "drizzle-orm": "^0.45.1",
+    "postgres": "^3.4.5",
     "nanoid": "^5.1.6",
     "next": "16.1.5",
     "react": "19.2.3",
@@ -27,7 +27,6 @@
     "@playwright/test": "^1.58.0",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/bcryptjs": "^2.4.6",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

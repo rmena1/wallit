@@ -1,36 +1,23 @@
-import Database from 'better-sqlite3'
-import { drizzle } from 'drizzle-orm/better-sqlite3'
+import { drizzle } from 'drizzle-orm/postgres-js'
+import postgres from 'postgres'
 import * as schema from './schema'
-import path from 'path'
 
-// Database file location
-const DB_PATH = process.env.DATABASE_URL || path.join(process.cwd(), 'data', 'wallit.db')
-
-// Create database connection (singleton pattern)
+// Lazy initialization to avoid errors during build time
 let _db: ReturnType<typeof createDb> | null = null
 
 function createDb() {
-  const sqlite = new Database(DB_PATH)
-  
-  // Enable WAL mode for better concurrent access
-  sqlite.pragma('journal_mode = WAL')
-  
-  // Performance: reduce fsync overhead (safe with WAL — data integrity preserved)
-  sqlite.pragma('synchronous = NORMAL')
-  
-  // Performance: increase page cache to ~32MB (default is ~2MB)
-  sqlite.pragma('cache_size = -32000')
-  
-  // Performance: store temp tables in memory
-  sqlite.pragma('temp_store = MEMORY')
-  
-  // Performance: allow concurrent reads during writes (WAL2-like behavior)
-  sqlite.pragma('busy_timeout = 5000')
-  
-  // Enable foreign keys
-  sqlite.pragma('foreign_keys = ON')
-  
-  return drizzle(sqlite, { schema })
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) {
+    throw new Error('DATABASE_URL environment variable is required')
+  }
+
+  const client = postgres(connectionString, {
+    max: 10,
+    idle_timeout: 20,
+    connect_timeout: 10,
+  })
+
+  return drizzle(client, { schema })
 }
 
 export function getDb() {
@@ -40,8 +27,17 @@ export function getDb() {
   return _db
 }
 
-// Export for direct access
-export const db = getDb()
+// Proxy that lazily initializes on first property access
+export const db: ReturnType<typeof createDb> = new Proxy({} as ReturnType<typeof createDb>, {
+  get(_target, prop, receiver) {
+    const instance = getDb()
+    const value = Reflect.get(instance, prop, receiver)
+    if (typeof value === 'function') {
+      return value.bind(instance)
+    }
+    return value
+  },
+})
 
 // Re-export schema
 export * from './schema'

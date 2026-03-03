@@ -1,36 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { registerAndLogin, ensureAccount, createMovement, screenshot } from './helpers'
-import Database from 'better-sqlite3'
-import path from 'path'
-
-const DB_PATH = path.join(process.cwd(), 'data', 'wallit.db')
-
-function getUserId(email: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
-
-function getFirstAccountId(userId: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM accounts WHERE user_id = ?').get(userId) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
-
-function seedReceivable(userId: string, accountId: string | null, name: string, amount: number): string {
-  const db = new Database(DB_PATH)
-  const now = Math.floor(Date.now() / 1000)
-  const today = new Date().toISOString().slice(0, 10)
-  const id = `recv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-  db.prepare(`
-    INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'expense', 0, 'CLP', 1, 0, ?, ?)
-  `).run(id, userId, accountId, name, today, amount, now, now)
-  db.close()
-  return id
-}
+import { getUserId, getFirstAccountId, seedReceivable } from './db-helper'
 
 test.describe('Receivables & Payment — Complete Flow', () => {
   test('filter receivables, view them, and mark as paid via payment dialog', async ({ page }) => {
@@ -49,11 +19,11 @@ test.describe('Receivables & Payment — Complete Flow', () => {
     await createMovement(page, { name: 'Pago de Juan', amount: '25000', type: 'income' })
 
     // Seed receivable movements
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
-    const accountId = getFirstAccountId(userId)
-    seedReceivable(userId, accountId, 'Pedro me debe cena', 1500000)
-    seedReceivable(userId, accountId, 'Juan me debe almuerzo', 2500000)
+    const accountId = await getFirstAccountId(userId)
+    await seedReceivable(userId, accountId, 'Pedro me debe cena', 1500000)
+    await seedReceivable(userId, accountId, 'Juan me debe almuerzo', 2500000)
 
     // Go home and verify data exists
     await page.goto('/')

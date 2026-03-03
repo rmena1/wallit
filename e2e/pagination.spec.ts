@@ -1,67 +1,6 @@
 import { test, expect, Page } from '@playwright/test'
 import { screenshot } from './helpers'
-import Database from 'better-sqlite3'
-import path from 'path'
-
-const DB_PATH = path.join(process.cwd(), 'data', 'wallit.db')
-
-function getUserId(email: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
-
-function getFirstAccountId(userId: string): string | null {
-  const db = new Database(DB_PATH)
-  const row = db.prepare('SELECT id FROM accounts WHERE user_id = ?').get(userId) as { id: string } | undefined
-  db.close()
-  return row?.id ?? null
-}
-
-function createAccount(userId: string): string {
-  const db = new Database(DB_PATH)
-  const now = Math.floor(Date.now() / 1000)
-  const id = `acc-${Date.now()}`
-  db.prepare(`
-    INSERT INTO accounts (id, user_id, bank_name, account_type, last_four_digits, initial_balance, currency, created_at, updated_at)
-    VALUES (?, ?, 'BCI', 'Corriente', '9999', 100000000, 'CLP', ?, ?)
-  `).run(id, userId, now, now)
-  db.close()
-  return id
-}
-
-function seedManyMovements(userId: string, accountId: string, count: number) {
-  const db = new Database(DB_PATH)
-  const today = new Date()
-  
-  const stmt = db.prepare(`
-    INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'CLP', 0, 0, ?, ?)
-  `)
-
-  const names = [
-    'Almuerzo', 'Café', 'Uber', 'Supermercado', 'Netflix', 'Spotify', 'Gimnasio',
-    'Farmacia', 'Gasolina', 'Restaurant', 'Delivery', 'Metro', 'Bus', 'Taxi',
-    'Cena', 'Desayuno', 'Snacks', 'Bebidas', 'Ropa', 'Zapatos', 'Libro',
-    'Cine', 'Teatro', 'Concierto', 'Museo', 'Parque', 'Playa', 'Viaje'
-  ]
-
-  for (let i = 0; i < count; i++) {
-    const id = `pag-${Date.now()}-${i}`
-    const name = `${names[i % names.length]} #${i + 1}`
-    const date = new Date(today)
-    date.setDate(date.getDate() - Math.floor(i / 5)) // 5 per day going back
-    const dateStr = date.toISOString().slice(0, 10)
-    const amount = (Math.floor(Math.random() * 50) + 5) * 100 * 100 // 500-5500 CLP
-    const type = Math.random() > 0.3 ? 'expense' : 'income'
-    const ts = Math.floor(Date.now() / 1000) - i
-    
-    stmt.run(id, userId, accountId, name, dateStr, amount, type, ts, ts)
-  }
-  
-  db.close()
-}
+import { getUserId, createAccount, seedManyMovements } from './db-helper'
 
 async function registerUser(page: Page): Promise<string> {
   const email = `pag-${Date.now()}@wallit.app`
@@ -79,13 +18,13 @@ test.describe('Pagination & Infinite Scroll', () => {
     const email = await registerUser(page)
     await screenshot(page, 'pagination-01-registered')
 
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
     
-    const accountId = createAccount(userId)
+    const accountId = await createAccount(userId)
 
     // 2. Seed 50 movements - more than a single page
-    seedManyMovements(userId, accountId, 50)
+    await seedManyMovements(userId, accountId, 50)
 
     // 3. Go to home page
     await page.goto('/')
@@ -159,11 +98,11 @@ test.describe('Pagination & Infinite Scroll', () => {
   test('reports page handles many movements correctly', async ({ page }) => {
     // 1. Register and setup
     const email = await registerUser(page)
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
     
-    const accountId = createAccount(userId)
-    seedManyMovements(userId, accountId, 30)
+    const accountId = await createAccount(userId)
+    await seedManyMovements(userId, accountId, 30)
 
     // 2. Navigate to reports
     await page.goto('/reports')
@@ -188,11 +127,11 @@ test.describe('Pagination & Infinite Scroll', () => {
   test('account detail page handles many movements', async ({ page }) => {
     // 1. Register and setup
     const email = await registerUser(page)
-    const userId = getUserId(email)
+    const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
     
-    const accountId = createAccount(userId)
-    seedManyMovements(userId, accountId, 25)
+    const accountId = await createAccount(userId)
+    await seedManyMovements(userId, accountId, 25)
 
     // 2. Navigate to home and click account card
     await page.goto('/')
