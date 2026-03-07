@@ -57,16 +57,18 @@ export async function confirmMovement(id: string, data: {
 }) {
   const session = await requireAuth()
 
-  // Verify account belongs to the current user (IDOR protection)
+  // Verify account belongs to the current user and get its currency (IDOR protection)
+  let accountCurrency: 'CLP' | 'USD' | null = null
   if (data.accountId) {
     const [ownedAccount] = await db
-      .select({ id: accounts.id })
+      .select({ id: accounts.id, currency: accounts.currency })
       .from(accounts)
       .where(and(eq(accounts.id, data.accountId), eq(accounts.userId, session.id)))
       .limit(1)
     if (!ownedAccount) {
       return { success: false, error: 'Invalid account' }
     }
+    accountCurrency = ownedAccount.currency
   }
 
   // Verify category belongs to the current user (IDOR protection)
@@ -81,18 +83,52 @@ export async function confirmMovement(id: string, data: {
     }
   }
 
+  // Handle currency conversion to ensure amountUsd is correctly set for USD accounts
+  // This mirrors the logic in createMovement to prevent balance calculation bugs
+  let finalAmount = data.amount
+  let finalAmountUsd = data.amountUsd
+  let finalExchangeRate = data.exchangeRate
+
+  if (data.currency === 'USD') {
+    // USD input - convert to CLP for storage, keep USD in amountUsd
+    if (!data.amountUsd) {
+      try {
+        const { convertUsdToClp } = await import('@/lib/exchange-rate')
+        const conversion = await convertUsdToClp(data.amount)
+        finalAmountUsd = data.amount
+        finalAmount = conversion.clpCents
+        finalExchangeRate = conversion.rate
+      } catch {
+        return { success: false, error: 'Error al obtener tipo de cambio' }
+      }
+    }
+  } else if (accountCurrency === 'USD' && data.currency === 'CLP') {
+    // CLP input on USD account - convert CLP to USD for amountUsd
+    // This ensures balance calculation works correctly for USD accounts
+    if (!data.amountUsd) {
+      try {
+        const { getUsdToClpRate } = await import('@/lib/exchange-rate')
+        const rate = await getUsdToClpRate()
+        finalAmountUsd = Math.round(data.amount * 100 / rate) // Convert CLP cents to USD cents
+        finalExchangeRate = rate
+      } catch {
+        return { success: false, error: 'Error al obtener tipo de cambio' }
+      }
+    }
+  }
+
   await db
     .update(movements)
     .set({
       name: data.name,
       date: data.date,
-      amount: data.amount,
+      amount: finalAmount,
       type: data.type,
       currency: data.currency,
       accountId: data.accountId,
       categoryId: data.categoryId,
-      amountUsd: data.amountUsd,
-      exchangeRate: data.exchangeRate,
+      amountUsd: finalAmountUsd,
+      exchangeRate: finalExchangeRate,
       time: data.time,
       needsReview: false,
       updatedAt: new Date(),
@@ -100,7 +136,6 @@ export async function confirmMovement(id: string, data: {
     .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
   
   revalidatePath('/')
-  revalidatePath('/review')
   return { success: true }
 }
 
@@ -108,7 +143,6 @@ export async function deleteReviewMovement(id: string) {
   const session = await requireAuth()
   await db.delete(movements).where(and(eq(movements.id, id), eq(movements.userId, session.id)))
   revalidatePath('/')
-  revalidatePath('/review')
   return { success: true }
 }
 
@@ -124,7 +158,6 @@ export async function markAsReceivable(id: string, reminderText: string) {
     })
     .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
   revalidatePath('/')
-  revalidatePath('/review')
   return { success: true }
 }
 
@@ -146,7 +179,6 @@ export async function unmarkReceivable(id: string) {
     })
     .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
   revalidatePath('/')
-  revalidatePath('/review')
   revalidatePath('/receivables')
   return { success: true }
 }
@@ -185,14 +217,35 @@ export async function splitMovement(originalId: string, splits: { name: string; 
     return { success: false, error: 'Split amounts must equal the original amount' }
   }
   
+  // Calculate amountUsd for each split with remainder-based rounding
+  // This ensures the sum of split USD amounts equals the original exactly
+  let usdSplits: (number | null)[] = []
+  if (original.currency === 'USD' && original.amountUsd) {
+    const originalUsd = original.amountUsd
+    let usdAllocated = 0
+    for (let i = 0; i < splits.length; i++) {
+      if (i === splits.length - 1) {
+        // Last split gets the remainder to ensure exact sum
+        usdSplits.push(originalUsd - usdAllocated)
+      } else {
+        const proportion = totalOriginal !== 0 ? splits[i].amount / totalOriginal : 0
+        const usdAmount = Math.round(originalUsd * proportion)
+        usdSplits.push(usdAmount)
+        usdAllocated += usdAmount
+      }
+    }
+  } else {
+    usdSplits = splits.map(() => null)
+  }
+
   // Use a transaction to ensure atomicity
   await db.transaction(async (tx) => {
     // Delete original
     await tx.delete(movements).where(eq(movements.id, originalId))
     
     // Create split movements
-    for (const split of splits) {
-      const proportion = totalOriginal !== 0 ? split.amount / totalOriginal : 0
+    for (let i = 0; i < splits.length; i++) {
+      const split = splits[i]
       await tx.insert(movements).values({
         id: generateId(),
         userId: session.id,
@@ -203,9 +256,7 @@ export async function splitMovement(originalId: string, splits: { name: string; 
         amount: split.amount,
         type: original.type,
         currency: original.currency,
-        amountUsd: original.currency === 'USD' && original.amountUsd
-          ? Math.round(original.amountUsd * proportion)
-          : null,
+        amountUsd: usdSplits[i],
         exchangeRate: original.exchangeRate,
         time: original.time,
         originalName: original.originalName,
@@ -303,6 +354,7 @@ export async function markAsReceivedWithExisting(receivableId: string, existingI
   if (!receivable) return { success: false, error: 'Receivable not found' }
   if (!income) return { success: false, error: 'Income movement not found' }
   if (income.type !== 'income') return { success: false, error: 'Selected movement is not an income' }
+  if (income.loan) return { success: false, error: 'Selected movement is marked as a loan' }
   if (income.receivableId) return { success: false, error: 'Income is already linked to another receivable' }
   
   // Use a transaction to ensure atomicity

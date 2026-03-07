@@ -1,0 +1,52 @@
+function PulseBlock({ className }: { className: string }) {
+  return <div className={`animate-pulse rounded-xl bg-zinc-800 ${className}`} />
+}
+
+export default function Loading() {
+  return (
+    <div className="min-h-screen bg-zinc-950">
+      <header className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-900 px-4 py-3">
+        <div className="mx-auto flex w-full max-w-[540px] items-center justify-between">
+          <PulseBlock className="h-6 w-16" />
+          <PulseBlock className="h-5 w-36" />
+          <div className="w-[60px]" />
+        </div>
+      </header>
+
+      <main className="mx-auto w-full max-w-[540px] space-y-4 px-4 pb-28 pt-4">
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+          <div className="mb-4 grid grid-cols-3 gap-2">
+            <PulseBlock className="h-10 w-full" />
+            <PulseBlock className="h-10 w-full" />
+            <PulseBlock className="h-10 w-full" />
+          </div>
+
+          <div className="space-y-3">
+            <PulseBlock className="h-12 w-full" />
+            <div className="grid grid-cols-[2fr,1fr] gap-3">
+              <PulseBlock className="h-12 w-full" />
+              <PulseBlock className="h-12 w-full" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <PulseBlock className="h-12 w-full" />
+              <PulseBlock className="h-12 w-full" />
+            </div>
+            <PulseBlock className="h-12 w-full" />
+            <div className="grid grid-cols-[1fr,120px] gap-3">
+              <PulseBlock className="h-12 w-full" />
+              <PulseBlock className="h-12 w-full" />
+            </div>
+            <PulseBlock className="h-12 w-full" />
+          </div>
+        </div>
+
+        <PulseBlock className="h-12 w-full" />
+        <div className="grid grid-cols-3 gap-2">
+          <PulseBlock className="h-10 w-full" />
+          <PulseBlock className="h-10 w-full" />
+          <PulseBlock className="h-10 w-full" />
+        </div>
+      </main>
+    </div>
+  )
+}

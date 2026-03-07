@@ -1,0 +1,79 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - button "Volver" [ref=e5] [cursor=pointer]:
+          - img [ref=e6]
+          - text: Volver
+        - generic [ref=e8]: Nuevo Movimiento
+    - main [ref=e9]:
+      - generic [ref=e11]:
+        - generic [ref=e12]:
+          - generic [ref=e14] [cursor=pointer]: ↓ Gasto
+          - generic [ref=e16] [cursor=pointer]: ↑ Ingreso
+          - generic [ref=e18] [cursor=pointer]: ↔️ Transferencia
+        - generic [ref=e19]:
+          - generic [ref=e20]: Cuenta
+          - combobox [ref=e21]:
+            - option "Seleccionar cuenta" [disabled] [selected]
+            - option "🏦 BCI · Corriente · ···9999"
+        - generic [ref=e22]:
+          - generic [ref=e23]: Descripción
+          - textbox "¿En qué se gastó?" [ref=e24]
+        - generic [ref=e25]:
+          - generic [ref=e26]:
+            - generic [ref=e27]: Monto
+            - textbox "0.00" [ref=e28]
+          - generic [ref=e29]:
+            - generic [ref=e30]: Moneda
+            - combobox [ref=e31]:
+              - option "CLP" [selected]
+              - option "USD"
+        - generic [ref=e32]:
+          - generic [ref=e33]:
+            - generic [ref=e34]: Fecha
+            - textbox [ref=e35]: 2026-02-14
+          - generic [ref=e36]:
+            - generic [ref=e37]: Hora
+            - textbox [ref=e38]
+        - generic [ref=e39]:
+          - generic [ref=e40]: Categoría
+          - generic [ref=e41]:
+            - combobox [ref=e42]:
+              - option "⚠️ Sin categoría" [selected]
+              - option "📚 Education"
+              - option "🎬 Entertainment"
+              - option "🍔 Food"
+              - option "🎁 Gifts"
+              - option "💊 Health"
+              - option "🏠 Home"
+              - option "💰 Salary"
+              - option "🛒 Shopping"
+              - option "🚗 Transport"
+              - option "💼 Work"
+            - button "+" [ref=e43] [cursor=pointer]
+          - generic [ref=e44]:
+            - generic [ref=e45]: 💡
+            - generic [ref=e46]: Categoriza para mejor seguimiento en reportes
+        - button "Guardar Movimiento" [ref=e47] [cursor=pointer]
+    - navigation [ref=e48]:
+      - link "Inicio" [ref=e49] [cursor=pointer]:
+        - /url: /
+        - img [ref=e50]
+        - generic [ref=e53]: Inicio
+      - link "Reportes" [ref=e54] [cursor=pointer]:
+        - /url: /reports
+        - img [ref=e55]
+        - generic [ref=e56]: Reportes
+      - link "Config" [ref=e57] [cursor=pointer]:
+        - /url: /settings
+        - img [ref=e58]
+        - generic [ref=e61]: Config
+      - link [ref=e62] [cursor=pointer]:
+        - /url: /add
+        - img [ref=e63]
+  - alert [ref=e64]
+```

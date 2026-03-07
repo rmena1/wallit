@@ -21,6 +21,10 @@ export interface AccountWithBalance {
   emoji: string | null
 }
 
+export type AccountWithBalanceSerialized = Omit<AccountWithBalance, 'currentValueUpdatedAt'> & {
+  currentValueUpdatedAt: string | null
+}
+
 /**
  * Get all accounts with calculated balances for the current user.
  * Balance = initialBalance + sum(income) - sum(expense)
@@ -62,7 +66,9 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
     currentValue: r.currentValue,
     currentValueUpdatedAt: r.currentValueUpdatedAt,
     creditLimit: r.creditLimit ?? null,
-    balance: r.isInvestment ? (r.currentValue ?? r.initialBalance) : r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum),
+    balance: r.isInvestment
+      ? (r.currentValue ?? r.initialBalance)
+      : r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum),
     currency: r.currency,
     color: r.color,
     emoji: r.emoji,
@@ -82,4 +88,71 @@ export async function getTotalBalance(usdToClpRate?: number): Promise<number> {
     }
     return sum + a.balance
   }, 0)
+}
+
+export interface NetLiquidityData {
+  debitBalance: number // sum of balances for debit accounts in CLP cents
+  receivables: number // sum of amounts for movements where receivable=true and received=false
+  unsettledLoans: number // sum of amounts for movements where loan=true and loanSettled=false
+  creditDebt: number // sum of (creditLimit - balance) for credit accounts with creditLimit > 0
+  netLiquidity: number // debitBalance + receivables - creditDebt - unsettledLoans
+}
+
+export async function getNetLiquidity(usdToClpRate?: number, precomputedBalances?: AccountWithBalance[]): Promise<NetLiquidityData> {
+  const accountBalances = precomputedBalances ?? await getAccountBalances()
+  // Support both Spanish types (current) and English types (legacy)
+  const debitTypes = ['Corriente', 'Vista', 'Ahorro', 'Prepago', 'debit']
+  const creditTypes = ['Crédito', 'credit']
+
+  let debitBalance = 0
+  let creditDebt = 0
+
+  for (const a of accountBalances) {
+    const balanceInClp = a.currency === 'USD' && usdToClpRate
+      ? Math.round(a.balance * usdToClpRate / 100)
+      : a.balance
+
+    if (debitTypes.includes(a.accountType) && !a.isInvestment) {
+      debitBalance += balanceInClp
+    }
+
+    if (creditTypes.includes(a.accountType) && a.creditLimit && a.creditLimit > 0) {
+      const creditLimitClp = a.currency === 'USD' && usdToClpRate
+        ? Math.round(a.creditLimit * usdToClpRate / 100)
+        : a.creditLimit
+      creditDebt += Math.max(0, creditLimitClp - balanceInClp)
+    }
+  }
+
+  const session = await requireAuth()
+  const [receivableResults, unsettledLoanResults] = await Promise.all([
+    db
+      .select({ total: sql<number>`COALESCE(SUM(${movements.amount}), 0)` })
+      .from(movements)
+      .where(and(
+        eq(movements.userId, session.id),
+        eq(movements.receivable, true),
+        eq(movements.received, false)
+      )),
+    db
+      .select({ total: sql<number>`COALESCE(SUM(${movements.amount}), 0)` })
+      .from(movements)
+      .where(and(
+        eq(movements.userId, session.id),
+        eq(movements.type, 'income'),
+        eq(movements.loan, true),
+        eq(movements.loanSettled, false)
+      )),
+  ])
+
+  const receivables = Number(receivableResults[0]?.total ?? 0)
+  const unsettledLoans = Number(unsettledLoanResults[0]?.total ?? 0)
+
+  return {
+    debitBalance,
+    receivables,
+    unsettledLoans,
+    creditDebt,
+    netLiquidity: debitBalance + receivables - creditDebt - unsettledLoans,
+  }
 }

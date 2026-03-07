@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { db, accounts, movements, categories } from '@/lib/db'
-import { eq, and, desc } from 'drizzle-orm'
+import { eq, and, desc, isNotNull } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 import { generateId } from '@/lib/utils'
 
@@ -20,7 +20,9 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
   const bankName = (formData.get('bankName') as string)?.trim()
   const accountType = (formData.get('accountType') as string)?.trim()
   const lastFourDigits = (formData.get('lastFourDigits') as string)?.trim()
+  const isInvestment = formData.get('isInvestment') === 'on' || formData.get('isInvestment') === 'true'
   const initialBalanceStr = (formData.get('initialBalance') as string)?.trim()
+  const creditLimitStr = (formData.get('creditLimit') as string)?.trim()
   const currency = (formData.get('currency') as string)?.trim() || 'CLP'
   const color = (formData.get('color') as string)?.trim() || null
   const emoji = (formData.get('emoji') as string)?.trim() || null
@@ -33,7 +35,14 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
     return { success: false, error: 'Account type is required' }
   }
 
-  if (!lastFourDigits || !/^\d{4}$/.test(lastFourDigits)) {
+  let normalizedLastFourDigits = lastFourDigits || ''
+  if (isInvestment) {
+    if (!normalizedLastFourDigits) {
+      normalizedLastFourDigits = '0000'
+    } else if (!/^\d{4}$/.test(normalizedLastFourDigits)) {
+      return { success: false, error: 'Last 4 digits must be exactly 4 numbers' }
+    }
+  } else if (!normalizedLastFourDigits || !/^\d{4}$/.test(normalizedLastFourDigits)) {
     return { success: false, error: 'Last 4 digits must be exactly 4 numbers' }
   }
 
@@ -46,13 +55,31 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
     }
   }
 
+  let creditLimit: number | null = null
+  if (creditLimitStr) {
+    const parsed = parseFloat(creditLimitStr.replace(/[$,]/g, ''))
+    if (!isNaN(parsed)) {
+      creditLimit = Math.round(parsed * 100)
+    }
+  }
+
+  if ((accountType === 'Crédito' || accountType === 'credit') && creditLimit && creditLimit > 0 && initialBalance === 0) {
+    initialBalance = creditLimit
+  }
+
+  const now = new Date()
+
   await db.insert(accounts).values({
     id: generateId(),
     userId: session.id,
     bankName,
     accountType,
-    lastFourDigits,
+    lastFourDigits: normalizedLastFourDigits,
     initialBalance,
+    isInvestment,
+    currentValue: isInvestment ? initialBalance : null,
+    currentValueUpdatedAt: isInvestment ? now : null,
+    creditLimit,
     currency: currency as 'CLP' | 'USD',
     color,
     emoji,
@@ -73,7 +100,9 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
   const bankName = (formData.get('bankName') as string)?.trim()
   const accountType = (formData.get('accountType') as string)?.trim()
   const lastFourDigits = (formData.get('lastFourDigits') as string)?.trim()
+  const isInvestment = formData.get('isInvestment') === 'on' || formData.get('isInvestment') === 'true'
   const initialBalanceStr = (formData.get('initialBalance') as string)?.trim()
+  const creditLimitStr = (formData.get('creditLimit') as string)?.trim()
   const currency = (formData.get('currency') as string)?.trim() || 'CLP'
   const color = (formData.get('color') as string)?.trim() || null
   const emoji = (formData.get('emoji') as string)?.trim() || null
@@ -90,8 +119,29 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
     return { success: false, error: 'Account type is required' }
   }
 
-  if (!lastFourDigits || !/^\d{4}$/.test(lastFourDigits)) {
+  let normalizedLastFourDigits = lastFourDigits || ''
+  if (isInvestment) {
+    if (!normalizedLastFourDigits) {
+      normalizedLastFourDigits = '0000'
+    } else if (!/^\d{4}$/.test(normalizedLastFourDigits)) {
+      return { success: false, error: 'Last 4 digits must be exactly 4 numbers' }
+    }
+  } else if (!normalizedLastFourDigits || !/^\d{4}$/.test(normalizedLastFourDigits)) {
     return { success: false, error: 'Last 4 digits must be exactly 4 numbers' }
+  }
+
+  const [existingAccount] = await db
+    .select({
+      id: accounts.id,
+      currentValue: accounts.currentValue,
+      currentValueUpdatedAt: accounts.currentValueUpdatedAt,
+    })
+    .from(accounts)
+    .where(and(eq(accounts.id, id), eq(accounts.userId, session.id)))
+    .limit(1)
+
+  if (!existingAccount) {
+    return { success: false, error: 'Account not found' }
   }
 
   let initialBalance = 0
@@ -102,16 +152,41 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
     }
   }
 
+  let creditLimit: number | null = null
+  if (creditLimitStr) {
+    const parsed = parseFloat(creditLimitStr.replace(/[$,]/g, ''))
+    if (!isNaN(parsed)) {
+      creditLimit = Math.round(parsed * 100)
+    }
+  }
+
+  if ((accountType === 'Crédito' || accountType === 'credit') && creditLimit && creditLimit > 0 && initialBalance === 0) {
+    initialBalance = creditLimit
+  }
+
+  const now = new Date()
+  let currentValue = existingAccount.currentValue
+  let currentValueUpdatedAt = existingAccount.currentValueUpdatedAt
+
+  if (isInvestment && currentValue === null) {
+    currentValue = initialBalance
+    currentValueUpdatedAt = now
+  }
+
   await db.update(accounts)
     .set({
       bankName,
       accountType,
-      lastFourDigits,
+      lastFourDigits: normalizedLastFourDigits,
       initialBalance,
+      isInvestment,
+      currentValue,
+      currentValueUpdatedAt,
+      creditLimit,
       currency: currency as 'CLP' | 'USD',
       color,
       emoji,
-      updatedAt: new Date(),
+      updatedAt: now,
     })
     .where(
       and(
@@ -122,6 +197,7 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
 
   revalidatePath('/')
   revalidatePath('/settings')
+  revalidatePath(`/account/${id}`)
   return { success: true }
 }
 
@@ -159,8 +235,11 @@ export async function getAccounts() {
 /**
  * Get paginated movements for an account (used by "load more" on account detail)
  */
-export async function getAccountMovements(accountId: string, offset: number, limit: number = 50) {
+export async function getAccountMovements(accountId: string, offset: number, limit: number = 50, transfersOnly: boolean = false) {
   const session = await requireAuth()
+  const whereCondition = transfersOnly
+    ? and(eq(movements.accountId, accountId), eq(movements.userId, session.id), isNotNull(movements.transferId))
+    : and(eq(movements.accountId, accountId), eq(movements.userId, session.id))
 
   return db
     .select({
@@ -175,12 +254,14 @@ export async function getAccountMovements(accountId: string, offset: number, lim
       originalName: movements.originalName,
       receivable: movements.receivable,
       received: movements.received,
+      transferId: movements.transferId,
+      transferPairId: movements.transferPairId,
       categoryName: categories.name,
       categoryEmoji: categories.emoji,
     })
     .from(movements)
     .leftJoin(categories, eq(movements.categoryId, categories.id))
-    .where(and(eq(movements.accountId, accountId), eq(movements.userId, session.id)))
+    .where(whereCondition)
     .orderBy(desc(movements.date), desc(movements.createdAt))
     .limit(limit)
     .offset(offset)

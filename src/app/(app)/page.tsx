@@ -2,8 +2,10 @@ import { getSession } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { db, movements, categories, accounts } from '@/lib/db'
 import { eq, desc, sql, and, isNull, gte } from 'drizzle-orm'
-import { getAccountBalances } from '@/lib/actions/balances'
+import { getAccountBalances, getNetLiquidity, type AccountWithBalanceSerialized, type NetLiquidityData } from '@/lib/actions/balances'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
+import { getUnsettledEmergencyCount } from '@/lib/actions/emergency'
+import { getUnsettledLoanCount } from '@/lib/actions/loans'
 import { HomePage } from './home-client'
 
 export default async function Home() {
@@ -25,6 +27,8 @@ export default async function Home() {
     recentMovements,
     totalsResult,
     reviewResult,
+    unsettledEmergencyCount,
+    unsettledLoanCount,
     recentUnlinkedIncomes,
   ] = await Promise.all([
     // Exchange rate - only fetch if needed
@@ -69,8 +73,8 @@ export default async function Home() {
     // Totals (excluding transfers and receivables)
     db
       .select({
-        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = false OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
-        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = false OR ${movements.receivable} IS NULL) AND (${movements.transferId} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = false OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) AND (${movements.transferId} IS NULL) AND (${movements.emergency} = false OR ${movements.emergency} IS NULL) AND (${movements.loan} = false OR ${movements.loan} IS NULL) AND (${movements.loanId} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = false OR ${movements.receivable} IS NULL) AND (${movements.transferId} IS NULL) AND (${movements.emergency} = false OR ${movements.emergency} IS NULL) AND (${movements.loanId} IS NULL) THEN amount ELSE 0 END), 0)`,
       })
       .from(movements)
       .where(eq(movements.userId, session.id)),
@@ -80,6 +84,12 @@ export default async function Home() {
       .select({ count: sql<number>`COUNT(*)` })
       .from(movements)
       .where(and(eq(movements.userId, session.id), eq(movements.needsReview, true))),
+
+    // Unsettled emergency count
+    getUnsettledEmergencyCount().catch(() => 0),
+
+    // Unsettled loan count
+    getUnsettledLoanCount().catch(() => 0),
 
     // Recent unlinked incomes (last 30 days, no receivableId, type=income)
     db
@@ -103,7 +113,9 @@ export default async function Home() {
         eq(movements.userId, session.id),
         eq(movements.type, 'income'),
         isNull(movements.receivableId),
+        isNull(movements.loanId),
         eq(movements.receivable, false),
+        eq(movements.loan, false),
         eq(movements.needsReview, false),
         gte(movements.date, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)),
       ))
@@ -121,19 +133,33 @@ export default async function Home() {
 
   const totals = totalsResult[0] || { totalIncome: 0, totalExpense: 0 }
   const pendingReviewCount = reviewResult[0]?.count ?? 0
+  const netLiquidity: NetLiquidityData = await getNetLiquidity(usdClpRate ? usdClpRate / 100 : undefined, accountBalances)
+  const serializedAccountBalances: AccountWithBalanceSerialized[] = accountBalances.map((account) => ({
+    ...account,
+    currentValueUpdatedAt: account.currentValueUpdatedAt?.toISOString() ?? null,
+  }))
+  // Serialize Date fields for client component
+  const serializedMovements = recentMovements.map((m) => ({
+    ...m,
+    createdAt: m.createdAt.toISOString(),
+    updatedAt: m.updatedAt.toISOString(),
+  }))
 
   return (
     <HomePage
       email={session.email}
-      accountBalances={accountBalances}
+      accountBalances={serializedAccountBalances}
       totalBalance={totalBalance}
       totalIncome={totals.totalIncome}
       totalExpense={totals.totalExpense}
-      movements={recentMovements}
+      movements={serializedMovements}
       pendingReviewCount={pendingReviewCount}
       usdClpRate={usdClpRate}
+      netLiquidity={netLiquidity}
       userAccounts={accountBalances.map(a => ({ id: a.id, bankName: a.bankName, lastFourDigits: a.lastFourDigits, emoji: a.emoji }))}
       recentUnlinkedIncomes={recentUnlinkedIncomes}
+      unsettledEmergencyCount={unsettledEmergencyCount}
+      unsettledLoanCount={unsettledLoanCount}
     />
   )
 }

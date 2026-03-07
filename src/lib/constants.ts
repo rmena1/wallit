@@ -10,6 +10,8 @@ export const BANK_NAMES = [
   'MACH',
   'Falabella',
   'Ripley',
+  'Fintual',
+  'Racional',
 ] as const
 
 export const ACCOUNT_TYPES = [
@@ -18,4 +20,5 @@ export const ACCOUNT_TYPES = [
   'Crédito',
   'Ahorro',
   'Prepago',
+  'Inversión',
 ] as const

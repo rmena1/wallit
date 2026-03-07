@@ -62,6 +62,21 @@ export const accounts = pgTable('accounts', {
 ])
 
 // ============================================================================
+// INVESTMENT SNAPSHOTS
+// ============================================================================
+export const investmentSnapshots = pgTable('investment_snapshots', {
+  id: text('id').primaryKey(), // nanoid
+  accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  value: integer('value').notNull(), // cents
+  date: text('date').notNull(), // YYYY-MM-DD
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  index('idx_snapshots_account').on(table.accountId),
+  index('idx_snapshots_user').on(table.userId),
+])
+
+// ============================================================================
 // MOVEMENTS
 // ============================================================================
 export const movements = pgTable('movements', {
@@ -85,6 +100,13 @@ export const movements = pgTable('movements', {
   // Transfer fields: link two movements as a transfer pair
   transferId: text('transfer_id'), // shared ID between both movements of a transfer (nanoid)
   transferPairId: text('transfer_pair_id'), // ID of the paired movement
+  // Emergency expense fields
+  emergency: boolean('emergency').notNull().default(false),
+  emergencySettled: boolean('emergency_settled').notNull().default(false),
+  // Loan income fields
+  loan: boolean('loan').notNull().default(false),
+  loanSettled: boolean('loan_settled').notNull().default(false),
+  loanId: text('loan_id'), // links payback expense to original loan income
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
@@ -109,6 +131,22 @@ export const exchangeRates = pgTable('exchange_rates', {
 })
 
 // ============================================================================
+// EMERGENCY PAYMENTS
+// ============================================================================
+export const emergencyPayments = pgTable('emergency_payments', {
+  id: text('id').primaryKey(),
+  emergencyId: text('emergency_id').notNull().references(() => movements.id, { onDelete: 'cascade' }),
+  fromAccountId: text('from_account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  toAccountId: text('to_account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  amount: integer('amount').notNull(), // cents
+  date: text('date').notNull(), // YYYY-MM-DD
+  transferId: text('transfer_id'), // links to transfer movements created (nullable)
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  index('idx_emergency_payments_emergency').on(table.emergencyId),
+])
+
+// ============================================================================
 // TYPES
 // ============================================================================
 export type User = typeof users.$inferSelect
@@ -123,8 +161,14 @@ export type NewCategory = typeof categories.$inferInsert
 export type Account = typeof accounts.$inferSelect
 export type NewAccount = typeof accounts.$inferInsert
 
+export type InvestmentSnapshot = typeof investmentSnapshots.$inferSelect
+export type NewInvestmentSnapshot = typeof investmentSnapshots.$inferInsert
+
 export type Movement = typeof movements.$inferSelect
 export type NewMovement = typeof movements.$inferInsert
 
 export type ExchangeRate = typeof exchangeRates.$inferSelect
 export type NewExchangeRate = typeof exchangeRates.$inferInsert
+
+export type EmergencyPayment = typeof emergencyPayments.$inferSelect
+export type NewEmergencyPayment = typeof emergencyPayments.$inferInsert

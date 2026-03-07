@@ -107,6 +107,17 @@ export async function seedManyMovements(userId: string, accountId: string, count
   }
 }
 
+export async function seedUnlinkedIncome(userId: string, accountId: string | null, name: string, amount: number): Promise<string> {
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  const id = `income-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  await sql`
+    INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
+    VALUES (${id}, ${userId}, ${accountId}, ${name}, ${today}, ${amount}, 'income', false, 'CLP', false, false, ${now}, ${now})
+  `
+  return id
+}
+
 /** Gracefully close the shared connection pool. Call in afterAll/globalTeardown. */
 export async function closePool() {
   await sql.end()

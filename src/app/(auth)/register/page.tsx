@@ -94,7 +94,7 @@ export default function RegisterPage() {
               margin: 0,
             }}
           >
-            Create your account
+            Crea tu cuenta
           </h1>
           <p
             style={{
@@ -104,7 +104,7 @@ export default function RegisterPage() {
               lineHeight: 1.5,
             }}
           >
-            Start tracking your expenses
+            Comienza a seguir tus gastos
           </p>
         </div>
 
@@ -166,13 +166,13 @@ export default function RegisterPage() {
                   letterSpacing: '0.01em',
                 }}
               >
-                Password
+                Contraseña
               </label>
               <input
                 id="password"
                 name="password"
                 type="password"
-                placeholder="Minimum 8 characters"
+                placeholder="Mínimo 8 caracteres"
                 autoComplete="new-password"
                 minLength={8}
                 required
@@ -181,7 +181,7 @@ export default function RegisterPage() {
                 style={focusedField === 'password' ? inputFocused : inputBase}
               />
               <p style={{ fontSize: '12px', color: '#aeaeb2', marginTop: '6px', paddingLeft: '2px' }}>
-                Must be at least 8 characters
+                Debe tener al menos 8 caracteres
               </p>
             </div>
           </div>
@@ -224,7 +224,7 @@ export default function RegisterPage() {
                 <path d="M12 2a10 10 0 0 1 10 10" stroke="white" strokeWidth="3" strokeLinecap="round" />
               </svg>
             )}
-            {loading ? 'Creating account...' : 'Create account'}
+            {loading ? 'Creando cuenta...' : 'Crear cuenta'}
           </button>
         </form>
 
@@ -237,9 +237,9 @@ export default function RegisterPage() {
             lineHeight: 1.5,
           }}
         >
-          Already have an account?{' '}
+          ¿Ya tienes cuenta?{' '}
           <Link href="/login" style={{ color: '#22c55e', fontWeight: 600, textDecoration: 'none' }}>
-            Sign in
+            Iniciar sesión
           </Link>
         </p>
       </div>

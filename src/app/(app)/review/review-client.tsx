@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { confirmMovement, deleteReviewMovement, markAsReceivable, splitMovement } from '@/lib/actions/review'
+import { confirmMovement, deleteReviewMovement, getPendingReviewMovements, markAsReceivable, splitMovement } from '@/lib/actions/review'
 import { convertToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { formatMovementDisplayAmount, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
@@ -49,7 +49,7 @@ const selectStyle: React.CSSProperties = {
   backgroundSize: '14px',
 }
 
-const labelStyle: React.CSSProperties = { fontSize: 11, color: '#71717a', marginBottom: 2, display: 'block' }
+const labelStyle: React.CSSProperties = { fontSize: 11, color: '#a1a1aa', marginBottom: 2, display: 'block' }
 
 function centsToDisplay(cents: number): string {
   return (cents / 100).toString()
@@ -57,14 +57,18 @@ function centsToDisplay(cents: number): string {
 
 export function ReviewClient({ movements, accounts, categories }: Props) {
   const router = useRouter()
-  const total = movements.length
+  const [reviewMovements, setReviewMovements] = useState(movements)
   const [currentIndex, setCurrentIndex] = useState(0)
   const [confirmed, setConfirmed] = useState(0)
   const [skipped, setSkipped] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isCheckingForMore, setIsCheckingForMore] = useState(false)
+  const [allPendingReviewed, setAllPendingReviewed] = useState(false)
+  const checkingForMoreRef = useRef(false)
+  const total = reviewMovements.length
 
-  const current = movements[currentIndex] as PendingMovement | undefined
+  const current = reviewMovements[currentIndex] as PendingMovement | undefined
   const [formName, setFormName] = useState(current?.name ?? '')
   const [formDate, setFormDate] = useState(current?.date ?? '')
   const [formAmount, setFormAmount] = useState(current ? centsToDisplay(current.amount) : '')
@@ -96,11 +100,35 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     getCurrentExchangeRate().then(setExchangeRate).catch(() => {})
   }, [])
 
-  const done = currentIndex >= total
+  const batchDone = currentIndex >= total
+  const done = batchDone && allPendingReviewed
+
+  const checkForMorePendingMovements = useCallback(async () => {
+    if (checkingForMoreRef.current) return
+
+    checkingForMoreRef.current = true
+    setIsCheckingForMore(true)
+    setError(null)
+
+    try {
+      const nextPending = await getPendingReviewMovements()
+      if (nextPending.length > 0) {
+        setReviewMovements(nextPending)
+        setCurrentIndex(0)
+      } else {
+        setAllPendingReviewed(true)
+      }
+    } catch {
+      setError('Error al cargar más movimientos pendientes')
+    } finally {
+      checkingForMoreRef.current = false
+      setIsCheckingForMore(false)
+    }
+  }, [])
 
   // Ensure form fields sync whenever currentIndex changes
   useEffect(() => {
-    const m = movements[currentIndex]
+    const m = reviewMovements[currentIndex]
     if (!m) return
     setFormName(m.name)
     setFormDate(m.date)
@@ -118,7 +146,13 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     setTransferToAccountId('')
     setTransferToAmount('')
     setTransferNote('')
-  }, [currentIndex, movements])
+  }, [currentIndex, reviewMovements])
+
+  // When current batch is exhausted, check if there are still pending reviews in DB
+  useEffect(() => {
+    if (!batchDone || total === 0 || allPendingReviewed) return
+    void checkForMorePendingMovements()
+  }, [allPendingReviewed, batchDone, checkForMorePendingMovements, total])
 
   // Get currencies for transfer calculation
   const fromAccount = accounts.find(a => a.id === formAccountId)
@@ -150,7 +184,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
   }, [isTransferMode, formAmount, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
 
   function loadMovement(idx: number) {
-    const m = movements[idx]
+    const m = reviewMovements[idx]
     if (!m) return
     setFormName(m.name)
     setFormDate(m.date)
@@ -357,6 +391,46 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     )
   }
 
+  if (batchDone && isCheckingForMore) {
+    return (
+      <>
+        <Header />
+        <main style={{ maxWidth: 540, margin: '0 auto', padding: '40px 16px', textAlign: 'center' }}>
+          <div style={{ fontSize: 20, fontWeight: 700, color: '#e5e5e5', marginBottom: 8 }}>
+            Buscando más movimientos pendientes...
+          </div>
+          <div style={{ fontSize: 15, color: '#a1a1aa' }}>
+            {confirmed} confirmado{confirmed !== 1 ? 's' : ''} · {skipped} omitido{skipped !== 1 ? 's' : ''}
+          </div>
+        </main>
+      </>
+    )
+  }
+
+  if (batchDone && !done) {
+    return (
+      <>
+        <Header />
+        <main style={{ maxWidth: 540, margin: '0 auto', padding: '40px 16px', textAlign: 'center' }}>
+          <div style={{ fontSize: 20, fontWeight: 700, color: '#e5e5e5', marginBottom: 8 }}>
+            No se pudieron cargar más movimientos
+          </div>
+          <div style={{ fontSize: 15, color: '#a1a1aa', marginBottom: 24 }}>
+            {error ?? 'Intenta nuevamente para continuar la revisión.'}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
+            <button onClick={() => void checkForMorePendingMovements()} style={primaryBtn}>Reintentar</button>
+            <button onClick={() => router.push('/')} style={{
+              ...primaryBtn,
+              background: '#27272a',
+              boxShadow: 'none',
+            }}>Volver al inicio</button>
+          </div>
+        </main>
+      </>
+    )
+  }
+
   if (done) {
     return (
       <>
@@ -375,7 +449,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     )
   }
 
-  const reviewed = confirmed + skipped
+  const reviewed = currentIndex
 
   return (
     <>
@@ -384,7 +458,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
         {/* Progress bar - compact */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 12, color: '#a1a1aa', whiteSpace: 'nowrap' }}>
-            {reviewed + 1}/{total}
+            {currentIndex + 1}/{total}
           </span>
           <div style={{ flex: 1, height: 3, backgroundColor: '#27272a', borderRadius: 2 }}>
             <div style={{
@@ -446,10 +520,10 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                   backgroundColor: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '#27272a' : 'transparent',
                   color: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) 
                     ? (t === 'expense' ? '#f87171' : t === 'income' ? '#4ade80' : '#60a5fa') 
-                    : '#52525b',
+                    : '#9ca3af',
                   transition: 'all 0.15s ease',
                 }}>
-                  {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transfer'}
+                  {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transferencia'}
                 </button>
               ))}
             </div>
@@ -536,7 +610,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                       style={inputStyle}
                     />
                     {exchangeRate && (
-                      <div style={{ fontSize: 10, color: '#71717a', marginTop: 2 }}>
+                      <div style={{ fontSize: 10, color: '#a1a1aa', marginTop: 2 }}>
                         💱 1 USD = {(exchangeRate / 100).toFixed(2)} CLP
                       </div>
                     )}
@@ -562,7 +636,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                   <select value={formAccountId} onChange={e => setFormAccountId(e.target.value)} style={selectStyle}>
                     <option value="">Sin cuenta</option>
                     {accounts.map(a => (
-                      <option key={a.id} value={a.id}>{a.emoji || '🏦'} ···{a.lastFourDigits}</option>
+                      <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} ···{a.lastFourDigits}</option>
                     ))}
                   </select>
                 </div>
@@ -613,7 +687,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
 
             {/* Original Name */}
             {current!.originalName && (
-              <div style={{ fontSize: 11, color: '#52525b', padding: '4px 8px', backgroundColor: '#111', borderRadius: 6 }}>
+              <div style={{ fontSize: 11, color: '#9ca3af', padding: '4px 8px', backgroundColor: '#111', borderRadius: 6 }}>
                 Original: {current!.originalName}
               </div>
             )}
@@ -640,7 +714,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
               ? '0 2px 8px rgba(59,130,246,0.3)'
               : '0 2px 8px rgba(34,197,94,0.3)',
           }}>
-            {loading ? '...' : isTransferMode ? '↔️ Crear Transfer' : '✓ Confirmar'}
+            {loading ? '...' : isTransferMode ? '↔️ Crear Transferencia' : '✓ Confirmar'}
           </button>
         </div>
 
@@ -773,13 +847,13 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                     padding: '10px 12px', backgroundColor: idx === 0 ? '#1a2a1a' : '#111',
                     borderRadius: 10, border: '1px solid #2a2a2a',
                   }}>
-                    <span style={{ fontSize: 13, color: '#71717a', width: 20, flexShrink: 0 }}>{idx + 1}</span>
+                    <span style={{ fontSize: 13, color: '#a1a1aa', width: 20, flexShrink: 0 }}>{idx + 1}</span>
                     <input value={item.name} onChange={e => updateSplitItem(idx, 'name', e.target.value)}
                       placeholder="Descripción" style={{ ...inputStyle, height: 40, fontSize: 14, flex: 2 }} />
                     <input value={item.amount} onChange={e => updateSplitItem(idx, 'amount', e.target.value)}
                       placeholder="0" inputMode="decimal" readOnly={idx === 0}
                       style={{ ...inputStyle, height: 40, fontSize: 14, flex: 1, textAlign: 'right',
-                        ...(idx === 0 ? { backgroundColor: '#0a0a0a', color: '#71717a' } : {}),
+                        ...(idx === 0 ? { backgroundColor: '#0a0a0a', color: '#a1a1aa' } : {}),
                       }} />
                   </div>
                 ))}

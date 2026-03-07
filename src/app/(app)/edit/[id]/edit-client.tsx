@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import { updateMovement, deleteMovement } from '@/lib/actions/movements'
 import { markAsReceivable, unmarkReceivable, splitMovement } from '@/lib/actions/review'
 import { convertToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
+import { hasEmergencyPayments } from '@/lib/actions/emergency'
+import { hasLoanPaybackExpenses } from '@/lib/actions/loans'
 import { formatMovementDisplayAmount, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
@@ -24,6 +26,8 @@ interface MovementData {
   received: boolean
   time: string | null
   originalName: string | null
+  emergency: boolean
+  loan: boolean
 }
 
 interface Props {
@@ -48,7 +52,7 @@ const selectStyle: React.CSSProperties = {
   backgroundSize: '16px',
 }
 
-const labelStyle: React.CSSProperties = { fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }
+const labelStyle: React.CSSProperties = { fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }
 
 function centsToDisplay(cents: number): string {
   return (cents / 100).toString()
@@ -69,6 +73,9 @@ export function EditClient({ movement, accounts, categories }: Props) {
   const [formAmountUsd, setFormAmountUsd] = useState(movement.amountUsd ? centsToDisplay(movement.amountUsd) : '')
   const [formExchangeRate, setFormExchangeRate] = useState(movement.exchangeRate ? (movement.exchangeRate / 100).toString() : '')
   const [formTime, setFormTime] = useState(movement.time ?? '')
+
+  const [formEmergency, setFormEmergency] = useState(movement.emergency)
+  const [formLoan, setFormLoan] = useState(movement.loan)
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReceivable, setShowReceivable] = useState(false)
@@ -118,6 +125,31 @@ export function EditClient({ movement, accounts, categories }: Props) {
       setTransferToAmount(formAmount)
     }
   }, [isTransferMode, formAmount, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
+
+  async function handleToggleEmergency(checked: boolean) {
+    if (!checked && movement.emergency) {
+      // Turning off - check if payments exist
+      const hasPayments = await hasEmergencyPayments(movement.id)
+      if (hasPayments) {
+        setError('No se puede desmarcar: ya existen abonos para este gasto de emergencia')
+        return
+      }
+    }
+    setFormEmergency(checked)
+    setError(null)
+  }
+
+  async function handleToggleLoan(checked: boolean) {
+    if (!checked && movement.loan) {
+      const hasPaybacks = await hasLoanPaybackExpenses(movement.id)
+      if (hasPaybacks) {
+        setError('No se puede desmarcar: ya existen devoluciones vinculadas a este préstamo')
+        return
+      }
+    }
+    setFormLoan(checked)
+    setError(null)
+  }
 
   async function handleSave() {
     setLoading(true)
@@ -184,6 +216,15 @@ export function EditClient({ movement, accounts, categories }: Props) {
       }
 
       // Normal update
+      if (movement.loan && (formType !== 'income' || !formLoan)) {
+        const hasPaybacks = await hasLoanPaybackExpenses(movement.id)
+        if (hasPaybacks) {
+          setError('No se puede desmarcar: ya existen devoluciones vinculadas a este préstamo')
+          setLoading(false)
+          return
+        }
+      }
+
       await updateMovement(movement.id, {
         name: formName.trim(),
         date: formDate,
@@ -195,6 +236,8 @@ export function EditClient({ movement, accounts, categories }: Props) {
         amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
         exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
         time: formTime || null,
+        emergency: formType === 'expense' ? formEmergency : false,
+        loan: formType === 'income' ? formLoan : false,
       })
       router.push('/')
     } catch {
@@ -336,11 +379,11 @@ export function EditClient({ movement, accounts, categories }: Props) {
                   backgroundColor: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '#27272a' : 'transparent',
                   color: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) 
                     ? (t === 'expense' ? '#f87171' : t === 'income' ? '#4ade80' : '#60a5fa') 
-                    : '#52525b',
+                    : '#9ca3af',
                   boxShadow: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
                   transition: 'all 0.2s ease',
                 }}>
-                  {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transfer'}
+                  {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transferencia'}
                 </button>
               ))}
             </div>
@@ -389,7 +432,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                       style={inputStyle}
                     />
                     {exchangeRate && (
-                      <div style={{ fontSize: 11, color: '#71717a', marginTop: 4 }}>
+                      <div style={{ fontSize: 11, color: '#a1a1aa', marginTop: 4 }}>
                         💱 Tipo de cambio: 1 USD = {(exchangeRate / 100).toFixed(2)} CLP
                       </div>
                     )}
@@ -478,7 +521,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                 <label style={labelStyle}>Nombre original</label>
                 <div style={{
                   padding: '12px 14px', borderRadius: 12, backgroundColor: '#111',
-                  border: '1px solid #2a2a2a', fontSize: 14, color: '#71717a',
+                  border: '1px solid #2a2a2a', fontSize: 14, color: '#a1a1aa',
                 }}>
                   {movement.originalName}
                 </div>
@@ -504,6 +547,58 @@ export function EditClient({ movement, accounts, categories }: Props) {
                   }}>+</button>
                 </div>
               </div>
+            )}
+
+            {/* Emergency expense checkbox (only for expenses, not transfers) */}
+            {!isTransferMode && formType === 'expense' && (
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                backgroundColor: formEmergency ? '#2a1a1a' : 'transparent',
+                border: formEmergency ? '1px solid #dc2626' : '1px solid #2a2a2a',
+                transition: 'all 0.2s ease',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={formEmergency}
+                  onChange={e => handleToggleEmergency(e.target.checked)}
+                  style={{ width: 18, height: 18, accentColor: '#dc2626', cursor: 'pointer' }}
+                />
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: formEmergency ? '#f87171' : '#e5e5e5' }}>
+                    🚨 Gasto de emergencia
+                  </div>
+                  <div style={{ fontSize: 11, color: '#a1a1aa' }}>
+                    No cuenta en reportes regulares. Se puede saldar parcialmente.
+                  </div>
+                </div>
+              </label>
+            )}
+
+            {/* Loan income checkbox (only for incomes, not transfers) */}
+            {!isTransferMode && formType === 'income' && (
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                backgroundColor: formLoan ? '#221933' : 'transparent',
+                border: formLoan ? '1px solid #8b5cf6' : '1px solid #2a2a2a',
+                transition: 'all 0.2s ease',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={formLoan}
+                  onChange={e => handleToggleLoan(e.target.checked)}
+                  style={{ width: 18, height: 18, accentColor: '#8b5cf6', cursor: 'pointer' }}
+                />
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: formLoan ? '#c4b5fd' : '#e5e5e5' }}>
+                    💵 Préstamo
+                  </div>
+                  <div style={{ fontSize: 11, color: '#a1a1aa' }}>
+                    Ingreso que debes devolver después. No cuenta como ingreso en reportes.
+                  </div>
+                </div>
+              </label>
             )}
           </div>
         </div>
@@ -685,7 +780,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                     padding: '10px 12px', backgroundColor: idx === 0 ? '#1a2a1a' : '#111',
                     borderRadius: 10, border: '1px solid #2a2a2a',
                   }}>
-                    <span style={{ fontSize: 13, color: '#71717a', width: 20, flexShrink: 0 }}>{idx + 1}</span>
+                    <span style={{ fontSize: 13, color: '#a1a1aa', width: 20, flexShrink: 0 }}>{idx + 1}</span>
                     <input
                       value={item.name}
                       onChange={e => updateSplitItem(idx, 'name', e.target.value)}
@@ -700,7 +795,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                       readOnly={idx === 0}
                       style={{
                         ...inputStyle, height: 40, fontSize: 14, flex: 1, textAlign: 'right',
-                        ...(idx === 0 ? { backgroundColor: '#0a0a0a', color: '#71717a' } : {}),
+                        ...(idx === 0 ? { backgroundColor: '#0a0a0a', color: '#a1a1aa' } : {}),
                       }}
                     />
                   </div>
