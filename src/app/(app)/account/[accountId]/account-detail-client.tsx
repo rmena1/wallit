@@ -37,6 +37,7 @@ interface MovementRow {
 interface BalancePoint {
   date: string
   balance: number
+  currency: 'CLP' | 'USD'
 }
 
 interface Props {
@@ -76,7 +77,7 @@ function CustomTooltip({ active, payload }: any) {
     }}>
       <div style={{ color: '#a1a1aa', marginBottom: 2 }}>{formatChartDate(point.date)}</div>
       <div style={{ color: point.balance >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>
-        {formatCurrency(point.balance, point.currency || 'CLP')}
+        {formatCurrency(point.balance, point.currency)}
       </div>
     </div>
   )
@@ -261,7 +262,7 @@ export function AccountDetailClient({ account, balance, movements: initialMoveme
                     color: m.type === 'income' ? '#4ade80' : '#f87171',
                     whiteSpace: 'nowrap', flexShrink: 0, marginLeft: 8,
                   }}>
-                    {m.type === 'income' ? '+' : '-'}{formatCurrency(m.amount, 'CLP')}
+                    {m.type === 'income' ? '+' : '-'}{account.currency === 'USD' && m.amountUsd != null ? formatCurrency(m.amountUsd, 'USD') : formatCurrency(m.amount, 'CLP')}
                   </span>
                 </div>
               ))}

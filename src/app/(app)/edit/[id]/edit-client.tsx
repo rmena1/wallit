@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { updateMovement, deleteMovement } from '@/lib/actions/movements'
 import { markAsReceivable, unmarkReceivable, splitMovement } from '@/lib/actions/review'
 import { convertToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
-import { formatCurrency, parseMoney } from '@/lib/utils'
+import { formatMovementDisplayAmount, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
 
@@ -674,7 +674,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
                 fontSize: 14, color: '#a1a1aa', marginBottom: 16,
                 padding: '8px 12px', backgroundColor: '#111', borderRadius: 8,
               }}>
-                Total: <strong style={{ color: '#e5e5e5' }}>{formatCurrency(movement.amount, movement.currency)}</strong>
+                Total: <strong style={{ color: '#e5e5e5' }}>{formatMovementDisplayAmount(movement.amount, movement.amountUsd, movement.currency)}</strong>
                 {' · '}{movement.name}
               </div>
 

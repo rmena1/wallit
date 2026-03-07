@@ -541,7 +541,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                 {/* Amount + Currency */}
                 <div style={{ display: 'flex', gap: 12 }}>
                   <div style={{ flex: 2 }}>
-                    <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>{currency === 'USD' ? 'Monto pesos' : 'Monto'}</label>
+                    <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>{currency === 'USD' ? 'Monto (USD)' : 'Monto'}</label>
                     <input
                       type="text" 
                       placeholder="0.00"

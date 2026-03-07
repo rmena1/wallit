@@ -70,6 +70,21 @@ export function formatCurrency(cents: number, currency: 'CLP' | 'USD'): string {
 }
 
 /**
+ * Format a movement using its persisted storage fields.
+ * `amount` is always CLP cents; `amountUsd` is USD cents when the movement was entered in USD.
+ */
+export function formatMovementDisplayAmount(
+  amount: number,
+  amountUsd: number | null,
+  currency: 'CLP' | 'USD'
+): string {
+  if (currency === 'USD' && amountUsd != null) {
+    return formatCurrency(amountUsd, 'USD')
+  }
+  return formatCurrency(amount, 'CLP')
+}
+
+/**
  * Parse a money string to cents.
  * Handles both US format (1,000.50) and Chilean format (1.000,50 or 1.000).
  * Rule: if dots are present and the last dot-separated segment is exactly 3 digits

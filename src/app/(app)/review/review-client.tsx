@@ -4,8 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { confirmMovement, deleteReviewMovement, markAsReceivable, splitMovement } from '@/lib/actions/review'
 import { convertToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
-import { parseMoney as parseMoneyUtil } from '@/lib/utils'
-import { formatCurrency, parseMoney } from '@/lib/utils'
+import { formatMovementDisplayAmount, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
 
@@ -419,7 +418,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
               color: formType === 'expense' ? '#f87171' : '#4ade80',
               lineHeight: 1.1,
             }}>
-              {formatCurrency(current!.amount, 'CLP')}
+              {formatMovementDisplayAmount(current!.amount, current!.amountUsd, current!.currency)}
             </div>
             <div style={{ fontSize: 13, color: '#a1a1aa', marginTop: 2 }}>
               {current!.name}
@@ -764,7 +763,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                 fontSize: 14, color: '#a1a1aa', marginBottom: 16,
                 padding: '8px 12px', backgroundColor: '#111', borderRadius: 8,
               }}>
-                Total: <strong style={{ color: '#e5e5e5' }}>{formatCurrency(current.amount, current.currency)}</strong>
+                Total: <strong style={{ color: '#e5e5e5' }}>{formatMovementDisplayAmount(current.amount, current.amountUsd, current.currency)}</strong>
                 {' · '}{current.name}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

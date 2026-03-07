@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { logout } from '@/lib/actions/auth'
 import { deleteMovement, getMovementsPaginated } from '@/lib/actions/movements'
 import { markAsReceived, markAsReceivedWithExisting } from '@/lib/actions/review'
-import { formatDateDisplay, formatCurrency } from '@/lib/utils'
+import { formatDateDisplay, formatCurrency, formatMovementDisplayAmount } from '@/lib/utils'
 import type { AccountWithBalance } from '@/lib/actions/balances'
 
 interface MovementWithCategory {
@@ -16,6 +16,7 @@ interface MovementWithCategory {
   name: string
   date: string
   amount: number
+  amountUsd: number | null
   type: 'income' | 'expense'
   createdAt: Date
   updatedAt: Date
@@ -47,6 +48,7 @@ interface UnlinkedIncome {
   name: string
   date: string
   amount: number
+  amountUsd: number | null
   currency: 'CLP' | 'USD'
   accountBankName: string | null
   accountLastFour: string | null
@@ -87,6 +89,7 @@ interface MovementCardProps {
 
 const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpenPaymentDialog, onNavigate }: MovementCardProps) {
   const isTransfer = !!m.transferId
+  const displaysUsdAmount = m.currency === 'USD' && m.amountUsd != null
 
   return (
     <div
@@ -163,9 +166,9 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
           color: isTransfer ? '#60a5fa' : m.type === 'income' ? '#4ade80' : '#f87171',
           whiteSpace: 'nowrap',
         }}>
-          {isTransfer ? '' : m.type === 'income' ? '+' : '-'}{formatCurrency(m.amount, m.currency)}
+          {isTransfer ? '' : m.type === 'income' ? '+' : '-'}{formatMovementDisplayAmount(m.amount, m.amountUsd, m.currency)}
         </span>
-        {m.currency === 'USD' && (
+        {displaysUsdAmount && (
           <div style={{ fontSize: 11, color: '#52525b', textAlign: 'right', marginTop: 1 }}>
             USD
           </div>
@@ -759,7 +762,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                       </div>
                     </div>
                     <span style={{ fontSize: 14, fontWeight: 600, color: '#4ade80', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                      +{formatCurrency(inc.amount, 'CLP')}
+                      +{formatMovementDisplayAmount(inc.amount, inc.amountUsd, inc.currency)}
                     </span>
                     {selectedExistingIncomeId === inc.id && (
                       <span style={{ color: '#4ade80', fontSize: 16, flexShrink: 0 }}>✓</span>

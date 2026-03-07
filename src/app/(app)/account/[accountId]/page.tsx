@@ -129,17 +129,17 @@ export default async function AccountDetailPage({ params }: Props) {
   const hasMore = totalCount > MOVEMENTS_PAGE_SIZE
 
   // Build cumulative balance from daily net aggregates (much less data than all movements)
-  const balanceByDate: { date: string; balance: number }[] = []
+  const balanceByDate: { date: string; balance: number; currency: 'CLP' | 'USD' }[] = []
   if (balanceHistory.length > 0) {
     const firstDate = balanceHistory[0].date
     const d = new Date(firstDate + 'T00:00:00')
     d.setDate(d.getDate() - 1)
-    balanceByDate.push({ date: d.toISOString().slice(0, 10), balance: account.initialBalance })
+    balanceByDate.push({ date: d.toISOString().slice(0, 10), balance: account.initialBalance, currency: account.currency })
   }
   let runningBalance = account.initialBalance
   for (const row of balanceHistory) {
     runningBalance += Number(row.net)
-    balanceByDate.push({ date: row.date, balance: runningBalance })
+    balanceByDate.push({ date: row.date, balance: runningBalance, currency: account.currency })
   }
 
   return (
