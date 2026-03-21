@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { db, movements, categories, accounts } from '@/lib/db'
-import { eq, and, desc } from 'drizzle-orm'
+import { eq, and, desc, gte, isNull, lte, or, type SQLWrapper, type SQL } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 import { createMovementSchema } from '@/lib/validations'
 import { generateId } from '@/lib/utils'
@@ -11,6 +11,14 @@ import { convertUsdToClp } from '@/lib/exchange-rate'
 export type MovementActionResult = {
   success: boolean
   error?: string
+}
+
+export interface ReportCategoryMovement {
+  id: string
+  date: string
+  name: string
+  amount: number
+  time: string | null
 }
 
 /**
@@ -319,6 +327,50 @@ export async function getMovements() {
     .leftJoin(accounts, eq(movements.accountId, accounts.id))
     .where(eq(movements.userId, session.id))
     .orderBy(desc(movements.date), desc(movements.createdAt))
+}
+
+/**
+ * Get expense movements for a report category within a selected period.
+ */
+export async function getReportCategoryMovements(
+  startDate: string,
+  endDate: string,
+  categoryId: string | null,
+  accountId?: string,
+): Promise<ReportCategoryMovement[]> {
+  const session = await requireAuth()
+
+  const conditions: SQL[] = [
+    eq(movements.userId, session.id),
+    eq(movements.type, 'expense'),
+    gte(movements.date, startDate),
+    lte(movements.date, endDate),
+    or(eq(movements.receivable, false), isNull(movements.receivable))!,
+    isNull(movements.receivableId),
+    isNull(movements.transferId),
+    or(eq(movements.emergency, false), isNull(movements.emergency))!,
+    or(eq(movements.loan, false), isNull(movements.loan))!,
+    isNull(movements.loanId),
+    categoryId ? eq(movements.categoryId, categoryId) : isNull(movements.categoryId),
+  ]
+  if (accountId) conditions.push(eq(movements.accountId, accountId))
+
+  const results = await db
+    .select({
+      id: movements.id,
+      date: movements.date,
+      name: movements.name,
+      amount: movements.amount,
+      time: movements.time,
+    })
+    .from(movements)
+    .where(and(...conditions))
+    .orderBy(desc(movements.date), desc(movements.time), desc(movements.createdAt))
+
+  return results.map((movement) => ({
+    ...movement,
+    amount: Number(movement.amount),
+  }))
 }
 
 /**

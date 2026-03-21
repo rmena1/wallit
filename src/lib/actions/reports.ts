@@ -15,7 +15,7 @@ export interface ReportData {
   totalIncome: number
   totalExpense: number
   movementCount: number
-  categorySpending: { name: string; emoji: string; total: number; count: number }[]
+  categorySpending: { id: string | null; name: string; emoji: string; total: number; count: number }[]
   categories: { id: string; name: string; emoji: string }[]
   accounts: { id: string; bankName: string; lastFour: string; emoji: string | null }[]
 }
@@ -65,6 +65,7 @@ export async function getReportData(
     }).from(movements).where(where),
 
     db.select({
+      categoryId: movements.categoryId,
       categoryName: categories.name,
       categoryEmoji: categories.emoji,
       total: sql<number>`SUM(${movements.amount})`,
@@ -72,7 +73,7 @@ export async function getReportData(
     }).from(movements)
       .leftJoin(categories, eq(movements.categoryId, categories.id))
       .where(sql`${where} AND ${movements.type} = 'expense'`)
-      .groupBy(categories.id)
+      .groupBy(movements.categoryId, categories.name, categories.emoji)
       .orderBy(sql`SUM(${movements.amount}) DESC`),
 
     db.select({ id: categories.id, name: categories.name, emoji: categories.emoji })
@@ -90,6 +91,7 @@ export async function getReportData(
     totalExpense: Number(t.totalExpense),
     movementCount: Number(t.count),
     categorySpending: catSpending.map(c => ({
+      id: c.categoryId,
       name: c.categoryName || 'Sin categoría',
       emoji: c.categoryEmoji || '📦',
       total: Number(c.total),
@@ -245,4 +247,3 @@ export async function getHistoricalExpenseProfile(monthsBack = 12): Promise<Hist
     monthCount,
   }
 }
-

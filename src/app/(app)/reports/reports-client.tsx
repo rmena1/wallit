@@ -3,7 +3,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { formatCurrency } from '@/lib/utils'
 import { getReportData, getHistoricalExpenseProfile, type ReportData, type DailyData, type HistoricalExpenseProfile } from '@/lib/actions/reports'
+import { getReportCategoryMovements, type ReportCategoryMovement } from '@/lib/actions/movements'
 import {
+  type TooltipContentProps,
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
 
@@ -32,11 +34,6 @@ const PRESETS: Preset[] = [
   { label: 'Este año', getRange: () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), new Date(n.getFullYear(), 11, 31)] } },
 ]
 
-function getDefaultRange(): [string, string] {
-  const n = new Date()
-  return [fmt(new Date(n.getFullYear(), n.getMonth(), 1)), fmt(new Date(n.getFullYear(), n.getMonth() + 1, 0))]
-}
-
 function daysInRange(start: string, end: string): string[] {
   const days: string[] = []
   const d = new Date(start + 'T00:00:00')
@@ -46,6 +43,13 @@ function daysInRange(start: string, end: string): string[] {
     d.setDate(d.getDate() + 1)
   }
   return days
+}
+
+function formatShortDate(dateStr: string) {
+  return new Date(dateStr + 'T00:00:00').toLocaleDateString('es-CL', {
+    day: 'numeric',
+    month: 'short',
+  })
 }
 
 // ─── Chart data builders ─────────────────────────────────────────────────────
@@ -307,13 +311,14 @@ function buildBalanceChart(dailyData: DailyData[], startDate: string, endDate: s
 
 // ─── Custom tooltip ──────────────────────────────────────────────────────────
 
-function ChartTooltip({ active, payload, label, color }: any) {
+function ChartTooltip({ active, payload, label, color }: TooltipContentProps<number, string> & { color: string }) {
   if (!active || !payload?.length) return null
-  const val = payload[0]?.value
+  const rawValue = payload[0]?.value
+  const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
   return (
     <div style={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 8, padding: '6px 10px', fontSize: 12, color }}>
       <div style={{ color: '#888', marginBottom: 2 }}>{label}</div>
-      <div style={{ fontWeight: 700 }}>{val != null ? formatCurrency(Math.round(val * 100), 'CLP') : ''}</div>
+      <div style={{ fontWeight: 700 }}>{Number.isFinite(value) ? formatCurrency(Math.round(value * 100), 'CLP') : ''}</div>
     </div>
   )
 }
@@ -393,6 +398,8 @@ interface ReportsPageProps {
   initialEndDate: string
 }
 
+type CategorySpendingItem = ReportData['categorySpending'][number]
+
 export function ReportsPage({ initialData, initialStartDate, initialEndDate }: ReportsPageProps) {
   const [dateRange, setDateRange] = useState<[string, string]>([initialStartDate, initialEndDate])
   const [activePreset, setActivePreset] = useState('Este mes')
@@ -402,6 +409,10 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
   const [data, setData] = useState<ReportData | null>(initialData)
   const [loading, setLoading] = useState(false)
   const [historicalProfile, setHistoricalProfile] = useState<HistoricalExpenseProfile | null>(null)
+  const [selectedCategory, setSelectedCategory] = useState<CategorySpendingItem | null>(null)
+  const [categoryMovements, setCategoryMovements] = useState<ReportCategoryMovement[]>([])
+  const [categoryMovementsLoading, setCategoryMovementsLoading] = useState(false)
+  const [categoryMovementsError, setCategoryMovementsError] = useState<string | null>(null)
   const historicalFetched = useRef(false)
 
   // Track whether we're still on the initial server-prefetched state
@@ -417,21 +428,93 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
     }
   }, [isCurrentMonth])
 
-  const fetchData = useCallback(async () => {
+  useEffect(() => {
     // Skip fetch on mount — we already have server-prefetched data
     if (isInitial.current) {
       isInitial.current = false
       return
     }
-    setLoading(true)
-    try {
-      const d = await getReportData(dateRange[0], dateRange[1], categoryId || undefined, accountId || undefined)
-      setData(d)
-    } catch (e) { console.error(e) }
-    setLoading(false)
+
+    let cancelled = false
+
+    const loadData = async () => {
+      setLoading(true)
+      try {
+        const nextData = await getReportData(dateRange[0], dateRange[1], categoryId || undefined, accountId || undefined)
+        if (cancelled) return
+        setData(nextData)
+      } catch (error) {
+        if (cancelled) return
+        console.error(error)
+      } finally {
+        if (cancelled) return
+        setLoading(false)
+      }
+    }
+
+    void loadData()
+
+    return () => {
+      cancelled = true
+    }
   }, [dateRange, categoryId, accountId])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  const closeCategorySheet = useCallback(() => {
+    setSelectedCategory(null)
+    setCategoryMovements([])
+    setCategoryMovementsError(null)
+    setCategoryMovementsLoading(false)
+  }, [])
+
+  useEffect(() => {
+    if (!selectedCategory) return
+
+    let cancelled = false
+
+    const loadCategoryMovements = async () => {
+      setCategoryMovements([])
+      setCategoryMovementsError(null)
+      setCategoryMovementsLoading(true)
+
+      try {
+        const movements = await getReportCategoryMovements(dateRange[0], dateRange[1], selectedCategory.id, accountId || undefined)
+        if (cancelled) return
+        setCategoryMovements(movements)
+      } catch (error) {
+        if (cancelled) return
+        console.error(error)
+        setCategoryMovementsError('No se pudieron cargar los movimientos')
+      } finally {
+        if (cancelled) return
+        setCategoryMovementsLoading(false)
+      }
+    }
+
+    void loadCategoryMovements()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedCategory, dateRange, accountId])
+
+  useEffect(() => {
+    if (!selectedCategory) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeCategorySheet()
+      }
+    }
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [selectedCategory, closeCategorySheet])
 
   const handlePreset = (p: Preset) => {
     const [s, e] = p.getRange()
@@ -455,6 +538,21 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
   const balanceChart = useMemo(() =>
     data ? buildBalanceChart(data.dailyData, dateRange[0], dateRange[1]) : [],
     [data, dateRange])
+  const categorySheetTotal = useMemo(() => {
+    const loadedTotal = categoryMovements.reduce((sum, movement) => sum + movement.amount, 0)
+    return loadedTotal || selectedCategory?.total || 0
+  }, [categoryMovements, selectedCategory])
+  const categorySheetPeriodLabel = useMemo(() => {
+    const startLabel = formatShortDate(dateRange[0])
+    const endLabel = formatShortDate(dateRange[1])
+    return dateRange[0] === dateRange[1] ? startLabel : `${startLabel} - ${endLabel}`
+  }, [dateRange])
+  const categorySheetCount = useMemo(() => {
+    if (categoryMovementsLoading || categoryMovementsError) {
+      return selectedCategory?.count || 0
+    }
+    return categoryMovements.length
+  }, [categoryMovements.length, categoryMovementsLoading, categoryMovementsError, selectedCategory])
 
   const dateLabel = activePreset || `${dateRange[0].slice(5)} → ${dateRange[1].slice(5)}`
 
@@ -601,7 +699,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                           interval={Math.max(0, Math.floor(expenseChart.data.length / 6) - 1)} />
                         <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45} domain={[0, 'auto']}
                           tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                        <Tooltip content={<ChartTooltip color="#ef4444" />} />
+                        <Tooltip content={(props: any) => <ChartTooltip {...props} color="#ef4444" />} />
                         <Line type="monotone" dataKey="actual" stroke="#ef4444" strokeWidth={2} dot={false} connectNulls={false} />
                         <Line type="monotone" dataKey="trend" stroke="#eab308" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
                       </LineChart>
@@ -627,7 +725,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45}
                         tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                      <Tooltip content={<ChartTooltip color="#22c55e" />} />
+                      <Tooltip content={(props: any) => <ChartTooltip {...props} color="#22c55e" />} />
                       <Line type="monotone" dataKey="income" stroke="#22c55e" strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
@@ -650,7 +748,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45}
                         tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                      <Tooltip content={<ChartTooltip color="#e5e5e5" />} />
+                      <Tooltip content={(props: any) => <ChartTooltip {...props} color="#e5e5e5" />} />
                       <ReferenceLine y={0} stroke="#333" strokeDasharray="3 3" />
                       <Line type="monotone" dataKey="balance" stroke="#e5e5e5" strokeWidth={2} dot={false} />
                     </LineChart>
@@ -669,19 +767,33 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                   {data.categorySpending.map((cat, i) => {
                     const max = data.categorySpending[0]?.total || 1
                     return (
-                      <div key={i}>
+                      <button
+                        key={`${cat.id || 'uncategorized'}-${cat.name}-${i}`}
+                        type="button"
+                        onClick={() => setSelectedCategory(cat)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                        }}
+                      >
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                             <span style={{ fontSize: 16 }}>{cat.emoji}</span>
-                            <span style={{ fontSize: 14, color: '#d4d4d8' }}>{cat.name}</span>
-                            <span style={{ fontSize: 11, color: '#9ca3af' }}>({cat.count})</span>
+                            <span style={{ fontSize: 14, color: '#d4d4d8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cat.name}</span>
+                            <span style={{ fontSize: 11, color: '#9ca3af', flexShrink: 0 }}>({cat.count})</span>
                           </div>
-                          <span style={{ fontSize: 14, fontWeight: 600, color: '#f87171' }}>{formatCurrency(cat.total, 'CLP')}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: '#f87171' }}>{formatCurrency(cat.total, 'CLP')}</span>
+                            <span style={{ fontSize: 16, color: '#71717a' }}>›</span>
+                          </div>
                         </div>
                         <div style={{ height: 6, borderRadius: 3, backgroundColor: '#27272a', overflow: 'hidden' }}>
                           <div style={{ height: '100%', borderRadius: 3, backgroundColor: '#ef4444', width: `${(cat.total / max) * 100}%`, transition: 'width 0.3s ease' }} />
                         </div>
-                      </div>
+                      </button>
                     )
                   })}
                 </div>
@@ -698,6 +810,201 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
           </>
         )}
       </main>
+
+      {selectedCategory && (
+        <div
+          onClick={closeCategorySheet}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.78)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+            zIndex: 60,
+            padding: '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 540,
+              maxHeight: '82vh',
+              background: 'linear-gradient(180deg, #18181b 0%, #111111 100%)',
+              border: '1px solid #2a2a2a',
+              borderRadius: 24,
+              boxShadow: '0 -16px 40px rgba(0,0,0,0.45)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div style={{ padding: '10px 18px 0' }}>
+              <div style={{ width: 42, height: 4, borderRadius: 999, backgroundColor: '#3f3f46', margin: '0 auto 12px' }} />
+            </div>
+
+            <div style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: 16,
+              padding: '0 18px 16px',
+              borderBottom: '1px solid #27272a',
+            }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: '#a1a1aa', marginBottom: 6 }}>Movimientos de la categoría</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 24 }}>{selectedCategory.emoji}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: '#f5f5f5', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {selectedCategory.name}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#9ca3af' }}>
+                      {categorySheetCount} movimiento{categorySheetCount === 1 ? '' : 's'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeCategorySheet}
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 999,
+                  border: '1px solid #2a2a2a',
+                  backgroundColor: '#18181b',
+                  color: '#a1a1aa',
+                  fontSize: 18,
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              padding: '14px 18px',
+              borderBottom: '1px solid #27272a',
+              backgroundColor: '#121212',
+            }}>
+              <div>
+                <div style={{ fontSize: 11, color: '#71717a', marginBottom: 4 }}>Período</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#d4d4d8' }}>{categorySheetPeriodLabel}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 11, color: '#71717a', marginBottom: 4 }}>Total</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#f87171' }}>{formatCurrency(categorySheetTotal, 'CLP')}</div>
+              </div>
+            </div>
+
+            <div style={{ padding: '0 18px', overflowY: 'auto' }}>
+              {categoryMovementsLoading ? (
+                <div style={{ padding: '36px 0', textAlign: 'center', color: '#a1a1aa', fontSize: 13 }}>
+                  Cargando movimientos...
+                </div>
+              ) : categoryMovementsError ? (
+                <div style={{ padding: '24px 0' }}>
+                  <div style={{
+                    backgroundColor: '#450a0a',
+                    border: '1px solid #7f1d1d',
+                    borderRadius: 12,
+                    padding: '12px 14px',
+                    fontSize: 13,
+                    color: '#fca5a5',
+                    marginBottom: 12,
+                  }}>
+                    {categoryMovementsError}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory({ ...selectedCategory })}
+                    style={{
+                      width: '100%',
+                      height: 42,
+                      borderRadius: 12,
+                      border: '1px solid #2a2a2a',
+                      backgroundColor: '#18181b',
+                      color: '#e5e5e5',
+                      fontSize: 14,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Reintentar
+                  </button>
+                </div>
+              ) : categoryMovements.length === 0 ? (
+                <div style={{ padding: '36px 0', textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>
+                  No hay movimientos para esta categoría en el período seleccionado
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {categoryMovements.map((movement, index) => (
+                    <div
+                      key={movement.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        padding: '14px 0',
+                        borderBottom: index === categoryMovements.length - 1 ? 'none' : '1px solid #1f1f23',
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: '#71717a', marginBottom: 4 }}>
+                          {formatShortDate(movement.date)}{movement.time ? ` · ${movement.time}` : ''}
+                        </div>
+                        <div style={{
+                          fontSize: 15,
+                          fontWeight: 500,
+                          color: '#e5e5e5',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}>
+                          {movement.name}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: '#f87171', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                        -{formatCurrency(movement.amount, 'CLP')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: '16px 18px 18px', borderTop: '1px solid #27272a' }}>
+              <button
+                type="button"
+                onClick={closeCategorySheet}
+                style={{
+                  width: '100%',
+                  height: 46,
+                  borderRadius: 14,
+                  border: '1px solid #2a2a2a',
+                  backgroundColor: '#18181b',
+                  color: '#e5e5e5',
+                  fontSize: 15,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
