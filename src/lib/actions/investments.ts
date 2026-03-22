@@ -130,7 +130,9 @@ export async function getInvestmentSummary(accountId: string): Promise<Investmen
     .from(movements)
     .where(and(eq(movements.accountId, accountId), eq(movements.userId, session.id)))
 
-  const totalDeposited = account.initialBalance + (totals?.transferIn ?? 0) - (totals?.transferOut ?? 0)
+  const transferIn = Number(totals?.transferIn ?? 0)
+  const transferOut = Number(totals?.transferOut ?? 0)
+  const totalDeposited = account.initialBalance + transferIn - transferOut
   const currentValue = account.currentValue ?? account.initialBalance
   const gainLoss = currentValue - totalDeposited
   const gainLossPercent = totalDeposited > 0
