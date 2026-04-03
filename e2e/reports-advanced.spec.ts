@@ -17,6 +17,44 @@ function formatDate(date: Date) {
   return `${year}-${month}-${day}`
 }
 
+function addDays(date: Date, amount: number) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + amount)
+  return next
+}
+
+function addMonths(date: Date, amount: number) {
+  const targetMonth = new Date(date.getFullYear(), date.getMonth() + amount, 1, 12)
+  const lastDay = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0, 12).getDate()
+  return new Date(targetMonth.getFullYear(), targetMonth.getMonth(), Math.min(date.getDate(), lastDay), 12)
+}
+
+function startOfWeek(date: Date) {
+  const day = date.getDay()
+  const diff = day === 0 ? 6 : day - 1
+  return addDays(date, -diff)
+}
+
+function endOfWeek(date: Date) {
+  return addDays(startOfWeek(date), 6)
+}
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1, 12)
+}
+
+function endOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0, 12)
+}
+
+function startOfYear(date: Date) {
+  return new Date(date.getFullYear(), 0, 1, 12)
+}
+
+function endOfYear(date: Date) {
+  return new Date(date.getFullYear(), 11, 31, 12)
+}
+
 function formatClpFromPesos(amount: number) {
   return `$${Math.round(amount).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`
 }
@@ -54,6 +92,32 @@ async function openReports(page: Page) {
   await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: REPORT_TIMEOUT })
 }
 
+function periodTrigger(page: Page) {
+  return page.getByTestId('reports-period-trigger')
+}
+
+function calendarDay(page: Page, date: string) {
+  return page.getByTestId(`reports-calendar-day-${date}`)
+}
+
+async function openDatePicker(page: Page) {
+  await periodTrigger(page).click()
+  await expect(page.getByTestId('reports-date-picker')).toBeVisible({ timeout: REPORT_TIMEOUT })
+}
+
+async function expectPeriodState(page: Page, options: {
+  kind: 'preset' | 'custom'
+  preset: 'year' | 'hundredDays' | 'month' | 'week' | 'custom'
+  start: string
+  end: string
+}) {
+  const trigger = periodTrigger(page)
+  await expect(trigger).toHaveAttribute('data-period-kind', options.kind)
+  await expect(trigger).toHaveAttribute('data-period-preset', options.preset)
+  await expect(trigger).toHaveAttribute('data-period-start', options.start)
+  await expect(trigger).toHaveAttribute('data-period-end', options.end)
+}
+
 async function readExpenseChart(page: Page): Promise<ExpenseChartPoint[]> {
   const rawChartData = await page.getByTestId('expense-chart').getAttribute('data-expense-chart')
 
@@ -86,8 +150,7 @@ async function closeCategorySheet(page: Page) {
 }
 
 async function pickCustomRange(page: Page, startDay: number, endDay: number) {
-  await page.getByRole('button', { name: /📅/ }).click()
-  await expect(page.getByRole('button', { name: 'Últimos 7 días' })).toBeVisible({ timeout: REPORT_TIMEOUT })
+  await openDatePicker(page)
 
   await page.getByRole('button', { name: new RegExp(`^${startDay}$`) }).click()
   await expect(page.getByText('Selecciona fecha fin')).toBeVisible({ timeout: REPORT_TIMEOUT })
@@ -95,9 +158,8 @@ async function pickCustomRange(page: Page, startDay: number, endDay: number) {
 }
 
 async function selectPreset(page: Page, label: string) {
-  await page.getByRole('button', { name: /📅/ }).click()
-  await expect(page.getByRole('button', { name: 'Últimos 7 días' })).toBeVisible({ timeout: REPORT_TIMEOUT })
-  await page.getByRole('button', { name: label }).click()
+  await openDatePicker(page)
+  await page.getByRole('button', { name: label, exact: true }).click()
 }
 
 test.describe('Reports — Advanced Calendar & Filters', () => {
@@ -162,6 +224,109 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     expect(expenseChart[totalDaysInMonth - 1]?.trend ?? 0).toBeCloseTo(trendTotal, 6)
   })
 
+  test('preset controls apply current periods, arrows shift the active preset, and the calendar highlights the visible range', async ({ page }) => {
+    await registerAndLogin(page)
+    await ensureAccount(page)
+
+    const today = new Date()
+    const todayDate = formatDate(today)
+    const currentMonthStart = formatDate(startOfMonth(today))
+    const currentMonthEnd = formatDate(endOfMonth(today))
+    const currentWeekStart = formatDate(startOfWeek(today))
+    const currentWeekEnd = formatDate(endOfWeek(today))
+    const currentYearStart = formatDate(startOfYear(today))
+    const currentYearEnd = formatDate(endOfYear(today))
+    const hundredDayStart = formatDate(addDays(today, -99))
+    const previousMonthAnchor = addMonths(today, -1)
+    const previousMonthStart = formatDate(startOfMonth(previousMonthAnchor))
+    const previousMonthEnd = formatDate(endOfMonth(previousMonthAnchor))
+    const currentMonthVisibleDay = formatDate(
+      new Date(today.getFullYear(), today.getMonth(), Math.min(today.getDate(), endOfMonth(today).getDate()), 12)
+    )
+    const previousMonthVisibleDay = formatDate(
+      new Date(
+        previousMonthAnchor.getFullYear(),
+        previousMonthAnchor.getMonth(),
+        Math.min(previousMonthAnchor.getDate(), endOfMonth(previousMonthAnchor).getDate()),
+        12
+      )
+    )
+
+    await openReports(page)
+    await openDatePicker(page)
+
+    await expect(page.getByTestId('reports-preset-year')).toBeVisible()
+    await expect(page.getByTestId('reports-preset-hundredDays')).toBeVisible()
+    await expect(page.getByTestId('reports-preset-month')).toBeVisible()
+    await expect(page.getByTestId('reports-preset-week')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Últimos 7 días' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Últimos 30 días' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Últimos 100 días' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Este mes' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Este año' })).toHaveCount(0)
+
+    await expectPeriodState(page, {
+      kind: 'preset',
+      preset: 'month',
+      start: currentMonthStart,
+      end: currentMonthEnd,
+    })
+    await expect(periodTrigger(page)).toContainText('Mes')
+    await expect(calendarDay(page, currentMonthStart)).toHaveAttribute('data-range-start', 'true')
+    await expect(calendarDay(page, currentMonthEnd)).toHaveAttribute('data-range-end', 'true')
+    await expect(calendarDay(page, currentMonthVisibleDay)).toHaveAttribute('data-in-range', 'true')
+
+    await page.getByTestId('reports-preset-week').click()
+    await expectPeriodState(page, {
+      kind: 'preset',
+      preset: 'week',
+      start: currentWeekStart,
+      end: currentWeekEnd,
+    })
+    await expect(periodTrigger(page)).toContainText('Semana')
+    await expect(calendarDay(page, todayDate)).toHaveAttribute('data-in-range', 'true')
+
+    await page.getByTestId('reports-preset-hundredDays').click()
+    await expectPeriodState(page, {
+      kind: 'preset',
+      preset: 'hundredDays',
+      start: hundredDayStart,
+      end: todayDate,
+    })
+    await expect(periodTrigger(page)).toContainText('100 días')
+    await expect(calendarDay(page, todayDate)).toHaveAttribute('data-range-end', 'true')
+
+    await page.getByTestId('reports-preset-year').click()
+    await expectPeriodState(page, {
+      kind: 'preset',
+      preset: 'year',
+      start: currentYearStart,
+      end: currentYearEnd,
+    })
+    await expect(periodTrigger(page)).toContainText('Año')
+
+    await page.getByTestId('reports-preset-month').click()
+    await page.getByTestId('reports-period-prev').click()
+    await expectPeriodState(page, {
+      kind: 'preset',
+      preset: 'month',
+      start: previousMonthStart,
+      end: previousMonthEnd,
+    })
+    await expect(periodTrigger(page)).toContainText('Mes')
+    await expect(calendarDay(page, previousMonthStart)).toHaveAttribute('data-range-start', 'true')
+    await expect(calendarDay(page, previousMonthEnd)).toHaveAttribute('data-range-end', 'true')
+    await expect(calendarDay(page, previousMonthVisibleDay)).toHaveAttribute('data-in-range', 'true')
+
+    await page.getByTestId('reports-period-next').click()
+    await expectPeriodState(page, {
+      kind: 'preset',
+      preset: 'month',
+      start: currentMonthStart,
+      end: currentMonthEnd,
+    })
+  })
+
   test('year range expense trend stays straight through future dates', async ({ page }) => {
     await registerAndLogin(page)
     await ensureAccount(page)
@@ -180,8 +345,8 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     }
 
     await openReports(page)
-    await selectPreset(page, 'Este año')
-    await expect(page.getByRole('button', { name: /📅/ })).toContainText('Este año')
+    await selectPreset(page, 'Año')
+    await expect(periodTrigger(page)).toContainText('Año')
     await expect(page.getByText(/Tendencia lineal:/)).toBeVisible({ timeout: REPORT_TIMEOUT })
 
     const expenseChart = await readExpenseChart(page)
@@ -268,9 +433,15 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     await expect(categoryRow(page, 'Transporte')).toBeVisible()
 
     await pickCustomRange(page, 1, hasEarlierSubset ? 2 : 1)
-    await expect(page.getByRole('button', { name: /📅/ })).toContainText(
-      hasEarlierSubset ? `${monthStart.slice(5)} → ${secondDay.slice(5)}` : `${monthStart.slice(5)} → ${monthStart.slice(5)}`,
-    )
+    await expectPeriodState(page, {
+      kind: 'custom',
+      preset: 'custom',
+      start: monthStart,
+      end: hasEarlierSubset ? secondDay : monthStart,
+    })
+    await expect(periodTrigger(page)).toContainText('Personalizado')
+    await expect(page.getByTestId('reports-period-prev')).toBeDisabled()
+    await expect(page.getByTestId('reports-period-next')).toBeDisabled()
 
     if (hasEarlierSubset) {
       await expectMovementCount(page, 2)
@@ -282,7 +453,7 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
       await closeCategorySheet(page)
     }
 
-    await selectPreset(page, 'Este mes')
+    await selectPreset(page, 'Mes')
     await expectMovementCount(page, 4)
 
     const categorySelect = page.locator('select').first()

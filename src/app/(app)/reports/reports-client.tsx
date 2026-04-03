@@ -11,28 +11,138 @@ import {
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
 
+function padDatePart(value: number) {
+  return String(value).padStart(2, '0')
+}
+
 function fmt(d: Date) {
-  return d.toISOString().slice(0, 10)
+  return `${d.getFullYear()}-${padDatePart(d.getMonth() + 1)}-${padDatePart(d.getDate())}`
+}
+
+function parseDate(dateStr: string) {
+  return new Date(`${dateStr}T12:00:00`)
+}
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + amount)
+  return next
+}
+
+function addMonths(date: Date, amount: number) {
+  const targetMonth = new Date(date.getFullYear(), date.getMonth() + amount, 1, 12)
+  const lastDay = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0, 12).getDate()
+  return new Date(targetMonth.getFullYear(), targetMonth.getMonth(), Math.min(date.getDate(), lastDay), 12)
 }
 
 function startOfWeek(d: Date) {
   const day = d.getDay()
   const diff = day === 0 ? 6 : day - 1 // Monday = start
-  const s = new Date(d)
-  s.setDate(s.getDate() - diff)
-  return s
+  return addDays(d, -diff)
 }
 
-type Preset = { label: string; getRange: () => [Date, Date] }
+function endOfWeek(d: Date) {
+  return addDays(startOfWeek(d), 6)
+}
 
-const PRESETS: Preset[] = [
-  { label: 'Últimos 7 días', getRange: () => { const e = new Date(); const s = new Date(); s.setDate(e.getDate() - 6); return [s, e] } },
-  { label: 'Últimos 30 días', getRange: () => { const e = new Date(); const s = new Date(); s.setDate(e.getDate() - 29); return [s, e] } },
-  { label: 'Últimos 100 días', getRange: () => { const e = new Date(); const s = new Date(); s.setDate(e.getDate() - 99); return [s, e] } },
-  { label: 'Esta semana', getRange: () => { const e = new Date(); return [startOfWeek(e), e] } },
-  { label: 'Este mes', getRange: () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth(), 1), new Date(n.getFullYear(), n.getMonth() + 1, 0)] } },
-  { label: 'Este año', getRange: () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), new Date(n.getFullYear(), 11, 31)] } },
+function startOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), 1, 12)
+}
+
+function endOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 12)
+}
+
+function startOfYear(d: Date) {
+  return new Date(d.getFullYear(), 0, 1, 12)
+}
+
+function endOfYear(d: Date) {
+  return new Date(d.getFullYear(), 11, 31, 12)
+}
+
+type PresetKey = 'year' | 'hundredDays' | 'month' | 'week'
+
+type PresetDefinition = {
+  key: PresetKey
+  label: string
+  getRange: (anchor: Date) => [Date, Date]
+  shiftAnchor: (anchor: Date, direction: -1 | 1) => Date
+}
+
+type PeriodSelection =
+  | { kind: 'preset'; presetKey: PresetKey; anchorDate: string }
+  | { kind: 'custom'; range: [string, string] }
+
+const PRESETS: PresetDefinition[] = [
+  {
+    key: 'year',
+    label: 'Año',
+    getRange: anchor => [startOfYear(anchor), endOfYear(anchor)],
+    shiftAnchor: (anchor, direction) => addMonths(anchor, direction * 12),
+  },
+  {
+    key: 'hundredDays',
+    label: '100 días',
+    getRange: anchor => [addDays(anchor, -99), anchor],
+    shiftAnchor: (anchor, direction) => addDays(anchor, direction * 100),
+  },
+  {
+    key: 'month',
+    label: 'Mes',
+    getRange: anchor => [startOfMonth(anchor), endOfMonth(anchor)],
+    shiftAnchor: (anchor, direction) => addMonths(anchor, direction),
+  },
+  {
+    key: 'week',
+    label: 'Semana',
+    getRange: anchor => [startOfWeek(anchor), endOfWeek(anchor)],
+    shiftAnchor: (anchor, direction) => addDays(anchor, direction * 7),
+  },
 ]
+
+function getPresetDefinition(key: PresetKey) {
+  const preset = PRESETS.find(item => item.key === key)
+  if (!preset) {
+    throw new Error(`Unknown preset: ${key}`)
+  }
+  return preset
+}
+
+function getPresetRange(key: PresetKey, anchorDate: string): [string, string] {
+  const [start, end] = getPresetDefinition(key).getRange(parseDate(anchorDate))
+  return [fmt(start), fmt(end)]
+}
+
+function inferInitialPeriodSelection(startDate: string, endDate: string): PeriodSelection {
+  const today = todayInTimezone()
+
+  for (const preset of PRESETS) {
+    const [presetStart, presetEnd] = getPresetRange(preset.key, today)
+    if (presetStart === startDate && presetEnd === endDate) {
+      return { kind: 'preset', presetKey: preset.key, anchorDate: today }
+    }
+  }
+
+  return { kind: 'custom', range: [startDate, endDate] }
+}
+
+function formatRangeSummary(startDate: string, endDate: string) {
+  const start = parseDate(startDate)
+  const end = parseDate(endDate)
+  const sameYear = start.getFullYear() === end.getFullYear()
+  const startOptions: Intl.DateTimeFormatOptions = sameYear
+    ? { day: 'numeric', month: 'short' }
+    : { day: 'numeric', month: 'short', year: 'numeric' }
+  const startLabel = start.toLocaleDateString('es-CL', startOptions)
+  const endLabel = end.toLocaleDateString('es-CL', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+
+  return startDate === endDate ? endLabel : `${startLabel} - ${endLabel}`
+}
 
 function daysInRange(start: string, end: string): string[] {
   const days: string[] = []
@@ -124,7 +234,7 @@ function buildExpenseChart(
 function buildIncomeChart(dailyData: DailyData[], startDate: string, endDate: string) {
   const days = daysInRange(startDate, endDate)
   const map = new Map(dailyData.map(d => [d.date, d.income]))
-  const today = fmt(new Date())
+  const today = todayInTimezone()
   
   // Find the last day we have actual data for (up to today)
   const lastActualDay = days.filter(d => d <= today).pop() || today
@@ -144,7 +254,7 @@ function buildBalanceChart(dailyData: DailyData[], startDate: string, endDate: s
   const days = daysInRange(startDate, endDate)
   const incMap = new Map(dailyData.map(d => [d.date, d.income]))
   const expMap = new Map(dailyData.map(d => [d.date, d.expense]))
-  const today = fmt(new Date())
+  const today = todayInTimezone()
   
   // Find the last day we have actual data for (up to today)
   const lastActualDay = days.filter(d => d <= today).pop() || today
@@ -176,12 +286,14 @@ function ChartTooltip({ active, payload, label, color }: TooltipContentProps<num
 
 // ─── Calendar component ──────────────────────────────────────────────────────
 
-function MiniCalendar({ startDate, endDate, onSelect }: {
-  startDate: string; endDate: string
+function MiniCalendar({ startDate, endDate, focusDate, onSelect }: {
+  startDate: string
+  endDate: string
+  focusDate: string
   onSelect: (s: string, e: string) => void
 }) {
   const [viewMonth, setViewMonth] = useState(() => {
-    const d = new Date(startDate + 'T00:00:00')
+    const d = parseDate(focusDate)
     return { year: d.getFullYear(), month: d.getMonth() }
   })
   const [selecting, setSelecting] = useState<string | null>(null)
@@ -196,7 +308,7 @@ function MiniCalendar({ startDate, endDate, onSelect }: {
   for (let i = 1; i <= daysInMonth; i++) cells.push(i)
 
   const handleDayClick = (day: number) => {
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    const dateStr = `${year}-${padDatePart(month + 1)}-${padDatePart(day)}`
     if (!selecting) {
       setSelecting(dateStr)
     } else {
@@ -206,21 +318,37 @@ function MiniCalendar({ startDate, endDate, onSelect }: {
     }
   }
 
-  const isInRange = (day: number) => {
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    if (selecting) return dateStr === selecting
-    return dateStr >= startDate && dateStr <= endDate
+  const getDayState = (day: number) => {
+    const dateStr = `${year}-${padDatePart(month + 1)}-${padDatePart(day)}`
+    const pendingSelection = selecting === dateStr
+    const isRangeStart = !selecting && dateStr === startDate
+    const isRangeEnd = !selecting && dateStr === endDate
+    const isInRange = selecting ? pendingSelection : dateStr >= startDate && dateStr <= endDate
+
+    return {
+      dateStr,
+      pendingSelection,
+      isRangeStart,
+      isRangeEnd,
+      isInRange,
+    }
   }
 
   const monthLabel = new Date(year, month).toLocaleDateString('es-CL', { month: 'long', year: 'numeric' })
 
   return (
-    <div>
+    <div data-testid="reports-calendar">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-        <button onClick={() => setViewMonth(p => p.month === 0 ? { year: p.year - 1, month: 11 } : { ...p, month: p.month - 1 })}
+        <button
+          type="button"
+          aria-label="Mes anterior"
+          onClick={() => setViewMonth(p => p.month === 0 ? { year: p.year - 1, month: 11 } : { ...p, month: p.month - 1 })}
           style={{ background: 'none', border: 'none', color: '#e5e5e5', fontSize: 18, cursor: 'pointer', padding: '4px 8px' }}>‹</button>
         <span style={{ fontSize: 14, color: '#e5e5e5', fontWeight: 600, textTransform: 'capitalize' }}>{monthLabel}</span>
-        <button onClick={() => setViewMonth(p => p.month === 11 ? { year: p.year + 1, month: 0 } : { ...p, month: p.month + 1 })}
+        <button
+          type="button"
+          aria-label="Mes siguiente"
+          onClick={() => setViewMonth(p => p.month === 11 ? { year: p.year + 1, month: 0 } : { ...p, month: p.month + 1 })}
           style={{ background: 'none', border: 'none', color: '#e5e5e5', fontSize: 18, cursor: 'pointer', padding: '4px 8px' }}>›</button>
       </div>
       {selecting && <div style={{ fontSize: 11, color: '#f59e0b', textAlign: 'center', marginBottom: 6 }}>Selecciona fecha fin</div>}
@@ -228,14 +356,37 @@ function MiniCalendar({ startDate, endDate, onSelect }: {
         {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(d => (
           <div key={d} style={{ fontSize: 11, color: '#555', padding: 4 }}>{d}</div>
         ))}
-        {cells.map((day, i) => day ? (
-          <button key={i} onClick={() => handleDayClick(day)}
-            style={{
-              background: isInRange(day) ? '#22c55e33' : 'none',
-              border: isInRange(day) ? '1px solid #22c55e' : '1px solid transparent',
-              borderRadius: 6, color: '#d4d4d8', fontSize: 13, padding: '6px 0', cursor: 'pointer',
-            }}>{day}</button>
-        ) : <div key={i} />)}
+        {cells.map((day, i) => {
+          if (!day) return <div key={i} />
+
+          const dayState = getDayState(day)
+          const isSelectedEdge = dayState.pendingSelection || dayState.isRangeStart || dayState.isRangeEnd
+
+          return (
+            <button
+              key={i}
+              type="button"
+              data-testid={`reports-calendar-day-${dayState.dateStr}`}
+              data-in-range={dayState.isInRange ? 'true' : 'false'}
+              data-range-start={dayState.isRangeStart ? 'true' : 'false'}
+              data-range-end={dayState.isRangeEnd ? 'true' : 'false'}
+              aria-pressed={dayState.isInRange}
+              onClick={() => handleDayClick(day)}
+              style={{
+                background: isSelectedEdge ? '#22c55e' : dayState.isInRange ? '#22c55e22' : 'none',
+                border: isSelectedEdge ? '1px solid #22c55e' : dayState.isInRange ? '1px solid #22c55e66' : '1px solid transparent',
+                borderRadius: 6,
+                color: isSelectedEdge ? '#052e16' : '#d4d4d8',
+                fontSize: 13,
+                fontWeight: isSelectedEdge ? 700 : 500,
+                padding: '6px 0',
+                cursor: 'pointer',
+              }}
+            >
+              {day}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -252,8 +403,9 @@ interface ReportsPageProps {
 type CategorySpendingItem = ReportData['categorySpending'][number]
 
 export function ReportsPage({ initialData, initialStartDate, initialEndDate }: ReportsPageProps) {
-  const [dateRange, setDateRange] = useState<[string, string]>([initialStartDate, initialEndDate])
-  const [activePreset, setActivePreset] = useState('Este mes')
+  const [periodSelection, setPeriodSelection] = useState<PeriodSelection>(() =>
+    inferInitialPeriodSelection(initialStartDate, initialEndDate)
+  )
   const [showPicker, setShowPicker] = useState(false)
   const [categoryId, setCategoryId] = useState('')
   const [accountId, setAccountId] = useState('')
@@ -263,6 +415,53 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
   const [categoryMovements, setCategoryMovements] = useState<ReportCategoryMovement[]>([])
   const [categoryMovementsLoading, setCategoryMovementsLoading] = useState(false)
   const [categoryMovementsError, setCategoryMovementsError] = useState<string | null>(null)
+
+  const dateRange = useMemo<[string, string]>(() => {
+    if (periodSelection.kind === 'preset') {
+      return getPresetRange(periodSelection.presetKey, periodSelection.anchorDate)
+    }
+
+    return periodSelection.range
+  }, [periodSelection])
+  const [startDate, endDate] = dateRange
+  const activePreset = periodSelection.kind === 'preset' ? getPresetDefinition(periodSelection.presetKey) : null
+  const presetAnchorDate = periodSelection.kind === 'preset' ? periodSelection.anchorDate : null
+  const canShiftPeriod = periodSelection.kind === 'preset'
+  const calendarFocusDate = periodSelection.kind === 'preset' ? periodSelection.anchorDate : endDate
+  const controlCopy = useMemo(() => {
+    if (!activePreset || !presetAnchorDate) {
+      return {
+        title: 'Personalizado',
+        subtitle: formatRangeSummary(startDate, endDate),
+        capitalizeSubtitle: false,
+      }
+    }
+
+    if (activePreset.key === 'year') {
+      return {
+        title: activePreset.label,
+        subtitle: String(parseDate(presetAnchorDate).getFullYear()),
+        capitalizeSubtitle: false,
+      }
+    }
+
+    if (activePreset.key === 'month') {
+      return {
+        title: activePreset.label,
+        subtitle: parseDate(presetAnchorDate).toLocaleDateString('es-CL', {
+          month: 'long',
+          year: 'numeric',
+        }),
+        capitalizeSubtitle: true,
+      }
+    }
+
+    return {
+      title: activePreset.label,
+      subtitle: formatRangeSummary(startDate, endDate),
+      capitalizeSubtitle: false,
+    }
+  }, [activePreset, presetAnchorDate, startDate, endDate])
 
   // Track whether we're still on the initial server-prefetched state
   const isInitial = useRef(true)
@@ -279,7 +478,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
     const loadData = async () => {
       setLoading(true)
       try {
-        const nextData = await getReportData(dateRange[0], dateRange[1], categoryId || undefined, accountId || undefined)
+        const nextData = await getReportData(startDate, endDate, categoryId || undefined, accountId || undefined)
         if (cancelled) return
         setData(nextData)
       } catch (error) {
@@ -296,7 +495,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
     return () => {
       cancelled = true
     }
-  }, [dateRange, categoryId, accountId])
+  }, [startDate, endDate, categoryId, accountId])
 
   const closeCategorySheet = useCallback(() => {
     setSelectedCategory(null)
@@ -316,7 +515,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
       setCategoryMovementsLoading(true)
 
       try {
-        const movements = await getReportCategoryMovements(dateRange[0], dateRange[1], selectedCategory.id, accountId || undefined)
+        const movements = await getReportCategoryMovements(startDate, endDate, selectedCategory.id, accountId || undefined)
         if (cancelled) return
         setCategoryMovements(movements)
       } catch (error) {
@@ -334,7 +533,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
     return () => {
       cancelled = true
     }
-  }, [selectedCategory, dateRange, accountId])
+  }, [selectedCategory, startDate, endDate, accountId])
 
   useEffect(() => {
     if (!selectedCategory) return
@@ -355,45 +554,58 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
     }
   }, [selectedCategory, closeCategorySheet])
 
-  const handlePreset = (p: Preset) => {
-    const [s, e] = p.getRange()
-    setDateRange([fmt(s), fmt(e)])
-    setActivePreset(p.label)
-    setShowPicker(false)
+  const handlePreset = (presetKey: PresetKey) => {
+    setPeriodSelection({
+      kind: 'preset',
+      presetKey,
+      anchorDate: todayInTimezone(),
+    })
   }
 
   const handleCustomDate = (s: string, e: string) => {
-    setDateRange([s, e])
-    setActivePreset('')
+    setPeriodSelection({ kind: 'custom', range: [s, e] })
     setShowPicker(false)
   }
 
+  const shiftPeriod = (direction: -1 | 1) => {
+    setPeriodSelection(current => {
+      if (current.kind !== 'preset') {
+        return current
+      }
+
+      const nextAnchor = getPresetDefinition(current.presetKey).shiftAnchor(parseDate(current.anchorDate), direction)
+
+      return {
+        ...current,
+        anchorDate: fmt(nextAnchor),
+      }
+    })
+  }
+
   const expenseChart = useMemo(() =>
-    data ? buildExpenseChart(data.dailyData, dateRange[0], dateRange[1]) : { data: [], trendTotal: null },
-    [data, dateRange])
+    data ? buildExpenseChart(data.dailyData, startDate, endDate) : { data: [], trendTotal: null },
+    [data, startDate, endDate])
   const incomeChart = useMemo(() =>
-    data ? buildIncomeChart(data.dailyData, dateRange[0], dateRange[1]) : [],
-    [data, dateRange])
+    data ? buildIncomeChart(data.dailyData, startDate, endDate) : [],
+    [data, startDate, endDate])
   const balanceChart = useMemo(() =>
-    data ? buildBalanceChart(data.dailyData, dateRange[0], dateRange[1]) : [],
-    [data, dateRange])
+    data ? buildBalanceChart(data.dailyData, startDate, endDate) : [],
+    [data, startDate, endDate])
   const categorySheetTotal = useMemo(() => {
     const loadedTotal = categoryMovements.reduce((sum, movement) => sum + movement.amount, 0)
     return loadedTotal || selectedCategory?.total || 0
   }, [categoryMovements, selectedCategory])
   const categorySheetPeriodLabel = useMemo(() => {
-    const startLabel = formatShortDate(dateRange[0])
-    const endLabel = formatShortDate(dateRange[1])
-    return dateRange[0] === dateRange[1] ? startLabel : `${startLabel} - ${endLabel}`
-  }, [dateRange])
+    const startLabel = formatShortDate(startDate)
+    const endLabel = formatShortDate(endDate)
+    return startDate === endDate ? startLabel : `${startLabel} - ${endLabel}`
+  }, [startDate, endDate])
   const categorySheetCount = useMemo(() => {
     if (categoryMovementsLoading || categoryMovementsError) {
       return selectedCategory?.count || 0
     }
     return categoryMovements.length
   }, [categoryMovements.length, categoryMovementsLoading, categoryMovementsError, selectedCategory])
-
-  const dateLabel = activePreset || `${dateRange[0].slice(5)} → ${dateRange[1].slice(5)}`
 
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#1a1a1a', borderRadius: 14, padding: 16,
@@ -421,29 +633,114 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
 
       <main style={{ maxWidth: 540, margin: '0 auto', padding: '16px 16px 96px' }}>
         {/* Date Selector */}
-        <button onClick={() => setShowPicker(!showPicker)} style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-          width: '100%', background: 'none', border: '1px solid #2a2a2a', borderRadius: 10,
-          padding: '10px 14px', marginBottom: 12, cursor: 'pointer', color: '#e5e5e5', fontSize: 14,
-        }}>
-          📅 <span style={{ fontWeight: 600 }}>{dateLabel}</span>
-          <span style={{ fontSize: 10, marginLeft: 4 }}>{showPicker ? '▲' : '▼'}</span>
-        </button>
+        <div style={{ display: 'grid', gridTemplateColumns: '44px minmax(0, 1fr) 44px', gap: 8, marginBottom: 12 }}>
+          <button
+            type="button"
+            data-testid="reports-period-prev"
+            aria-label="Período anterior"
+            disabled={!canShiftPeriod}
+            onClick={() => shiftPeriod(-1)}
+            style={{
+              background: canShiftPeriod ? '#111' : '#161616',
+              border: '1px solid #2a2a2a',
+              borderRadius: 10,
+              color: canShiftPeriod ? '#e5e5e5' : '#52525b',
+              fontSize: 18,
+              cursor: canShiftPeriod ? 'pointer' : 'not-allowed',
+            }}
+          >
+            ‹
+          </button>
+
+          <button
+            type="button"
+            data-testid="reports-period-trigger"
+            data-period-kind={periodSelection.kind}
+            data-period-preset={activePreset?.key ?? 'custom'}
+            data-period-start={startDate}
+            data-period-end={endDate}
+            aria-label={`${controlCopy.title}: ${controlCopy.subtitle}`}
+            onClick={() => setShowPicker(!showPicker)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              minWidth: 0,
+              width: '100%',
+              background: 'none',
+              border: '1px solid #2a2a2a',
+              borderRadius: 10,
+              padding: '10px 14px',
+              cursor: 'pointer',
+              color: '#e5e5e5',
+              fontSize: 14,
+            }}
+          >
+            <span style={{ fontSize: 18, flexShrink: 0 }}>📅</span>
+            <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0, flex: 1 }}>
+              <span style={{ fontSize: 11, color: '#a1a1aa', lineHeight: 1.2 }}>{controlCopy.title}</span>
+              <span style={{
+                fontWeight: 600,
+                lineHeight: 1.3,
+                textTransform: controlCopy.capitalizeSubtitle ? 'capitalize' : 'none',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}>{controlCopy.subtitle}</span>
+            </span>
+            <span style={{ fontSize: 10, flexShrink: 0 }}>{showPicker ? '▲' : '▼'}</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="reports-period-next"
+            aria-label="Período siguiente"
+            disabled={!canShiftPeriod}
+            onClick={() => shiftPeriod(1)}
+            style={{
+              background: canShiftPeriod ? '#111' : '#161616',
+              border: '1px solid #2a2a2a',
+              borderRadius: 10,
+              color: canShiftPeriod ? '#e5e5e5' : '#52525b',
+              fontSize: 18,
+              cursor: canShiftPeriod ? 'pointer' : 'not-allowed',
+            }}
+          >
+            ›
+          </button>
+        </div>
 
         {showPicker && (
-          <div style={{ ...cardStyle, marginBottom: 16 }}>
+          <div data-testid="reports-date-picker" style={{ ...cardStyle, marginBottom: 16 }}>
             {/* Presets */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
               {PRESETS.map(p => (
-                <button key={p.label} onClick={() => handlePreset(p)} style={{
-                  padding: '6px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer',
-                  border: activePreset === p.label ? '1px solid #22c55e' : '1px solid #333',
-                  background: activePreset === p.label ? '#22c55e22' : '#111',
-                  color: activePreset === p.label ? '#22c55e' : '#a1a1aa',
-                }}>{p.label}</button>
+                <button
+                  key={p.key}
+                  type="button"
+                  data-testid={`reports-preset-${p.key}`}
+                  onClick={() => handlePreset(p.key)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    border: activePreset?.key === p.key ? '1px solid #22c55e' : '1px solid #333',
+                    background: activePreset?.key === p.key ? '#22c55e22' : '#111',
+                    color: activePreset?.key === p.key ? '#22c55e' : '#a1a1aa',
+                  }}
+                >
+                  {p.label}
+                </button>
               ))}
             </div>
-            <MiniCalendar startDate={dateRange[0]} endDate={dateRange[1]} onSelect={handleCustomDate} />
+            <MiniCalendar
+              key={`${startDate}:${endDate}:${calendarFocusDate}`}
+              startDate={startDate}
+              endDate={endDate}
+              focusDate={calendarFocusDate}
+              onSelect={handleCustomDate}
+            />
           </div>
         )}
 

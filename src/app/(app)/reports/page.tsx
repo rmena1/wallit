@@ -1,6 +1,7 @@
 import { getSession } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { getReportData } from '@/lib/actions/reports'
+import { today as todayInTimezone } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 
 const ReportsPage = dynamic(() => import('./reports-client').then(m => m.ReportsPage), {
@@ -40,10 +41,14 @@ function ReportsSkeleton() {
 }
 
 function getDefaultRange(): [string, string] {
-  const now = new Date()
+  const now = new Date(`${todayInTimezone()}T12:00:00`)
   const start = new Date(now.getFullYear(), now.getMonth(), 1)
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 0) // last day of month
-  const fmt = (d: Date) => d.toISOString().slice(0, 10)
+  const fmt = (d: Date) => [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, '0'),
+    String(d.getDate()).padStart(2, '0'),
+  ].join('-')
   return [fmt(start), fmt(end)]
 }
 
