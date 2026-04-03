@@ -1,8 +1,9 @@
 'use server'
 
-import { db, accounts, movements } from '@/lib/db'
+import { db, accounts, movements, investmentSnapshots } from '@/lib/db'
 import { eq, and, sql } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
+import { calculateInvestmentPerformance } from '@/lib/investment-performance'
 
 export interface AccountWithBalance {
   id: string
@@ -11,6 +12,8 @@ export interface AccountWithBalance {
   lastFourDigits: string
   initialBalance: number
   totalDeposited: number
+  gainLoss: number
+  gainLossPercent: number
   isInvestment: boolean
   currentValue: number | null
   currentValueUpdatedAt: Date | null
@@ -31,6 +34,7 @@ export type AccountWithBalanceSerialized = Omit<AccountWithBalance, 'currentValu
  */
 export async function getAccountBalances(): Promise<AccountWithBalance[]> {
   const session = await requireAuth()
+  const amountForAccountCurrency = sql<number>`CASE WHEN ${accounts.currency} = 'USD' THEN COALESCE(${movements.amountUsd}, 0) ELSE ${movements.amount} END`
 
   const results = await db
     .select({
@@ -42,12 +46,31 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       isInvestment: accounts.isInvestment,
       currentValue: accounts.currentValue,
       currentValueUpdatedAt: accounts.currentValueUpdatedAt,
+      createdAt: accounts.createdAt,
       creditLimit: accounts.creditLimit,
       currency: accounts.currency,
       color: accounts.color,
       emoji: accounts.emoji,
-      incomeSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN CASE WHEN ${accounts.currency} = 'USD' THEN COALESCE(${movements.amountUsd}, 0) ELSE ${movements.amount} END ELSE 0 END), 0)`,
-      expenseSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN CASE WHEN ${accounts.currency} = 'USD' THEN COALESCE(${movements.amountUsd}, 0) ELSE ${movements.amount} END ELSE 0 END), 0)`,
+      openingTrackedValue: sql<number | null>`(
+        SELECT ${investmentSnapshots.value}
+        FROM ${investmentSnapshots}
+        WHERE ${investmentSnapshots.accountId} = ${accounts.id}
+          AND ${investmentSnapshots.userId} = ${session.id}
+        ORDER BY ${investmentSnapshots.date} ASC, ${investmentSnapshots.createdAt} ASC
+        LIMIT 1
+      )`,
+      openingTrackedValueCreatedAt: sql<Date | null>`(
+        SELECT ${investmentSnapshots.createdAt}
+        FROM ${investmentSnapshots}
+        WHERE ${investmentSnapshots.accountId} = ${accounts.id}
+          AND ${investmentSnapshots.userId} = ${session.id}
+        ORDER BY ${investmentSnapshots.date} ASC, ${investmentSnapshots.createdAt} ASC
+        LIMIT 1
+      )`,
+      incomeSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
+      expenseSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
+      transferInSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'income' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
+      transferOutSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
     })
     .from(accounts)
     .leftJoin(movements, and(eq(accounts.id, movements.accountId), eq(movements.userId, session.id)))
@@ -55,24 +78,40 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
     .groupBy(accounts.id)
     .orderBy(accounts.bankName)
 
-  return results.map((r) => ({
-    id: r.id,
-    bankName: r.bankName,
-    accountType: r.accountType,
-    lastFourDigits: r.lastFourDigits,
-    initialBalance: r.initialBalance,
-    totalDeposited: r.isInvestment ? r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum) : 0,
-    isInvestment: r.isInvestment,
-    currentValue: r.currentValue,
-    currentValueUpdatedAt: r.currentValueUpdatedAt,
-    creditLimit: r.creditLimit ?? null,
-    balance: r.isInvestment
-      ? (r.currentValue ?? r.initialBalance)
-      : r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum),
-    currency: r.currency,
-    color: r.color,
-    emoji: r.emoji,
-  }))
+  return results.map((r) => {
+    const performance = r.isInvestment
+      ? calculateInvestmentPerformance({
+        initialBalance: r.initialBalance,
+        openingTrackedValue: r.openingTrackedValue,
+        openingTrackedValueRecordedAt: r.openingTrackedValueCreatedAt,
+        accountCreatedAt: r.createdAt,
+        transferIn: Number(r.transferInSum),
+        transferOut: Number(r.transferOutSum),
+        currentValue: r.currentValue,
+      })
+      : null
+
+    return {
+      id: r.id,
+      bankName: r.bankName,
+      accountType: r.accountType,
+      lastFourDigits: r.lastFourDigits,
+      initialBalance: r.initialBalance,
+      totalDeposited: performance?.totalDeposited ?? 0,
+      gainLoss: performance?.gainLoss ?? 0,
+      gainLossPercent: performance?.gainLossPercent ?? 0,
+      isInvestment: r.isInvestment,
+      currentValue: performance?.currentValue ?? r.currentValue,
+      currentValueUpdatedAt: r.currentValueUpdatedAt,
+      creditLimit: r.creditLimit ?? null,
+      balance: r.isInvestment
+        ? performance!.currentValue
+        : r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum),
+      currency: r.currency,
+      color: r.color,
+      emoji: r.emoji,
+    }
+  })
 }
 
 /**

@@ -29,6 +29,98 @@ export async function createAccount(userId: string): Promise<string> {
   return id
 }
 
+export async function createInvestmentAccount(userId: string, opts: {
+  bankName?: string
+  accountType?: string
+  lastFourDigits?: string
+  initialBalance?: number
+  currentValue?: number
+  currency?: 'CLP' | 'USD'
+  createdAt?: Date
+  updatedAt?: Date
+} = {}): Promise<string> {
+  const createdAt = opts.createdAt ?? new Date()
+  const updatedAt = opts.updatedAt ?? createdAt
+  const initialBalance = opts.initialBalance ?? 0
+  const currentValue = opts.currentValue ?? initialBalance
+  const id = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+
+  await sql`
+    INSERT INTO accounts (
+      id, user_id, bank_name, account_type, last_four_digits,
+      initial_balance, currency, is_investment, current_value,
+      current_value_updated_at, created_at, updated_at
+    )
+    VALUES (
+      ${id},
+      ${userId},
+      ${opts.bankName ?? 'Fintual'},
+      ${opts.accountType ?? 'Ahorro'},
+      ${opts.lastFourDigits ?? '0001'},
+      ${initialBalance},
+      ${opts.currency ?? 'CLP'},
+      true,
+      ${currentValue},
+      ${updatedAt},
+      ${createdAt},
+      ${updatedAt}
+    )
+  `
+
+  return id
+}
+
+export async function seedInvestmentSnapshot(userId: string, accountId: string, opts: {
+  value: number
+  date: string
+  createdAt?: Date
+}) {
+  const createdAt = opts.createdAt ?? new Date()
+  const id = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+
+  await sql`
+    INSERT INTO investment_snapshots (id, account_id, user_id, value, date, created_at)
+    VALUES (${id}, ${accountId}, ${userId}, ${opts.value}, ${opts.date}, ${createdAt})
+  `
+}
+
+export async function seedTransferMovement(userId: string, accountId: string, opts: {
+  name?: string
+  amount: number
+  type: 'income' | 'expense'
+  date: string
+  createdAt?: Date
+  transferId?: string
+}) {
+  const createdAt = opts.createdAt ?? new Date()
+  const id = `tr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const transferId = opts.transferId ?? `transfer-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+
+  await sql`
+    INSERT INTO movements (
+      id, user_id, account_id, name, date, amount, type,
+      needs_review, currency, receivable, received,
+      transfer_id, created_at, updated_at
+    )
+    VALUES (
+      ${id},
+      ${userId},
+      ${accountId},
+      ${opts.name ?? 'Transferencia inversión'},
+      ${opts.date},
+      ${opts.amount},
+      ${opts.type},
+      false,
+      'CLP',
+      false,
+      false,
+      ${transferId},
+      ${createdAt},
+      ${createdAt}
+    )
+  `
+}
+
 export async function seedReviewMovements(userId: string, accountId: string | null) {
   const today = new Date().toISOString().slice(0, 10)
   const base = Date.now()

@@ -522,10 +522,8 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               scrollbarWidth: 'none',
             }}>
               {accountBalances.map((acc) => {
-                const showInvestmentBadge = Boolean(acc.isInvestment && acc.currentValue != null && acc.totalDeposited > 0)
-                const gainLossPercent = showInvestmentBadge
-                  ? ((acc.currentValue! - acc.totalDeposited) / acc.totalDeposited) * 100
-                  : 0
+                const showInvestmentBadge = Boolean(acc.isInvestment && acc.totalDeposited > 0)
+                const gainLossPercent = showInvestmentBadge ? acc.gainLossPercent : 0
                 const gainLossSign = gainLossPercent > 0 ? '+' : ''
                 const gainLossColor = gainLossPercent >= 0 ? '#4ade80' : '#f87171'
                 const gainLossBg = gainLossPercent >= 0 ? '#052e16' : '#450a0a'

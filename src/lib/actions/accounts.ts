@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, accounts, movements, categories } from '@/lib/db'
+import { db, accounts, movements, categories, investmentSnapshots } from '@/lib/db'
 import { eq, and, desc, isNotNull } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 import { generateId } from '@/lib/utils'
@@ -68,21 +68,35 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
   }
 
   const now = new Date()
+  const accountId = generateId()
 
-  await db.insert(accounts).values({
-    id: generateId(),
-    userId: session.id,
-    bankName,
-    accountType,
-    lastFourDigits: normalizedLastFourDigits,
-    initialBalance,
-    isInvestment,
-    currentValue: isInvestment ? initialBalance : null,
-    currentValueUpdatedAt: isInvestment ? now : null,
-    creditLimit,
-    currency: currency as 'CLP' | 'USD',
-    color,
-    emoji,
+  await db.transaction(async (tx) => {
+    await tx.insert(accounts).values({
+      id: accountId,
+      userId: session.id,
+      bankName,
+      accountType,
+      lastFourDigits: normalizedLastFourDigits,
+      initialBalance,
+      isInvestment,
+      currentValue: isInvestment ? initialBalance : null,
+      currentValueUpdatedAt: isInvestment ? now : null,
+      creditLimit,
+      currency: currency as 'CLP' | 'USD',
+      color,
+      emoji,
+    })
+
+    if (isInvestment) {
+      await tx.insert(investmentSnapshots).values({
+        id: generateId(),
+        accountId,
+        userId: session.id,
+        value: initialBalance,
+        date: now.toISOString().slice(0, 10),
+        createdAt: now,
+      })
+    }
   })
 
   revalidatePath('/')
@@ -135,6 +149,8 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
       id: accounts.id,
       currentValue: accounts.currentValue,
       currentValueUpdatedAt: accounts.currentValueUpdatedAt,
+      createdAt: accounts.createdAt,
+      isInvestment: accounts.isInvestment,
     })
     .from(accounts)
     .where(and(eq(accounts.id, id), eq(accounts.userId, session.id)))
@@ -173,27 +189,41 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
     currentValueUpdatedAt = now
   }
 
-  await db.update(accounts)
-    .set({
-      bankName,
-      accountType,
-      lastFourDigits: normalizedLastFourDigits,
-      initialBalance,
-      isInvestment,
-      currentValue,
-      currentValueUpdatedAt,
-      creditLimit,
-      currency: currency as 'CLP' | 'USD',
-      color,
-      emoji,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(accounts.id, id),
-        eq(accounts.userId, session.id)
+  await db.transaction(async (tx) => {
+    await tx.update(accounts)
+      .set({
+        bankName,
+        accountType,
+        lastFourDigits: normalizedLastFourDigits,
+        initialBalance,
+        isInvestment,
+        currentValue,
+        currentValueUpdatedAt,
+        creditLimit,
+        currency: currency as 'CLP' | 'USD',
+        color,
+        emoji,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(accounts.id, id),
+          eq(accounts.userId, session.id)
+        )
       )
-    )
+
+    const isConvertingToInvestment = isInvestment && !existingAccount.isInvestment
+    if (isConvertingToInvestment) {
+      await tx.insert(investmentSnapshots).values({
+        id: generateId(),
+        accountId: id,
+        userId: session.id,
+        value: currentValue ?? initialBalance,
+        date: existingAccount.createdAt.toISOString().slice(0, 10),
+        createdAt: existingAccount.createdAt,
+      })
+    }
+  })
 
   revalidatePath('/')
   revalidatePath('/settings')

@@ -1,9 +1,10 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 import { db, accounts, movements, investmentSnapshots } from '@/lib/db'
+import { calculateInvestmentPerformance } from '@/lib/investment-performance'
 import { generateId } from '@/lib/utils'
 
 export type InvestmentActionResult = {
@@ -37,6 +38,9 @@ export async function updateInvestmentValue(accountId: string, value: number): P
     .select({
       id: accounts.id,
       isInvestment: accounts.isInvestment,
+      initialBalance: accounts.initialBalance,
+      currentValue: accounts.currentValue,
+      createdAt: accounts.createdAt,
     })
     .from(accounts)
     .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
@@ -54,20 +58,39 @@ export async function updateInvestmentValue(accountId: string, value: number): P
   const snapshotDate = now.toISOString().slice(0, 10)
   const normalizedValue = Math.round(value)
 
-  await db.update(accounts)
-    .set({
-      currentValue: normalizedValue,
-      currentValueUpdatedAt: now,
-      updatedAt: now,
-    })
-    .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+  const [existingSnapshot] = await db
+    .select({ id: investmentSnapshots.id })
+    .from(investmentSnapshots)
+    .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.userId, session.id)))
+    .limit(1)
 
-  await db.insert(investmentSnapshots).values({
-    id: generateId(),
-    accountId,
-    userId: session.id,
-    value: normalizedValue,
-    date: snapshotDate,
+  await db.transaction(async (tx) => {
+    if (!existingSnapshot) {
+      await tx.insert(investmentSnapshots).values({
+        id: generateId(),
+        accountId,
+        userId: session.id,
+        value: account.currentValue ?? account.initialBalance,
+        date: account.createdAt.toISOString().slice(0, 10),
+        createdAt: account.createdAt,
+      })
+    }
+
+    await tx.update(accounts)
+      .set({
+        currentValue: normalizedValue,
+        currentValueUpdatedAt: now,
+        updatedAt: now,
+      })
+      .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+
+    await tx.insert(investmentSnapshots).values({
+      id: generateId(),
+      accountId,
+      userId: session.id,
+      value: normalizedValue,
+      date: snapshotDate,
+    })
   })
 
   revalidatePath('/')
@@ -109,6 +132,7 @@ export async function getInvestmentSummary(accountId: string): Promise<Investmen
       isInvestment: accounts.isInvestment,
       currentValue: accounts.currentValue,
       currentValueUpdatedAt: accounts.currentValueUpdatedAt,
+      createdAt: accounts.createdAt,
     })
     .from(accounts)
     .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
@@ -122,28 +146,42 @@ export async function getInvestmentSummary(accountId: string): Promise<Investmen
     ? sql<number>`COALESCE(${movements.amountUsd}, 0)`
     : sql<number>`${movements.amount}`
 
-  const [totals] = await db
-    .select({
-      transferIn: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'income' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
-      transferOut: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
-    })
-    .from(movements)
-    .where(and(eq(movements.accountId, accountId), eq(movements.userId, session.id)))
+  const [[totals], [openingSnapshot]] = await Promise.all([
+    db
+      .select({
+        transferIn: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'income' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
+        transferOut: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
+      })
+      .from(movements)
+      .where(and(eq(movements.accountId, accountId), eq(movements.userId, session.id))),
+    db
+      .select({
+        value: investmentSnapshots.value,
+        createdAt: investmentSnapshots.createdAt,
+      })
+      .from(investmentSnapshots)
+      .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.userId, session.id)))
+      .orderBy(asc(investmentSnapshots.date), asc(investmentSnapshots.createdAt))
+      .limit(1),
+  ])
 
   const transferIn = Number(totals?.transferIn ?? 0)
   const transferOut = Number(totals?.transferOut ?? 0)
-  const totalDeposited = account.initialBalance + transferIn - transferOut
-  const currentValue = account.currentValue ?? account.initialBalance
-  const gainLoss = currentValue - totalDeposited
-  const gainLossPercent = totalDeposited > 0
-    ? ((currentValue - totalDeposited) / totalDeposited) * 100
-    : 0
+  const performance = calculateInvestmentPerformance({
+    initialBalance: account.initialBalance,
+    openingTrackedValue: openingSnapshot?.value ?? null,
+    openingTrackedValueRecordedAt: openingSnapshot?.createdAt ?? null,
+    accountCreatedAt: account.createdAt,
+    transferIn,
+    transferOut,
+    currentValue: account.currentValue,
+  })
 
   return {
-    totalDeposited,
-    gainLoss,
-    gainLossPercent,
-    currentValue,
+    totalDeposited: performance.totalDeposited,
+    gainLoss: performance.gainLoss,
+    gainLossPercent: performance.gainLossPercent,
+    currentValue: performance.currentValue,
     currentValueUpdatedAt: account.currentValueUpdatedAt,
   }
 }

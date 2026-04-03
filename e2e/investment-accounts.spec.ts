@@ -1,9 +1,20 @@
-import { test, expect } from '@playwright/test'
-import { registerAndLogin, screenshot } from './helpers'
+import { test, expect, type Page } from '@playwright/test'
+import { registerAndLogin, screenshot, TEST_PASSWORD } from './helpers'
+import { createInvestmentAccount, getUserId, seedInvestmentSnapshot, seedTransferMovement } from './db-helper'
 import postgres from 'postgres'
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/wallit'
 const sql = postgres(DATABASE_URL, { max: 5 })
+
+async function registerUser(page: Page): Promise<string> {
+  const email = `e2e-invest-${Date.now()}-${Math.random().toString(36).slice(2, 5)}@wallit.app`
+  await page.goto('/register')
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Contraseña').fill(TEST_PASSWORD)
+  await page.getByRole('button', { name: 'Crear cuenta' }).click()
+  await page.waitForURL('**/', { timeout: 10000 })
+  return email
+}
 
 test.describe('Investment Accounts', () => {
   test('Create investment account, update value, verify gain/loss and snapshots', async ({ page }) => {
@@ -141,5 +152,58 @@ test.describe('Investment Accounts', () => {
     await expect(card).toBeVisible({ timeout: 3000 })
     
     await screenshot(page, 'invest-zero-gain-home')
+  })
+
+  test('Investment gain uses opening tracked value plus net transfers when initial balance is stale', async ({ page }) => {
+    const email = await registerUser(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+
+    const openingTrackedAt = new Date('2026-02-13T12:00:00.000Z')
+    const currentValueUpdatedAt = new Date('2026-04-03T12:00:00.000Z')
+    const accountId = await createInvestmentAccount(userId, {
+      bankName: 'Fintual',
+      lastFourDigits: '0001',
+      initialBalance: 0,
+      currentValue: 154983500,
+      createdAt: openingTrackedAt,
+      updatedAt: currentValueUpdatedAt,
+    })
+
+    await seedInvestmentSnapshot(userId, accountId, {
+      value: 199090100,
+      date: '2026-02-13',
+      createdAt: openingTrackedAt,
+    })
+    await seedTransferMovement(userId, accountId, {
+      amount: 50000000,
+      type: 'expense',
+      date: '2026-03-01',
+      createdAt: new Date('2026-03-01T12:00:00.000Z'),
+      transferId: 'investment-transfer-out',
+    })
+    await seedTransferMovement(userId, accountId, {
+      amount: 2000000,
+      type: 'income',
+      date: '2026-03-15',
+      createdAt: new Date('2026-03-15T12:00:00.000Z'),
+      transferId: 'investment-transfer-in',
+    })
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+
+    const accountCard = page.locator(`[data-testid="account-card-${accountId}"]`)
+    await expect(accountCard).toBeVisible({ timeout: 5000 })
+    await expect(accountCard.getByText(/\+2\.6%/)).toBeVisible({ timeout: 5000 })
+    await expect(accountCard.getByText('$1.549.835')).toBeVisible({ timeout: 5000 })
+
+    await accountCard.click()
+    await page.waitForLoadState('networkidle')
+
+    await expect(page.getByText('Resumen de Inversión')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('$1.510.901')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('$38.934')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/\+2\.58%/)).toBeVisible({ timeout: 5000 })
   })
 })
