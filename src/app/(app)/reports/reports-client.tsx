@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { formatCurrency } from '@/lib/utils'
-import { getReportData, getHistoricalExpenseProfile, type ReportData, type DailyData, type HistoricalExpenseProfile } from '@/lib/actions/reports'
+import { getReportData, type ReportData, type DailyData } from '@/lib/actions/reports'
 import { getReportCategoryMovements, type ReportCategoryMovement } from '@/lib/actions/movements'
 import {
   type TooltipContentProps,
@@ -54,19 +54,12 @@ function formatShortDate(dateStr: string) {
 
 // ─── Chart data builders ─────────────────────────────────────────────────────
 
-function getDayOfWeek(dateStr: string): number {
-  const d = new Date(dateStr + 'T00:00:00')
-  const jsDay = d.getDay() // 0=Sunday
-  return jsDay === 0 ? 6 : jsDay - 1 // 0=Monday, 6=Sunday
-}
-
 function buildExpenseChart(
   dailyData: DailyData[],
   startDate: string,
   endDate: string,
-  historicalProfile: HistoricalExpenseProfile | null,
   isCurrentMonth: boolean
-): { data: { date: string; label: string; actual: number | null; trend: number | null }[]; projectedTotal: number; predictionLevel: number } {
+): { data: { date: string; label: string; actual: number | null; trend: number | null }[]; projectedTotal: number } {
   const days = daysInRange(startDate, endDate)
   const map = new Map(dailyData.map(d => [d.date, d.expense]))
   const today = fmt(new Date())
@@ -86,8 +79,7 @@ function buildExpenseChart(
     actualDaysCount++
   }
 
-  // If not current month or no profile, no trend line
-  if (!isCurrentMonth || !historicalProfile) {
+  if (!isCurrentMonth) {
     const data = days.map(day => {
       const isFuture = day > today
       return {
@@ -97,28 +89,14 @@ function buildExpenseChart(
         trend: null,
       }
     })
-    return { data, projectedTotal: 0, predictionLevel: 0 }
+    return { data, projectedTotal: 0 }
   }
 
-  // Determine prediction level
-  const monthCount = historicalProfile.monthCount
-  const predictionLevel = monthCount < 2 ? 1 : monthCount < 4 ? 2 : 3
-
-  // Number of days in current month
   const totalDaysInMonth = days.length
-  const currentMonth = new Date(startDate + 'T00:00:00').getMonth()
-
-  // ──────────────────────────────────────────────────────────────────────
-  // CORE FIX: The trend line for past days MUST equal the actual cumulative.
-  // The projected total is anchored to actual spending:
-  //   projectedTotal = totalActualExpense + estimatedRemaining
-  // ──────────────────────────────────────────────────────────────────────
-
   let projectedTotal = 0
   const trendByDay: number[] = new Array(totalDaysInMonth).fill(0)
 
-  if (actualDaysCount <= 0 || totalActualExpense <= 0) {
-    // No actual data yet — no meaningful trend
+  if (actualDaysCount <= 0) {
     const data = days.map(day => {
       const isFuture = day > today
       return {
@@ -128,135 +106,22 @@ function buildExpenseChart(
         trend: null,
       }
     })
-    return { data, projectedTotal: 0, predictionLevel }
+    return { data, projectedTotal: 0 }
   }
 
   const todayIdx = actualDaysCount - 1
 
-  // Past days (up to today): trend = actual cumulative (FACT)
   for (let i = 0; i <= todayIdx; i++) {
     trendByDay[i] = cumulativeByDay.get(days[i]) || 0
   }
 
-  if (predictionLevel === 1) {
-    // Level 1: daily average adjusted by day-of-week for future estimation
-    const dailyAvg = totalActualExpense / actualDaysCount
-    const dowProfile = historicalProfile.dayOfWeekProfile
-
-    // Estimate remaining spending from tomorrow to end of month
-    let estimatedRemaining = 0
-    for (let i = todayIdx + 1; i < totalDaysInMonth; i++) {
-      const dow = getDayOfWeek(days[i])
-      estimatedRemaining += dailyAvg * dowProfile[dow]
-    }
-
-    projectedTotal = totalActualExpense + estimatedRemaining
-
-    // Build future trend: cumulate from actual today value
-    let runningTotal = totalActualExpense
-    for (let i = todayIdx + 1; i < totalDaysInMonth; i++) {
-      const dow = getDayOfWeek(days[i])
-      runningTotal += dailyAvg * dowProfile[dow]
-      trendByDay[i] = runningTotal
-    }
-
-  } else {
-    // Level 2 & 3: normalized cumulative curve
-    const profile = historicalProfile.dayOfMonthProfile
-
-    // Build cumulative profile for days in this month
-    const cumulativeProfile: number[] = []
-    let profCum = 0
-    for (let i = 0; i < totalDaysInMonth; i++) {
-      profCum += profile[i] || 0
-      cumulativeProfile.push(profCum)
-    }
-
-    const totalProfile = profCum
-    if (totalProfile <= 0) {
-      // Fallback: daily average
-      const dailyAvg = totalActualExpense / actualDaysCount
-      let runningTotal = totalActualExpense
-      for (let i = todayIdx + 1; i < totalDaysInMonth; i++) {
-        runningTotal += dailyAvg
-        trendByDay[i] = runningTotal
-      }
-      projectedTotal = trendByDay[totalDaysInMonth - 1] || totalActualExpense
-    } else {
-      // Normalize the curve
-      const normalizedCurve = cumulativeProfile.map(v => v / totalProfile)
-      const curveAtToday = normalizedCurve[todayIdx] || 0
-
-      let estimatedTotal: number
-
-      if (curveAtToday < 0.05) {
-        // Too early in the month for reliable curve estimation — fallback to daily avg
-        const dailyAvg = totalActualExpense / actualDaysCount
-        const dowProfile = historicalProfile.dayOfWeekProfile
-        let runningTotal = totalActualExpense
-        for (let i = todayIdx + 1; i < totalDaysInMonth; i++) {
-          const dow = getDayOfWeek(days[i])
-          runningTotal += dailyAvg * dowProfile[dow]
-          trendByDay[i] = runningTotal
-        }
-        projectedTotal = trendByDay[totalDaysInMonth - 1] || totalActualExpense
-      } else {
-        // Estimate total: actual / curve_fraction_at_today
-        estimatedTotal = totalActualExpense / curveAtToday
-
-        // Level 3 additions: seasonality adjustment
-        if (predictionLevel === 3 && monthCount >= 12) {
-          const monthlyTotals = historicalProfile.monthlyTotals
-          const overallMonthlyAvg = monthlyTotals.reduce((s, m) => s + m.total, 0) / monthlyTotals.length
-          const currentMonthTotals = monthlyTotals.filter(m => {
-            const monthIdx = parseInt(m.yearMonth.split('-')[1]) - 1
-            return monthIdx === currentMonth
-          })
-          if (currentMonthTotals.length > 0 && overallMonthlyAvg > 0) {
-            const currentMonthAvg = currentMonthTotals.reduce((s, m) => s + m.total, 0) / currentMonthTotals.length
-            const seasonalityRatio = currentMonthAvg / overallMonthlyAvg
-            estimatedTotal *= seasonalityRatio
-          }
-        }
-
-        // Build future trend from actual today, using the curve shape
-        // For future day i: trend = actualToday + estimatedTotal * (curve[i] - curve[todayIdx])
-        // This ensures the trend starts exactly at the actual value today
-        const curveRemaining = 1.0 - curveAtToday
-        const estimatedRemaining = estimatedTotal - totalActualExpense
-
-        if (predictionLevel === 3) {
-          // Level 3: blend curve with day-of-week for future days
-          const dowProfile = historicalProfile.dayOfWeekProfile
-          let runningTotal = totalActualExpense
-
-          for (let i = todayIdx + 1; i < totalDaysInMonth; i++) {
-            // Base increment from curve
-            const curveIncrement = estimatedTotal * (normalizedCurve[i] - normalizedCurve[i - 1])
-            // Day-of-week adjustment
-            const dow = getDayOfWeek(days[i])
-            const dowAdj = dowProfile[dow]
-            // 70% curve + 30% dow adjustment
-            const adjustedIncrement = curveIncrement * (0.7 + 0.3 * dowAdj)
-            runningTotal += adjustedIncrement
-            trendByDay[i] = runningTotal
-          }
-
-          projectedTotal = trendByDay[totalDaysInMonth - 1] || totalActualExpense
-        } else {
-          // Level 2: pure curve projection from actual today value
-          for (let i = todayIdx + 1; i < totalDaysInMonth; i++) {
-            const curveFractionFromToday = (normalizedCurve[i] - curveAtToday) / curveRemaining
-            trendByDay[i] = totalActualExpense + estimatedRemaining * curveFractionFromToday
-          }
-
-          projectedTotal = totalActualExpense + estimatedRemaining
-        }
-      }
-    }
+  const averageDailyExpense = totalActualExpense / actualDaysCount
+  for (let i = todayIdx + 1; i < totalDaysInMonth; i++) {
+    const daysAhead = i - todayIdx
+    trendByDay[i] = totalActualExpense + averageDailyExpense * daysAhead
   }
+  projectedTotal = trendByDay[totalDaysInMonth - 1] || totalActualExpense
 
-  // Build the chart data
   const data = days.map((day, i) => {
     const isFuture = day > today
     return {
@@ -267,7 +132,7 @@ function buildExpenseChart(
     }
   })
 
-  return { data, projectedTotal: Math.round(projectedTotal), predictionLevel }
+  return { data, projectedTotal: Math.round(projectedTotal) }
 }
 
 function buildIncomeChart(dailyData: DailyData[], startDate: string, endDate: string) {
@@ -408,25 +273,15 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
   const [accountId, setAccountId] = useState('')
   const [data, setData] = useState<ReportData | null>(initialData)
   const [loading, setLoading] = useState(false)
-  const [historicalProfile, setHistoricalProfile] = useState<HistoricalExpenseProfile | null>(null)
   const [selectedCategory, setSelectedCategory] = useState<CategorySpendingItem | null>(null)
   const [categoryMovements, setCategoryMovements] = useState<ReportCategoryMovement[]>([])
   const [categoryMovementsLoading, setCategoryMovementsLoading] = useState(false)
   const [categoryMovementsError, setCategoryMovementsError] = useState<string | null>(null)
-  const historicalFetched = useRef(false)
 
   // Track whether we're still on the initial server-prefetched state
   const isInitial = useRef(true)
 
   const isCurrentMonth = activePreset === 'Este mes'
-
-  // Fetch historical profile once when needed
-  useEffect(() => {
-    if (isCurrentMonth && !historicalFetched.current) {
-      historicalFetched.current = true
-      getHistoricalExpenseProfile().then(setHistoricalProfile).catch(console.error)
-    }
-  }, [isCurrentMonth])
 
   useEffect(() => {
     // Skip fetch on mount — we already have server-prefetched data
@@ -530,8 +385,8 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
   }
 
   const expenseChart = useMemo(() =>
-    data ? buildExpenseChart(data.dailyData, dateRange[0], dateRange[1], historicalProfile, isCurrentMonth) : { data: [], projectedTotal: 0, predictionLevel: 0 },
-    [data, dateRange, historicalProfile, isCurrentMonth])
+    data ? buildExpenseChart(data.dailyData, dateRange[0], dateRange[1], isCurrentMonth) : { data: [], projectedTotal: 0 },
+    [data, dateRange, isCurrentMonth])
   const incomeChart = useMemo(() =>
     data ? buildIncomeChart(data.dailyData, dateRange[0], dateRange[1]) : [],
     [data, dateRange])
@@ -681,7 +536,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                 <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: 0 }}>📉 Gastos</h2>
                 {expenseChart.projectedTotal > 0 && (
                   <span style={{ fontSize: 12, color: '#f59e0b' }}>
-                    Gasto esperado: {formatCurrency(Math.round(expenseChart.projectedTotal), 'CLP')}
+                    Proyección lineal: {formatCurrency(Math.round(expenseChart.projectedTotal), 'CLP')}
                   </span>
                 )}
               </div>
@@ -699,9 +554,9 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                           interval={Math.max(0, Math.floor(expenseChart.data.length / 6) - 1)} />
                         <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45} domain={[0, 'auto']}
                           tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                        <Tooltip content={(props: any) => <ChartTooltip {...props} color="#ef4444" />} />
+                        <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#ef4444" />} />
                         <Line type="monotone" dataKey="actual" stroke="#ef4444" strokeWidth={2} dot={false} connectNulls={false} />
-                        <Line type="monotone" dataKey="trend" stroke="#eab308" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
+                        <Line type="linear" dataKey="trend" stroke="#eab308" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
@@ -725,7 +580,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45}
                         tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                      <Tooltip content={(props: any) => <ChartTooltip {...props} color="#22c55e" />} />
+                      <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#22c55e" />} />
                       <Line type="monotone" dataKey="income" stroke="#22c55e" strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
@@ -748,7 +603,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45}
                         tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                      <Tooltip content={(props: any) => <ChartTooltip {...props} color="#e5e5e5" />} />
+                      <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#e5e5e5" />} />
                       <ReferenceLine y={0} stroke="#333" strokeDasharray="3 3" />
                       <Line type="monotone" dataKey="balance" stroke="#e5e5e5" strokeWidth={2} dot={false} />
                     </LineChart>

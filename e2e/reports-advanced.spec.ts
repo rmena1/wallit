@@ -1,208 +1,252 @@
-import { test, expect } from '@playwright/test'
-import { registerAndLogin, ensureAccount, ensureCategory, createMovement, screenshot } from './helpers'
+import { type Locator, type Page, test, expect } from '@playwright/test'
+import {
+  createAccount,
+  createMovement,
+  ensureAccount,
+  ensureCategory,
+  registerAndLogin,
+} from './helpers'
+
+const REPORT_TIMEOUT = 15_000
+const REPORTS_SPEC_TIMEOUT = 90_000
+
+function formatDate(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatClpFromPesos(amount: number) {
+  return `$${Math.round(amount).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`
+}
+
+function getMonthDate(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+async function selectOptionContaining(select: Locator, text: string) {
+  const value = await select.evaluate((element, searchText) => {
+    const options = Array.from((element as HTMLSelectElement).options)
+    const normalizedSearch = String(searchText).toLowerCase()
+    return options.find(option =>
+      !option.disabled &&
+      option.value &&
+      (option.textContent?.toLowerCase().includes(normalizedSearch) ?? false)
+    )?.value ?? null
+  }, text)
+
+  if (!value) {
+    throw new Error(`No select option contains "${text}"`)
+  }
+
+  await select.selectOption(value)
+}
+
+async function openReports(page: Page) {
+  await page.goto('/reports')
+  await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: REPORT_TIMEOUT })
+}
+
+async function expectMovementCount(page: Page, count: number) {
+  const movementCountCard = page.getByText('Total movimientos').locator('xpath=..')
+  await expect(movementCountCard).toContainText(String(count), { timeout: REPORT_TIMEOUT })
+}
+
+function categoryRow(page: Page, name: string) {
+  return page.locator('button').filter({ has: page.getByText(name, { exact: true }) }).first()
+}
+
+async function openCategorySheet(page: Page, name: string) {
+  const row = categoryRow(page, name)
+  await expect(row).toBeVisible({ timeout: REPORT_TIMEOUT })
+  await row.click()
+  await expect(page.getByText('Movimientos de la categoría')).toBeVisible({ timeout: REPORT_TIMEOUT })
+}
+
+async function closeCategorySheet(page: Page) {
+  await page.getByRole('button', { name: 'Cerrar' }).click()
+  await expect(page.getByText('Movimientos de la categoría')).toHaveCount(0)
+}
+
+async function pickCustomRange(page: Page, startDay: number, endDay: number) {
+  await page.getByRole('button', { name: /📅/ }).click()
+  await expect(page.getByRole('button', { name: 'Últimos 7 días' })).toBeVisible({ timeout: REPORT_TIMEOUT })
+
+  await page.getByRole('button', { name: new RegExp(`^${startDay}$`) }).click()
+  await expect(page.getByText('Selecciona fecha fin')).toBeVisible({ timeout: REPORT_TIMEOUT })
+  await page.getByRole('button', { name: new RegExp(`^${endDay}$`) }).click()
+}
 
 test.describe('Reports — Advanced Calendar & Filters', () => {
-  test('custom date range selection via mini calendar and filter interactions', async ({ page }) => {
-    // 1. Register and create test data
+  test.describe.configure({ timeout: REPORTS_SPEC_TIMEOUT })
+
+  test('current month expense projection uses the elapsed-day daily average', async ({ page }) => {
     await registerAndLogin(page)
     await ensureAccount(page)
+
+    const now = new Date()
+    const today = formatDate(now)
+    const year = now.getFullYear()
+    const month = now.getMonth() + 1
+    const day = now.getDate()
+    const monthStart = getMonthDate(year, month, 1)
+    const totalDaysInMonth = new Date(year, month, 0).getDate()
+
+    await createMovement(page, { name: 'Arriendo parcial', amount: '20000', date: monthStart })
+
+    let totalActualAmount = 20_000
+    if (today !== monthStart) {
+      await createMovement(page, { name: 'Supermercado', amount: '10000', date: today })
+      totalActualAmount += 10_000
+    }
+
+    const projectedAmount = Math.round((totalActualAmount / day) * totalDaysInMonth)
+
+    await openReports(page)
+    await expect(page.getByText(`Proyección lineal: ${formatClpFromPesos(projectedAmount)}`)).toBeVisible({
+      timeout: REPORT_TIMEOUT,
+    })
+  })
+
+  test('custom date range selection and report filters update the data meaningfully', async ({ page }) => {
+    await registerAndLogin(page)
+    await ensureAccount(page)
+    await createAccount(page, {
+      bankName: 'Santander',
+      accountType: 'Vista',
+      lastFourDigits: '1111',
+      initialBalance: '50000',
+    })
     await ensureCategory(page, '🍔', 'Comida')
     await ensureCategory(page, '🚗', 'Transporte')
 
-    // Create various movements for comprehensive report data
-    await createMovement(page, { name: 'Desayuno', amount: '8000' })
-    await createMovement(page, { name: 'Almuerzo', amount: '15000' })
-    await createMovement(page, { name: 'Uber', amount: '6000' })
-    await createMovement(page, { name: 'Sueldo freelance', amount: '800000', type: 'income' })
+    const now = new Date()
+    const today = formatDate(now)
+    const year = now.getFullYear()
+    const month = now.getMonth() + 1
+    const day = now.getDate()
+    const monthStart = getMonthDate(year, month, 1)
+    const secondDay = getMonthDate(year, month, Math.min(day, 2))
+    const hasEarlierSubset = day >= 3
 
-    // 2. Navigate to reports
-    await page.goto('/reports')
-    await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: 5000 })
-    await screenshot(page, 'reports-advanced-01-initial')
+    await createMovement(page, {
+      name: 'Desayuno',
+      amount: '8000',
+      date: monthStart,
+      categoryName: 'Comida',
+      accountLabel: 'BCI',
+    })
+    await createMovement(page, {
+      name: 'Uber',
+      amount: '6000',
+      date: secondDay,
+      categoryName: 'Transporte',
+      accountLabel: 'Santander',
+    })
+    await createMovement(page, {
+      name: 'Almuerzo',
+      amount: '15000',
+      date: today,
+      categoryName: 'Comida',
+      accountLabel: 'BCI',
+    })
+    await createMovement(page, {
+      name: 'Sueldo freelance',
+      amount: '800000',
+      type: 'income',
+      date: today,
+      accountLabel: 'BCI',
+    })
 
-    // 3. Open date picker
-    await page.locator('button').filter({ hasText: '📅' }).click()
-    await expect(page.getByRole('button', { name: 'Últimos 7 días' })).toBeVisible({ timeout: 3000 })
-    await screenshot(page, 'reports-advanced-02-date-picker-open')
+    await openReports(page)
+    await expectMovementCount(page, 4)
+    await expect(categoryRow(page, 'Comida')).toBeVisible()
+    await expect(categoryRow(page, 'Transporte')).toBeVisible()
 
-    // 4. Test calendar month navigation - click previous month
-    const prevMonthBtn = page.locator('button').filter({ hasText: '‹' })
-    await prevMonthBtn.click()
-    await page.waitForTimeout(300)
-    await screenshot(page, 'reports-advanced-03-prev-month')
+    await pickCustomRange(page, 1, hasEarlierSubset ? 2 : 1)
+    await expect(page.getByRole('button', { name: /📅/ })).toContainText(
+      hasEarlierSubset ? `${monthStart.slice(5)} → ${secondDay.slice(5)}` : `${monthStart.slice(5)} → ${monthStart.slice(5)}`,
+    )
 
-    // 5. Navigate forward month
-    const nextMonthBtn = page.locator('button').filter({ hasText: '›' })
-    await nextMonthBtn.click()
-    await page.waitForTimeout(300)
-    await screenshot(page, 'reports-advanced-04-next-month')
+    if (hasEarlierSubset) {
+      await expectMovementCount(page, 2)
+      await expect(page.getByText('Sin ingresos en este período')).toBeVisible()
 
-    // Navigate to current month again
-    await nextMonthBtn.click()
-    await page.waitForTimeout(300)
-
-    // 6. Select custom date range - click on day 1
-    const dayButtons = page.locator('button').filter({ hasText: /^1$/ })
-    const day1Button = dayButtons.first()
-    if (await day1Button.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await day1Button.click()
-      await screenshot(page, 'reports-advanced-05-first-day-selected')
-
-      // Should show "Selecciona fecha fin" hint
-      const hintText = page.getByText('Selecciona fecha fin')
-      if (await hintText.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await screenshot(page, 'reports-advanced-06-select-end-hint')
-      }
-
-      // Click on day 15 to complete range
-      const day15Button = page.locator('button').filter({ hasText: /^15$/ }).first()
-      if (await day15Button.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await day15Button.click()
-        await page.waitForTimeout(500)
-        await screenshot(page, 'reports-advanced-07-custom-range-selected')
-      }
+      await openCategorySheet(page, 'Comida')
+      await expect(page.getByText('Desayuno')).toBeVisible()
+      await expect(page.getByText('Almuerzo')).toHaveCount(0)
+      await closeCategorySheet(page)
     }
 
-    // 7. Close date picker and verify charts update
-    // The picker should auto-close after selecting range
-    await page.locator('main').click({ position: { x: 10, y: 10 } }) // Click outside picker
-    await page.waitForTimeout(500)
-    await screenshot(page, 'reports-advanced-08-charts-updated')
+    await page.getByRole('button', { name: /📅/ }).click()
+    await page.getByRole('button', { name: 'Este mes' }).click()
+    await expectMovementCount(page, 4)
 
-    // 8. Test category filter
     const categorySelect = page.locator('select').first()
-    await expect(categorySelect).toBeVisible({ timeout: 5000 })
-    
-    // Select "Comida" category
-    const categoryOptions = await categorySelect.locator('option').allTextContents()
-    const comidaIndex = categoryOptions.findIndex(o => o.includes('Comida'))
-    if (comidaIndex > 0) {
-      await categorySelect.selectOption({ index: comidaIndex })
-      await page.waitForTimeout(1000) // Wait for data refetch
-      await screenshot(page, 'reports-advanced-09-category-filtered')
-    }
+    await selectOptionContaining(categorySelect, 'Comida')
+    await expectMovementCount(page, 2)
+    await expect(page.getByText('Sin ingresos en este período')).toBeVisible()
 
-    // 9. Test account filter
+    await openCategorySheet(page, 'Comida')
+    await expect(page.getByText('Desayuno')).toBeVisible()
+    await expect(page.getByText('Almuerzo')).toBeVisible()
+    await expect(page.getByText('Uber')).toHaveCount(0)
+    await closeCategorySheet(page)
+
+    await categorySelect.selectOption('')
+    await expectMovementCount(page, 4)
+
     const accountSelect = page.locator('select').nth(1)
-    await expect(accountSelect).toBeVisible({ timeout: 3000 })
+    await selectOptionContaining(accountSelect, 'Santander')
+    await expectMovementCount(page, 1)
+    await expect(page.getByText('Sin ingresos en este período')).toBeVisible()
+    await expect(categoryRow(page, 'Transporte')).toBeVisible()
+    await expect(categoryRow(page, 'Comida')).toHaveCount(0)
 
-    const accountOptions = await accountSelect.locator('option').allTextContents()
-    if (accountOptions.length > 1) {
-      await accountSelect.selectOption({ index: 1 })
-      await page.waitForTimeout(1000) // Wait for data refetch
-      await screenshot(page, 'reports-advanced-10-account-filtered')
-    }
-
-    // 10. Reset filters to "all"
-    await categorySelect.selectOption({ index: 0 }) // "Todas las categorías"
-    await accountSelect.selectOption({ index: 0 }) // "Todas las cuentas"
-    await page.waitForTimeout(1000)
-    await screenshot(page, 'reports-advanced-11-filters-reset')
-
-    // 11. Test "Este año" preset (long range)
-    await page.locator('button').filter({ hasText: '📅' }).click()
-    await page.getByRole('button', { name: 'Este año' }).click()
-    await page.waitForTimeout(1000)
-    await screenshot(page, 'reports-advanced-12-this-year-preset')
-
-    // 12. Verify all chart sections are visible
-    await expect(page.getByRole('heading', { name: '📉 Gastos' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: '📈 Ingresos' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: '💰 Balance' })).toBeVisible()
-    await expect(page.getByText('Gastos por Categoría')).toBeVisible()
-    await expect(page.getByText('Total movimientos')).toBeVisible()
-    await screenshot(page, 'reports-advanced-13-all-sections-visible')
-
-    // 13. Test "Últimos 100 días" preset
-    await page.locator('button').filter({ hasText: '📅' }).click()
-    await page.getByRole('button', { name: 'Últimos 100 días' }).click()
-    await page.waitForTimeout(1000)
-    await screenshot(page, 'reports-advanced-14-last-100-days')
-
-    // 14. Verify summary cards show correct data type
-    await expect(page.getByText('Ingresos', { exact: true })).toBeVisible()
-    await expect(page.getByText('Gastos', { exact: true }).first()).toBeVisible()
-    await expect(page.getByText('Neto')).toBeVisible()
-    await screenshot(page, 'reports-advanced-15-summary-cards')
-
-    // 15. Test "Esta semana" preset
-    await page.locator('button').filter({ hasText: '📅' }).click()
-    await page.getByRole('button', { name: 'Esta semana' }).click()
-    await page.waitForTimeout(1000)
-    await screenshot(page, 'reports-advanced-16-this-week-final')
+    await openCategorySheet(page, 'Transporte')
+    await expect(page.getByText('Uber')).toBeVisible()
+    await expect(page.getByText('Desayuno')).toHaveCount(0)
   })
 
-  test('reports empty state scenarios with filters', async ({ page }) => {
-    // Create user with only expense data (no income)
+  test('reports empty state scenarios respond to real filter choices', async ({ page }) => {
     await registerAndLogin(page)
     await ensureAccount(page)
     await ensureCategory(page, '🎮', 'Entretenimiento')
+    await ensureCategory(page, '🍔', 'Comida')
 
-    // Create only expenses
-    await createMovement(page, { name: 'Netflix', amount: '12000' })
-    await createMovement(page, { name: 'Spotify', amount: '5000' })
+    const today = formatDate(new Date())
 
-    // 1. Go to reports
-    await page.goto('/reports')
-    await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: 5000 })
-    await screenshot(page, 'reports-empty-01-with-expenses-only')
+    await createMovement(page, {
+      name: 'Netflix',
+      amount: '12000',
+      date: today,
+      categoryName: 'Comida',
+    })
+    await createMovement(page, {
+      name: 'Spotify',
+      amount: '5000',
+      date: today,
+      categoryName: 'Comida',
+    })
 
-    // 2. Verify income chart shows empty state message
-    // (Since we only have expenses, income should be zero)
+    await openReports(page)
     await expect(page.getByRole('heading', { name: '📈 Ingresos' })).toBeVisible()
-    await screenshot(page, 'reports-empty-02-income-section')
+    await expect(page.getByText('Sin ingresos en este período')).toBeVisible()
 
-    // 3. Now create an income and filter by category that has no data
-    await createMovement(page, { name: 'Pago', amount: '100000', type: 'income' })
-
-    await page.goto('/reports')
-    await page.waitForLoadState('networkidle')
-    await screenshot(page, 'reports-empty-03-with-income')
-
-    // 4. Filter by category that might not have income associated
     const categorySelect = page.locator('select').first()
-    const categoryOptions = await categorySelect.locator('option').allTextContents()
-    const entIndex = categoryOptions.findIndex(o => o.includes('Entretenimiento'))
-    if (entIndex > 0) {
-      await categorySelect.selectOption({ index: entIndex })
-      await page.waitForTimeout(1000)
-      await screenshot(page, 'reports-empty-04-filtered-to-entertainment')
-    }
+    await selectOptionContaining(categorySelect, 'Entretenimiento')
+    await expect(page.getByText('Sin datos en este período')).toBeVisible({ timeout: REPORT_TIMEOUT })
 
-    // 5. Test with future date range (should show empty)
-    await page.locator('button').filter({ hasText: '📅' }).click()
+    await categorySelect.selectOption('')
+    await expectMovementCount(page, 2)
+    await expect(page.getByText('Sin ingresos en este período')).toBeVisible()
 
-    // Try to navigate to a future month and select dates
-    const nextMonthBtn = page.locator('button').filter({ hasText: '›' })
-    for (let i = 0; i < 2; i++) {
-      await nextMonthBtn.click()
-      await page.waitForTimeout(200)
-    }
+    await createMovement(page, { name: 'Pago', amount: '100000', type: 'income', date: today })
 
-    // Select a date in the future
-    const futureDayBtn = page.locator('button').filter({ hasText: /^10$/ }).first()
-    if (await futureDayBtn.isVisible()) {
-      await futureDayBtn.click()
-      await page.waitForTimeout(300)
-      const futureEndBtn = page.locator('button').filter({ hasText: /^20$/ }).first()
-      if (await futureEndBtn.isVisible()) {
-        await futureEndBtn.click()
-        await page.waitForTimeout(500)
-      }
-    }
-
-    await page.waitForTimeout(1000)
-    await screenshot(page, 'reports-empty-05-future-dates')
-
-    // 6. Reset to current month
-    await page.locator('button').filter({ hasText: '📅' }).click()
-    await page.getByRole('button', { name: 'Este mes' }).click()
-    await page.waitForTimeout(1000)
-    await screenshot(page, 'reports-empty-06-reset-to-this-month')
-
-    // Reset category filter
-    await categorySelect.selectOption({ index: 0 })
-    await page.waitForTimeout(500)
-    await screenshot(page, 'reports-empty-07-all-data-visible')
+    await openReports(page)
+    await expectMovementCount(page, 3)
+    await expect(page.getByRole('heading', { name: '📈 Ingresos' })).toBeVisible()
+    await expect(page.getByText('Sin ingresos en este período')).toHaveCount(0)
   })
 })
