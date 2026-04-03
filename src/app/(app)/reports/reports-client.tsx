@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, today as todayInTimezone } from '@/lib/utils'
 import { getReportData, type ReportData, type DailyData } from '@/lib/actions/reports'
 import { getReportCategoryMovements, type ReportCategoryMovement } from '@/lib/actions/movements'
 import {
@@ -57,21 +57,21 @@ function formatShortDate(dateStr: string) {
 function buildExpenseChart(
   dailyData: DailyData[],
   startDate: string,
-  endDate: string,
-  isCurrentMonth: boolean
-): { data: { date: string; label: string; actual: number | null; trend: number | null }[]; projectedTotal: number } {
+  endDate: string
+): { data: { date: string; label: string; actual: number | null; trend: number | null }[]; trendTotal: number | null } {
   const days = daysInRange(startDate, endDate)
   const map = new Map(dailyData.map(d => [d.date, d.expense]))
-  const today = fmt(new Date())
+  const today = todayInTimezone()
+  const observableEnd = endDate < today ? endDate : today
 
-  // Build cumulative actual values for all days up to today
+  // Only days inside the range up to the observable end contribute to actuals and the average line.
   let cumulative = 0
   let totalActualExpense = 0
   let actualDaysCount = 0
   const cumulativeByDay = new Map<string, number>()
 
   for (const day of days) {
-    if (day > today) break
+    if (day > observableEnd) break
     const val = map.get(day) || 0
     cumulative += val
     cumulativeByDay.set(day, cumulative)
@@ -79,26 +79,21 @@ function buildExpenseChart(
     actualDaysCount++
   }
 
-  if (!isCurrentMonth) {
+  if (actualDaysCount <= 0) {
     const data = days.map(day => {
-      const isFuture = day > today
       return {
         date: day,
         label: day.slice(5),
-        actual: isFuture ? null : (cumulativeByDay.get(day) || 0) / 100,
+        actual: null,
         trend: null,
       }
     })
-    return { data, projectedTotal: 0 }
+    return { data, trendTotal: null }
   }
 
-  const totalDaysInMonth = days.length
-  let projectedTotal = 0
-  const trendByDay: number[] = new Array(totalDaysInMonth).fill(0)
-
-  if (actualDaysCount <= 0) {
+  if (totalActualExpense <= 0) {
     const data = days.map(day => {
-      const isFuture = day > today
+      const isFuture = day > observableEnd
       return {
         date: day,
         label: day.slice(5),
@@ -106,24 +101,15 @@ function buildExpenseChart(
         trend: null,
       }
     })
-    return { data, projectedTotal: 0 }
-  }
-
-  const todayIdx = actualDaysCount - 1
-
-  for (let i = 0; i <= todayIdx; i++) {
-    trendByDay[i] = cumulativeByDay.get(days[i]) || 0
+    return { data, trendTotal: null }
   }
 
   const averageDailyExpense = totalActualExpense / actualDaysCount
-  for (let i = todayIdx + 1; i < totalDaysInMonth; i++) {
-    const daysAhead = i - todayIdx
-    trendByDay[i] = totalActualExpense + averageDailyExpense * daysAhead
-  }
-  projectedTotal = trendByDay[totalDaysInMonth - 1] || totalActualExpense
+  const trendByDay = days.map((_, index) => averageDailyExpense * (index + 1))
+  const trendTotal = trendByDay[days.length - 1] ?? totalActualExpense
 
   const data = days.map((day, i) => {
-    const isFuture = day > today
+    const isFuture = day > observableEnd
     return {
       date: day,
       label: day.slice(5),
@@ -132,7 +118,7 @@ function buildExpenseChart(
     }
   })
 
-  return { data, projectedTotal: Math.round(projectedTotal) }
+  return { data, trendTotal: Math.round(trendTotal) }
 }
 
 function buildIncomeChart(dailyData: DailyData[], startDate: string, endDate: string) {
@@ -281,8 +267,6 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
   // Track whether we're still on the initial server-prefetched state
   const isInitial = useRef(true)
 
-  const isCurrentMonth = activePreset === 'Este mes'
-
   useEffect(() => {
     // Skip fetch on mount — we already have server-prefetched data
     if (isInitial.current) {
@@ -385,8 +369,8 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
   }
 
   const expenseChart = useMemo(() =>
-    data ? buildExpenseChart(data.dailyData, dateRange[0], dateRange[1], isCurrentMonth) : { data: [], projectedTotal: 0 },
-    [data, dateRange, isCurrentMonth])
+    data ? buildExpenseChart(data.dailyData, dateRange[0], dateRange[1]) : { data: [], trendTotal: null },
+    [data, dateRange])
   const incomeChart = useMemo(() =>
     data ? buildIncomeChart(data.dailyData, dateRange[0], dateRange[1]) : [],
     [data, dateRange])
@@ -534,20 +518,26 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
             <div style={cardStyle}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
                 <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: 0 }}>📉 Gastos</h2>
-                {expenseChart.projectedTotal > 0 && (
+                {expenseChart.trendTotal !== null && (
                   <span style={{ fontSize: 12, color: '#f59e0b' }}>
-                    Proyección lineal: {formatCurrency(Math.round(expenseChart.projectedTotal), 'CLP')}
+                    Tendencia lineal: {formatCurrency(expenseChart.trendTotal, 'CLP')}
                   </span>
                 )}
               </div>
-              {expenseChart.data.every(d => !d.actual) ? (
+              {expenseChart.data.every(d => !d.actual && !d.trend) ? (
                 <div style={{ textAlign: 'center', color: '#9ca3af', padding: '32px 0', fontSize: 13 }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>📉</div>
                   Sin gastos en este período
                 </div>
               ) : (
                 <>
-                  <div style={{ width: '100%', height: 200 }}>
+                  <div
+                    data-testid="expense-chart"
+                    data-expense-chart={JSON.stringify(
+                      expenseChart.data.map(({ date, actual, trend }) => ({ date, actual, trend }))
+                    )}
+                    style={{ width: '100%', height: 200 }}
+                  >
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={expenseChart.data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
                         <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false}

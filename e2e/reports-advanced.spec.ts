@@ -25,6 +25,12 @@ function getMonthDate(year: number, month: number, day: number) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
+type ExpenseChartPoint = {
+  date: string
+  actual: number | null
+  trend: number | null
+}
+
 async function selectOptionContaining(select: Locator, text: string) {
   const value = await select.evaluate((element, searchText) => {
     const options = Array.from((element as HTMLSelectElement).options)
@@ -46,6 +52,16 @@ async function selectOptionContaining(select: Locator, text: string) {
 async function openReports(page: Page) {
   await page.goto('/reports')
   await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: REPORT_TIMEOUT })
+}
+
+async function readExpenseChart(page: Page): Promise<ExpenseChartPoint[]> {
+  const rawChartData = await page.getByTestId('expense-chart').getAttribute('data-expense-chart')
+
+  if (!rawChartData) {
+    throw new Error('Expense chart data attribute is missing')
+  }
+
+  return JSON.parse(rawChartData) as ExpenseChartPoint[]
 }
 
 async function expectMovementCount(page: Page, count: number) {
@@ -78,10 +94,16 @@ async function pickCustomRange(page: Page, startDay: number, endDay: number) {
   await page.getByRole('button', { name: new RegExp(`^${endDay}$`) }).click()
 }
 
+async function selectPreset(page: Page, label: string) {
+  await page.getByRole('button', { name: /📅/ }).click()
+  await expect(page.getByRole('button', { name: 'Últimos 7 días' })).toBeVisible({ timeout: REPORT_TIMEOUT })
+  await page.getByRole('button', { name: label }).click()
+}
+
 test.describe('Reports — Advanced Calendar & Filters', () => {
   test.describe.configure({ timeout: REPORTS_SPEC_TIMEOUT })
 
-  test('current month expense projection uses the elapsed-day daily average', async ({ page }) => {
+  test('current month expense trend uses the elapsed-day daily average', async ({ page }) => {
     await registerAndLogin(page)
     await ensureAccount(page)
 
@@ -101,12 +123,93 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
       totalActualAmount += 10_000
     }
 
-    const projectedAmount = Math.round((totalActualAmount / day) * totalDaysInMonth)
+    const trendTotal = Math.round((totalActualAmount / day) * totalDaysInMonth)
+    const averageDailyExpense = totalActualAmount / day
 
     await openReports(page)
-    await expect(page.getByText(`Proyección lineal: ${formatClpFromPesos(projectedAmount)}`)).toBeVisible({
+    await expect(page.getByText(`Tendencia lineal: ${formatClpFromPesos(trendTotal)}`)).toBeVisible({
       timeout: REPORT_TIMEOUT,
     })
+
+    const expenseChart = await readExpenseChart(page)
+
+    expect(expenseChart).toHaveLength(totalDaysInMonth)
+
+    for (const [index, point] of expenseChart.entries()) {
+      const dayNumber = index + 1
+
+      expect(point.date).toBe(getMonthDate(year, month, dayNumber))
+      expect(point.trend).not.toBeNull()
+      expect(point.trend ?? 0).toBeCloseTo(averageDailyExpense * dayNumber, 6)
+    }
+
+    const expectedActualSeries = Array.from({ length: totalDaysInMonth }, (_, index) => {
+      const dayNumber = index + 1
+
+      if (dayNumber > day) {
+        return null
+      }
+
+      if (today !== monthStart && dayNumber >= day) {
+        return totalActualAmount
+      }
+
+      return 20_000
+    })
+
+    expect(expenseChart.map(point => point.actual)).toEqual(expectedActualSeries)
+    expect(expenseChart[day - 1]?.trend ?? 0).toBeCloseTo(totalActualAmount, 6)
+    expect(expenseChart[totalDaysInMonth - 1]?.trend ?? 0).toBeCloseTo(trendTotal, 6)
+  })
+
+  test('year range expense trend stays straight through future dates', async ({ page }) => {
+    await registerAndLogin(page)
+    await ensureAccount(page)
+
+    const now = new Date()
+    const today = formatDate(now)
+    const year = now.getFullYear()
+    const yearStart = getMonthDate(year, 1, 1)
+
+    await createMovement(page, { name: 'Patente anual', amount: '24000', date: yearStart })
+
+    let totalActualAmount = 24_000
+    if (today !== yearStart) {
+      await createMovement(page, { name: 'Bencina actual', amount: '12000', date: today })
+      totalActualAmount += 12_000
+    }
+
+    await openReports(page)
+    await selectPreset(page, 'Este año')
+    await expect(page.getByRole('button', { name: /📅/ })).toContainText('Este año')
+    await expect(page.getByText(/Tendencia lineal:/)).toBeVisible({ timeout: REPORT_TIMEOUT })
+
+    const expenseChart = await readExpenseChart(page)
+    const observedDays = expenseChart.findLastIndex(point => point.actual !== null) + 1
+    const rangeDays = expenseChart.length
+    const averageDailyExpense = totalActualAmount / observedDays
+    const trendTotal = averageDailyExpense * rangeDays
+
+    expect(observedDays).toBeGreaterThan(0)
+    expect(rangeDays).toBeGreaterThan(observedDays)
+    expect(expenseChart[0]).toMatchObject({
+      date: yearStart,
+      actual: 24_000,
+    })
+
+    for (const [index, point] of expenseChart.entries()) {
+      expect(point.trend).not.toBeNull()
+      expect(point.trend ?? 0).toBeCloseTo(averageDailyExpense * (index + 1), 6)
+    }
+
+    expect(expenseChart[observedDays - 1]?.actual ?? 0).toBeCloseTo(totalActualAmount, 6)
+    expect(expenseChart[observedDays - 1]?.trend ?? 0).toBeCloseTo(totalActualAmount, 6)
+    expect(expenseChart[rangeDays - 1]?.trend ?? 0).toBeCloseTo(trendTotal, 6)
+
+    if (observedDays < rangeDays) {
+      expect(expenseChart[observedDays]?.actual).toBeNull()
+      expect(expenseChart[observedDays]?.trend ?? 0).toBeCloseTo(averageDailyExpense * (observedDays + 1), 6)
+    }
   })
 
   test('custom date range selection and report filters update the data meaningfully', async ({ page }) => {
@@ -179,8 +282,7 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
       await closeCategorySheet(page)
     }
 
-    await page.getByRole('button', { name: /📅/ }).click()
-    await page.getByRole('button', { name: 'Este mes' }).click()
+    await selectPreset(page, 'Este mes')
     await expectMovementCount(page, 4)
 
     const categorySelect = page.locator('select').first()
