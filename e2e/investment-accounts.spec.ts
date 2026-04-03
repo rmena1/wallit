@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import { registerAndLogin, screenshot, TEST_PASSWORD } from './helpers'
 import { createInvestmentAccount, getUserId, seedInvestmentSnapshot, seedTransferMovement } from './db-helper'
 import postgres from 'postgres'
@@ -14,6 +14,23 @@ async function registerUser(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'Crear cuenta' }).click()
   await page.waitForURL('**/', { timeout: 10000 })
   return email
+}
+
+async function swipeLeft(page: Page, locator: Locator, distance: number) {
+  await locator.scrollIntoViewIfNeeded()
+  const box = await locator.boundingBox()
+  if (!box) {
+    throw new Error('Could not determine swipe target bounds')
+  }
+
+  const startX = box.x + box.width * 0.72
+  const endX = startX - distance
+  const y = box.y + box.height / 2
+
+  await page.mouse.move(startX, y)
+  await page.mouse.down()
+  await page.mouse.move(endX, y, { steps: 12 })
+  await page.mouse.up()
 }
 
 test.describe('Investment Accounts', () => {
@@ -152,6 +169,97 @@ test.describe('Investment Accounts', () => {
     await expect(card).toBeVisible({ timeout: 3000 })
     
     await screenshot(page, 'invest-zero-gain-home')
+  })
+
+  test('Investment snapshots can be swipe-deleted with confirmation', async ({ page }) => {
+    const email = await registerUser(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+
+    const openingAt = new Date('2026-01-10T12:00:00.000Z')
+    const middleAt = new Date('2026-02-10T12:00:00.000Z')
+    const latestAt = new Date('2026-03-10T12:00:00.000Z')
+
+    const accountId = await createInvestmentAccount(userId, {
+      bankName: 'Fintual',
+      lastFourDigits: '4242',
+      initialBalance: 50000000,
+      currentValue: 57000000,
+      createdAt: openingAt,
+      updatedAt: latestAt,
+    })
+
+    await seedInvestmentSnapshot(userId, accountId, {
+      value: 50000000,
+      date: '2026-01-10',
+      createdAt: openingAt,
+    })
+    await seedInvestmentSnapshot(userId, accountId, {
+      value: 55000000,
+      date: '2026-02-10',
+      createdAt: middleAt,
+    })
+    await seedInvestmentSnapshot(userId, accountId, {
+      value: 57000000,
+      date: '2026-03-10',
+      createdAt: latestAt,
+    })
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+
+    const accountCard = page.locator(`[data-testid="account-card-${accountId}"]`)
+    await expect(accountCard).toBeVisible({ timeout: 5000 })
+    await accountCard.click()
+    await page.waitForLoadState('networkidle')
+
+    await expect(page.getByText('Historial de Valores')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByTestId('investment-summary-current-value')).toHaveText('$570.000')
+    await screenshot(page, 'invest-delete-01-account-detail')
+
+    const latestSnapshotRow = page.locator('[data-testid^="investment-snapshot-row-"]').filter({ hasText: '$570.000' }).first()
+    await expect(latestSnapshotRow).toBeVisible({ timeout: 5000 })
+
+    await swipeLeft(page, latestSnapshotRow, 120)
+    const inlineDeleteButton = latestSnapshotRow.getByRole('button', { name: 'Eliminar' })
+    await expect(inlineDeleteButton).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'invest-delete-02-reveal-delete')
+
+    await inlineDeleteButton.click()
+    const deleteDialog = page.getByTestId('investment-snapshot-delete-dialog')
+    await expect(deleteDialog).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'invest-delete-03-confirm-dialog')
+
+    await deleteDialog.getByRole('button', { name: 'Cancelar' }).click()
+    await expect(deleteDialog).not.toBeVisible({ timeout: 5000 })
+    await expect(latestSnapshotRow).toBeVisible({ timeout: 5000 })
+    await expect(latestSnapshotRow.getByText('$570.000')).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'invest-delete-04-cancelled')
+
+    await swipeLeft(page, latestSnapshotRow, 280)
+    await expect(deleteDialog).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'invest-delete-05-full-swipe-dialog')
+
+    await deleteDialog.getByRole('button', { name: 'Eliminar' }).click()
+    await expect(page.locator('[data-testid^="investment-snapshot-row-"]').filter({ hasText: '$570.000' })).toHaveCount(0)
+    await expect(page.getByTestId('investment-summary-current-value')).toHaveText('$550.000')
+
+    const [accountState] = await sql`
+      SELECT current_value, current_value_updated_at
+      FROM accounts
+      WHERE id = ${accountId}
+    `
+    expect(Number(accountState.current_value)).toBe(55000000)
+    expect(accountState.current_value_updated_at).toBeTruthy()
+
+    const [snapshotCount] = await sql`
+      SELECT COUNT(*) as cnt
+      FROM investment_snapshots
+      WHERE account_id = ${accountId}
+    `
+    expect(Number(snapshotCount.cnt)).toBe(2)
+
+    await screenshot(page, 'invest-delete-06-deleted')
   })
 
   test('Investment gain uses opening tracked value plus net transfers when initial balance is stale', async ({ page }) => {

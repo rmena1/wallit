@@ -101,6 +101,94 @@ export async function updateInvestmentValue(accountId: string, value: number): P
 }
 
 /**
+ * Delete a snapshot for an investment account and keep the account value in sync
+ * with the latest remaining snapshot, or fall back to the initial balance when
+ * no snapshots remain.
+ */
+export async function deleteInvestmentSnapshot(accountId: string, snapshotId: string): Promise<InvestmentActionResult> {
+  const session = await requireAuth()
+
+  if (!accountId) {
+    return { success: false, error: 'Account ID is required' }
+  }
+
+  if (!snapshotId) {
+    return { success: false, error: 'Snapshot ID is required' }
+  }
+
+  const [account] = await db
+    .select({
+      id: accounts.id,
+      isInvestment: accounts.isInvestment,
+      initialBalance: accounts.initialBalance,
+      createdAt: accounts.createdAt,
+    })
+    .from(accounts)
+    .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+    .limit(1)
+
+  if (!account) {
+    return { success: false, error: 'Account not found' }
+  }
+
+  if (!account.isInvestment) {
+    return { success: false, error: 'Account is not an investment account' }
+  }
+
+  const [snapshot] = await db
+    .select({ id: investmentSnapshots.id })
+    .from(investmentSnapshots)
+    .where(
+      and(
+        eq(investmentSnapshots.id, snapshotId),
+        eq(investmentSnapshots.accountId, accountId),
+        eq(investmentSnapshots.userId, session.id)
+      )
+    )
+    .limit(1)
+
+  if (!snapshot) {
+    return { success: false, error: 'Snapshot not found' }
+  }
+
+  const now = new Date()
+
+  await db.transaction(async (tx) => {
+    await tx.delete(investmentSnapshots).where(
+      and(
+        eq(investmentSnapshots.id, snapshotId),
+        eq(investmentSnapshots.accountId, accountId),
+        eq(investmentSnapshots.userId, session.id)
+      )
+    )
+
+    const [latestRemainingSnapshot] = await tx
+      .select({
+        value: investmentSnapshots.value,
+        createdAt: investmentSnapshots.createdAt,
+      })
+      .from(investmentSnapshots)
+      .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.userId, session.id)))
+      .orderBy(desc(investmentSnapshots.date), desc(investmentSnapshots.createdAt))
+      .limit(1)
+
+    await tx.update(accounts)
+      .set({
+        currentValue: latestRemainingSnapshot?.value ?? account.initialBalance,
+        currentValueUpdatedAt: latestRemainingSnapshot?.createdAt ?? account.createdAt,
+        updatedAt: now,
+      })
+      .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+  })
+
+  revalidatePath('/')
+  revalidatePath('/settings')
+  revalidatePath(`/account/${accountId}`)
+
+  return { success: true }
+}
+
+/**
  * Get all snapshots for an investment account ordered by date descending.
  */
 export async function getInvestmentSnapshots(accountId: string) {

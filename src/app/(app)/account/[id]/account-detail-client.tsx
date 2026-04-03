@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { formatDateDisplay, formatCurrency } from '@/lib/utils'
 import { getAccountMovements } from '@/lib/actions/accounts'
-import { updateInvestmentValue } from '@/lib/actions/investments'
+import { deleteInvestmentSnapshot, updateInvestmentValue } from '@/lib/actions/investments'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
@@ -67,6 +67,11 @@ interface Props {
   investmentSnapshots: InvestmentSnapshot[]
 }
 
+const SNAPSHOT_DELETE_ACTION_WIDTH = 92
+const SNAPSHOT_DELETE_REVEAL_THRESHOLD = 42
+const SNAPSHOT_DELETE_FULL_SWIPE_MIN = 148
+const SNAPSHOT_DELETE_FULL_SWIPE_MAX = 176
+
 function BackIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -101,6 +106,241 @@ function CustomTooltip({ active, payload }: any) {
   )
 }
 
+interface SwipeableSnapshotRowProps {
+  snapshot: InvestmentSnapshot
+  currency: 'CLP' | 'USD'
+  isOpen: boolean
+  disabled: boolean
+  onStartInteraction: () => void
+  onOpen: () => void
+  onClose: () => void
+  onDeleteRequest: () => void
+}
+
+function SwipeableSnapshotRow({
+  snapshot,
+  currency,
+  isOpen,
+  disabled,
+  onStartInteraction,
+  onOpen,
+  onClose,
+  onDeleteRequest,
+}: SwipeableSnapshotRowProps) {
+  const initialOffset = isOpen ? -SNAPSHOT_DELETE_ACTION_WIDTH : 0
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  const gestureRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    startOffset: number
+    swiping: boolean
+  } | null>(null)
+  const suppressClickRef = useRef(false)
+  const offsetRef = useRef(initialOffset)
+  const [dragOffset, setDragOffset] = useState<number | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const offset = dragOffset ?? (isOpen ? -SNAPSHOT_DELETE_ACTION_WIDTH : 0)
+
+  function setDragOffsetValue(nextOffset: number | null) {
+    offsetRef.current = nextOffset ?? (isOpen ? -SNAPSHOT_DELETE_ACTION_WIDTH : 0)
+    setDragOffset(nextOffset)
+  }
+
+  function getMaxSwipeDistance() {
+    const rowWidth = rowRef.current?.offsetWidth ?? 0
+    return Math.max(160, Math.min(rowWidth * 0.75, 240))
+  }
+
+  function getFullSwipeThreshold() {
+    const rowWidth = rowRef.current?.offsetWidth ?? 0
+    return Math.max(
+      SNAPSHOT_DELETE_FULL_SWIPE_MIN,
+      Math.min(rowWidth * 0.55, SNAPSHOT_DELETE_FULL_SWIPE_MAX)
+    )
+  }
+
+  function finishSwipe() {
+    const currentOffset = offsetRef.current
+
+    gestureRef.current = null
+    setDragging(false)
+    window.setTimeout(() => {
+      suppressClickRef.current = false
+    }, 0)
+
+    if (Math.abs(currentOffset) >= getFullSwipeThreshold()) {
+      setDragOffsetValue(null)
+      onClose()
+      onDeleteRequest()
+      return
+    }
+
+    if (Math.abs(currentOffset) >= SNAPSHOT_DELETE_REVEAL_THRESHOLD) {
+      setDragOffsetValue(null)
+      onOpen()
+      return
+    }
+
+    setDragOffsetValue(null)
+    onClose()
+  }
+
+  function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (disabled) return
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+
+    onStartInteraction()
+    offsetRef.current = offset
+    gestureRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startOffset: offsetRef.current,
+      swiping: false,
+    }
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const gesture = gestureRef.current
+    if (!gesture || gesture.pointerId !== event.pointerId || disabled) return
+
+    const deltaX = event.clientX - gesture.startX
+    const deltaY = event.clientY - gesture.startY
+
+    if (!gesture.swiping) {
+      if (Math.abs(deltaX) < 8) return
+
+      if (Math.abs(deltaX) <= Math.abs(deltaY)) {
+        gestureRef.current = null
+        return
+      }
+
+      gesture.swiping = true
+      suppressClickRef.current = true
+      setDragging(true)
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }
+
+    event.preventDefault()
+
+    let nextOffset = Math.min(0, gesture.startOffset + deltaX)
+    if (nextOffset < -SNAPSHOT_DELETE_ACTION_WIDTH) {
+      const extraDistance = Math.abs(nextOffset) - SNAPSHOT_DELETE_ACTION_WIDTH
+      nextOffset = -(SNAPSHOT_DELETE_ACTION_WIDTH + extraDistance * 0.5)
+    }
+
+    setDragOffsetValue(Math.max(-getMaxSwipeDistance(), nextOffset))
+  }
+
+  function handlePointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    const gesture = gestureRef.current
+    if (!gesture || gesture.pointerId !== event.pointerId) return
+
+    if (!gesture.swiping) {
+      gestureRef.current = null
+      return
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    finishSwipe()
+  }
+
+  function handlePointerCancel(event: React.PointerEvent<HTMLDivElement>) {
+    const gesture = gestureRef.current
+    if (!gesture || gesture.pointerId !== event.pointerId) return
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    finishSwipe()
+  }
+
+  function handleContentClick() {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      return
+    }
+
+    if (isOpen) {
+      onClose()
+    }
+  }
+
+  return (
+    <div
+      ref={rowRef}
+      data-testid={`investment-snapshot-row-${snapshot.id}`}
+      style={{
+        position: 'relative',
+        overflow: 'hidden',
+        borderRadius: 10,
+      }}
+    >
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        display: 'flex',
+        justifyContent: 'flex-end',
+        alignItems: 'stretch',
+        background: 'linear-gradient(135deg, #991b1b, #dc2626)',
+      }}>
+        <button
+          type="button"
+          data-testid={`investment-snapshot-delete-${snapshot.id}`}
+          onClick={onDeleteRequest}
+          disabled={disabled}
+          tabIndex={isOpen ? 0 : -1}
+          style={{
+            width: SNAPSHOT_DELETE_ACTION_WIDTH,
+            border: 'none',
+            background: 'transparent',
+            color: '#ffffff',
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: 0.2,
+            cursor: disabled ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Eliminar
+        </button>
+      </div>
+
+      <div
+        onClick={handleContentClick}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '8px 10px',
+          borderRadius: 10,
+          backgroundColor: '#1a1a2e',
+          border: '1px solid #2a2a4a',
+          transform: `translate3d(${offset}px, 0, 0)`,
+          transition: dragging ? 'none' : 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1)',
+          touchAction: 'pan-y',
+          userSelect: 'none',
+          boxShadow: isOpen || dragging ? '0 10px 24px rgba(0, 0, 0, 0.22)' : 'none',
+          opacity: disabled ? 0.7 : 1,
+        }}
+      >
+        <span style={{ fontSize: 12, color: '#d1d5db' }}>{formatDateDisplay(snapshot.date)}</span>
+        <span style={{ fontSize: 13, color: '#ffffff', fontWeight: 600 }}>
+          {formatCurrency(snapshot.value, currency)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function AccountDetailClient({
   account,
   balance,
@@ -122,6 +362,10 @@ export function AccountDetailClient({
   )
   const [updatingValue, setUpdatingValue] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
+  const [openSnapshotId, setOpenSnapshotId] = useState<string | null>(null)
+  const [snapshotToDelete, setSnapshotToDelete] = useState<InvestmentSnapshot | null>(null)
+  const [deletingSnapshot, setDeletingSnapshot] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   async function handleLoadMore() {
     setLoadingMore(true)
@@ -162,6 +406,32 @@ export function AccountDetailClient({
       router.refresh()
     } finally {
       setUpdatingValue(false)
+    }
+  }
+
+  function handleDeleteRequest(snapshot: InvestmentSnapshot) {
+    setOpenSnapshotId(null)
+    setDeleteError(null)
+    setSnapshotToDelete(snapshot)
+  }
+
+  async function handleConfirmDeleteSnapshot() {
+    if (!snapshotToDelete) return
+
+    setDeletingSnapshot(true)
+    setDeleteError(null)
+    try {
+      const result = await deleteInvestmentSnapshot(account.id, snapshotToDelete.id)
+      if (!result.success) {
+        setDeleteError(result.error || 'No se pudo eliminar el snapshot')
+        return
+      }
+
+      setSnapshotToDelete(null)
+      setOpenSnapshotId(null)
+      router.refresh()
+    } finally {
+      setDeletingSnapshot(false)
     }
   }
 
@@ -243,7 +513,7 @@ export function AccountDetailClient({
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
               <div style={{ backgroundColor: '#0a0a0a', borderRadius: 12, padding: '10px 12px', border: '1px solid #2a2a4a' }}>
                 <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Valor Actual</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: '#ffffff' }}>
+                <div data-testid="investment-summary-current-value" style={{ fontSize: 18, fontWeight: 700, color: '#ffffff' }}>
                   {formatCurrency(investmentSummary.currentValue, account.currency)}
                 </div>
               </div>
@@ -346,23 +616,25 @@ export function AccountDetailClient({
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {investmentSnapshots.map((snapshot) => (
-                    <div
+                    <SwipeableSnapshotRow
                       key={snapshot.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '8px 10px',
-                        borderRadius: 10,
-                        backgroundColor: '#1a1a2e',
-                        border: '1px solid #2a2a4a',
+                      snapshot={snapshot}
+                      currency={account.currency}
+                      isOpen={openSnapshotId === snapshot.id}
+                      disabled={deletingSnapshot || Boolean(snapshotToDelete)}
+                      onStartInteraction={() => {
+                        setOpenSnapshotId((currentId) => currentId === snapshot.id ? currentId : null)
                       }}
-                    >
-                      <span style={{ fontSize: 12, color: '#d1d5db' }}>{formatDateDisplay(snapshot.date)}</span>
-                      <span style={{ fontSize: 13, color: '#ffffff', fontWeight: 600 }}>
-                        {formatCurrency(snapshot.value, account.currency)}
-                      </span>
-                    </div>
+                      onOpen={() => {
+                        setOpenSnapshotId(snapshot.id)
+                      }}
+                      onClose={() => {
+                        setOpenSnapshotId((currentId) => currentId === snapshot.id ? null : currentId)
+                      }}
+                      onDeleteRequest={() => {
+                        handleDeleteRequest(snapshot)
+                      }}
+                    />
                   ))}
                 </div>
               )}
@@ -516,6 +788,108 @@ export function AccountDetailClient({
           )}
         </div>
       </main>
+
+      {snapshotToDelete && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 50,
+          padding: 16,
+        }}>
+          <div
+            data-testid="investment-snapshot-delete-dialog"
+            style={{
+              backgroundColor: '#1a1a1a',
+              borderRadius: 16,
+              padding: 24,
+              border: '1px solid #2a2a2a',
+              maxWidth: 360,
+              width: '100%',
+            }}
+          >
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#e5e5e5', marginBottom: 8 }}>
+              ¿Eliminar este valor histórico?
+            </div>
+            <div style={{ fontSize: 14, color: '#a1a1aa', marginBottom: 16 }}>
+              Esta acción no se puede deshacer.
+            </div>
+
+            <div style={{
+              backgroundColor: '#111111',
+              borderRadius: 12,
+              border: '1px solid #2a2a2a',
+              padding: '10px 12px',
+              marginBottom: 16,
+            }}>
+              <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>
+                {formatDateDisplay(snapshotToDelete.date)}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#f5f5f5' }}>
+                {formatCurrency(snapshotToDelete.value, account.currency)}
+              </div>
+            </div>
+
+            {deleteError && (
+              <div style={{
+                backgroundColor: '#450a0a',
+                border: '1px solid #7f1d1d',
+                borderRadius: 12,
+                padding: '10px 12px',
+                marginBottom: 16,
+                fontSize: 13,
+                color: '#fca5a5',
+              }}>
+                {deleteError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button
+                onClick={() => {
+                  if (deletingSnapshot) return
+                  setDeleteError(null)
+                  setSnapshotToDelete(null)
+                }}
+                style={{
+                  flex: 1,
+                  height: 44,
+                  borderRadius: 12,
+                  border: '1px solid #2a2a2a',
+                  backgroundColor: '#27272a',
+                  color: '#a1a1aa',
+                  fontSize: 15,
+                  fontWeight: 600,
+                  cursor: deletingSnapshot ? 'not-allowed' : 'pointer',
+                  opacity: deletingSnapshot ? 0.6 : 1,
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmDeleteSnapshot}
+                disabled={deletingSnapshot}
+                style={{
+                  flex: 1,
+                  height: 44,
+                  borderRadius: 12,
+                  border: 'none',
+                  backgroundColor: '#dc2626',
+                  color: '#fff',
+                  fontSize: 15,
+                  fontWeight: 600,
+                  cursor: deletingSnapshot ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {deletingSnapshot ? 'Eliminando...' : 'Eliminar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
