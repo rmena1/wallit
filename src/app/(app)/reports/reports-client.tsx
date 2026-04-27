@@ -250,7 +250,12 @@ function buildIncomeChart(dailyData: DailyData[], startDate: string, endDate: st
   })
 }
 
-function buildBalanceChart(dailyData: DailyData[], startDate: string, endDate: string) {
+function buildBalanceChart(
+  dailyData: DailyData[],
+  startDate: string,
+  endDate: string,
+  openingBalance: number,
+) {
   const days = daysInRange(startDate, endDate)
   const incMap = new Map(dailyData.map(d => [d.date, d.income]))
   const expMap = new Map(dailyData.map(d => [d.date, d.expense]))
@@ -259,27 +264,33 @@ function buildBalanceChart(dailyData: DailyData[], startDate: string, endDate: s
   // Find the last day we have actual data for (up to today)
   const lastActualDay = days.filter(d => d <= today).pop() || today
   
-  let balance = 0
+  let balance = openingBalance
   return days.map(day => {
     balance += (incMap.get(day) || 0) - (expMap.get(day) || 0)
     // Only show balance data up to today (lastActualDay)
     if (day > lastActualDay) {
-      return { label: day.slice(5), balance: null }
+      return { date: day, label: day.slice(5), balance: null }
     }
-    return { label: day.slice(5), balance: balance / 100 }
+    return { date: day, label: day.slice(5), balance: balance / 100 }
   })
 }
 
 // ─── Custom tooltip ──────────────────────────────────────────────────────────
 
-function ChartTooltip({ active, payload, label, color }: TooltipContentProps<number, string> & { color: string }) {
+function ChartTooltip({
+  active,
+  payload,
+  label,
+  color,
+  currency,
+}: TooltipContentProps<number, string> & { color: string; currency: 'CLP' | 'USD' }) {
   if (!active || !payload?.length) return null
   const rawValue = payload[0]?.value
   const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
   return (
     <div style={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 8, padding: '6px 10px', fontSize: 12, color }}>
       <div style={{ color: '#888', marginBottom: 2 }}>{label}</div>
-      <div style={{ fontWeight: 700 }}>{Number.isFinite(value) ? formatCurrency(Math.round(value * 100), 'CLP') : ''}</div>
+      <div style={{ fontWeight: 700 }}>{Number.isFinite(value) ? formatCurrency(Math.round(value * 100), currency) : ''}</div>
     </div>
   )
 }
@@ -589,7 +600,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
     data ? buildIncomeChart(data.dailyData, startDate, endDate) : [],
     [data, startDate, endDate])
   const balanceChart = useMemo(() =>
-    data ? buildBalanceChart(data.dailyData, startDate, endDate) : [],
+    data ? buildBalanceChart(data.balanceDailyData, startDate, endDate, data.openingBalance) : [],
     [data, startDate, endDate])
   const categorySheetTotal = useMemo(() => {
     const loadedTotal = categoryMovements.reduce((sum, movement) => sum + movement.amount, 0)
@@ -841,7 +852,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                           interval={Math.max(0, Math.floor(expenseChart.data.length / 6) - 1)} />
                         <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45} domain={[0, 'auto']}
                           tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                        <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#ef4444" />} />
+                        <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#ef4444" currency="CLP" />} />
                         <Line type="monotone" dataKey="actual" stroke="#ef4444" strokeWidth={2} dot={false} connectNulls={false} />
                         <Line type="linear" dataKey="trend" stroke="#eab308" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
                       </LineChart>
@@ -867,7 +878,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45}
                         tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                      <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#22c55e" />} />
+                      <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#22c55e" currency="CLP" />} />
                       <Line type="monotone" dataKey="income" stroke="#22c55e" strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
@@ -884,13 +895,20 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                   Sin movimientos en este período
                 </div>
               ) : (
-                <div style={{ width: '100%', height: 200 }}>
+                <div
+                  data-testid="balance-chart"
+                  data-balance-currency={data.balanceCurrency}
+                  data-balance-chart={JSON.stringify(
+                    balanceChart.map(({ date, balance }) => ({ date, balance }))
+                  )}
+                  style={{ width: '100%', height: 200 }}
+                >
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={balanceChart} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45}
                         tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                      <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#e5e5e5" />} />
+                      <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#e5e5e5" currency={data.balanceCurrency} />} />
                       <ReferenceLine y={0} stroke="#333" strokeDasharray="3 3" />
                       <Line type="monotone" dataKey="balance" stroke="#e5e5e5" strokeWidth={2} dot={false} />
                     </LineChart>

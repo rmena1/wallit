@@ -5,6 +5,7 @@ import {
   ensureAccount,
   ensureCategory,
   registerAndLogin,
+  screenshot,
 } from './helpers'
 
 const REPORT_TIMEOUT = 15_000
@@ -69,6 +70,11 @@ type ExpenseChartPoint = {
   trend: number | null
 }
 
+type BalanceChartPoint = {
+  date: string
+  balance: number | null
+}
+
 async function selectOptionContaining(select: Locator, text: string) {
   const value = await select.evaluate((element, searchText) => {
     const options = Array.from((element as HTMLSelectElement).options)
@@ -126,6 +132,16 @@ async function readExpenseChart(page: Page): Promise<ExpenseChartPoint[]> {
   }
 
   return JSON.parse(rawChartData) as ExpenseChartPoint[]
+}
+
+async function readBalanceChart(page: Page): Promise<BalanceChartPoint[]> {
+  const rawChartData = await page.getByTestId('balance-chart').getAttribute('data-balance-chart')
+
+  if (!rawChartData) {
+    throw new Error('Balance chart data attribute is missing')
+  }
+
+  return JSON.parse(rawChartData) as BalanceChartPoint[]
 }
 
 async function expectMovementCount(page: Page, count: number) {
@@ -375,6 +391,63 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
       expect(expenseChart[observedDays]?.actual).toBeNull()
       expect(expenseChart[observedDays]?.trend ?? 0).toBeCloseTo(averageDailyExpense * (observedDays + 1), 6)
     }
+  })
+
+  test('balance chart starts from the absolute balance baseline for all accounts and a selected account', async ({ page }) => {
+    await registerAndLogin(page)
+    await ensureAccount(page)
+    await createAccount(page, {
+      bankName: 'Santander',
+      accountType: 'Vista',
+      lastFourDigits: '1111',
+      initialBalance: '50000',
+    })
+
+    const today = new Date()
+    const monthStart = formatDate(startOfMonth(today))
+    const previousDay = formatDate(addDays(startOfMonth(today), -1))
+
+    await createMovement(page, {
+      name: 'Compra previa BCI',
+      amount: '20000',
+      date: previousDay,
+      accountLabel: 'BCI',
+    })
+    await createMovement(page, {
+      name: 'Ingreso previo Santander',
+      amount: '10000',
+      type: 'income',
+      date: previousDay,
+      accountLabel: 'Santander',
+    })
+    await createMovement(page, {
+      name: 'Ingreso mes BCI',
+      amount: '15000',
+      type: 'income',
+      date: monthStart,
+      accountLabel: 'BCI',
+    })
+    await createMovement(page, {
+      name: 'Gasto mes Santander',
+      amount: '5000',
+      date: monthStart,
+      accountLabel: 'Santander',
+    })
+
+    await openReports(page)
+    await expect.poll(async () => {
+      const chart = await readBalanceChart(page)
+      return chart.find(point => point.date === monthStart)?.balance ?? null
+    }, { timeout: REPORT_TIMEOUT }).toBe(150_000)
+    await screenshot(page, 'reports-balance-01-all-accounts')
+
+    const accountSelect = page.locator('select').nth(1)
+    await selectOptionContaining(accountSelect, 'BCI')
+    await expect.poll(async () => {
+      const chart = await readBalanceChart(page)
+      return chart.find(point => point.date === monthStart)?.balance ?? null
+    }, { timeout: REPORT_TIMEOUT }).toBe(95_000)
+    await screenshot(page, 'reports-balance-02-bci-filter')
   })
 
   test('custom date range selection and report filters update the data meaningfully', async ({ page }) => {
