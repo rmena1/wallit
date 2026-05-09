@@ -210,6 +210,15 @@ export async function seedUnlinkedIncome(userId: string, accountId: string | nul
   return id
 }
 
+export async function seedUsdToClpRate(rate: number = 95050): Promise<void> {
+  const now = new Date()
+  const id = `e2e-usd-clp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  await sql`
+    INSERT INTO exchange_rates (id, from_currency, to_currency, rate, source, fetched_at)
+    VALUES (${id}, 'USD', 'CLP', ${rate}, 'e2e', ${now})
+  `
+}
+
 /** Gracefully close the shared connection pool. Call in afterAll/globalTeardown. */
 export async function closePool() {
   await sql.end()

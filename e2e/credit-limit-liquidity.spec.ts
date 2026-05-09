@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test'
 import { ensureCategory, registerAndLogin, screenshot } from './helpers'
+import { seedUsdToClpRate } from './db-helper'
 
 type AccountFormInput = {
   bankName: string
@@ -7,6 +8,7 @@ type AccountFormInput = {
   lastFourDigits: string
   initialBalance?: string
   creditLimit?: string
+  currency?: 'CLP' | 'USD'
 }
 
 async function openAddAccountForm(page: Page) {
@@ -23,6 +25,9 @@ async function createAccount(page: Page, input: AccountFormInput) {
   await page.locator('select[name="bankName"]').selectOption(input.bankName)
   await page.locator('select[name="accountType"]').selectOption(input.accountType)
   await page.getByPlaceholder('Últimos 4 dígitos').fill(input.lastFourDigits)
+  if (input.currency) {
+    await page.locator('select[name="currency"]').last().selectOption(input.currency)
+  }
   await page.getByPlaceholder('Saldo inicial').fill(input.initialBalance ?? '')
 
   if (input.accountType === 'Crédito') {
@@ -94,6 +99,14 @@ test.describe('Credit Limit And Net Liquidity', () => {
     await screenshot(page, 'net-liquidity-03-debit-created')
 
     await createAccount(page, {
+      bankName: 'Banco de Chile',
+      accountType: 'Ahorro',
+      lastFourDigits: '2222',
+      initialBalance: '300000',
+    })
+    await expect(page.getByText('Ahorro · ···2222')).toBeVisible({ timeout: 5000 })
+
+    await createAccount(page, {
       bankName: 'Falabella',
       accountType: 'Crédito',
       lastFourDigits: '1234',
@@ -122,6 +135,32 @@ test.describe('Credit Limit And Net Liquidity', () => {
     await expect(page.getByText(/Débito:\s*\$200\.000/)).toBeVisible()
     await expect(page.getByText(/Deuda:\s*\$50\.000/)).toBeVisible()
     await screenshot(page, 'net-liquidity-08-breakdown-verified')
+  })
+
+  test('Net liquidity converts USD debit balances with full exchange rate precision', async ({ page }) => {
+    await seedUsdToClpRate(95050)
+    await registerAndLogin(page)
+
+    await page.goto('/settings')
+    await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: 5000 })
+
+    await createAccount(page, {
+      bankName: 'Mercado Pago',
+      accountType: 'Prepago',
+      lastFourDigits: '7777',
+      initialBalance: '100',
+      currency: 'USD',
+    })
+    await expect(page.getByText('Prepago · ···7777')).toBeVisible({ timeout: 5000 })
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+
+    const totalBalanceCard = page.locator('main > div').filter({ hasText: 'Balance General' }).first()
+    const netLiquidityCard = page.locator('main > div').filter({ hasText: 'Liquidez Neta' }).first()
+
+    await expect(totalBalanceCard).toContainText('$95.050', { timeout: 5000 })
+    await expect(netLiquidityCard).toContainText(/Débito:\s*\$95\.050/)
   })
 
   test('Credit limit shown correctly after spending', async ({ page }) => {

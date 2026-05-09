@@ -130,17 +130,23 @@ export async function getTotalBalance(usdToClpRate?: number): Promise<number> {
 }
 
 export interface NetLiquidityData {
-  debitBalance: number // sum of balances for debit accounts in CLP cents
+  debitBalance: number // sum of balances for liquid debit/cash accounts in CLP cents
   receivables: number // sum of amounts for movements where receivable=true and received=false
   unsettledLoans: number // sum of amounts for movements where loan=true and loanSettled=false
   creditDebt: number // sum of (creditLimit - balance) for credit accounts with creditLimit > 0
   netLiquidity: number // debitBalance + receivables - creditDebt - unsettledLoans
 }
 
+/**
+ * Get net liquidity in CLP cents.
+ * `usdToClpRate` uses the persisted exchange-rate format: rate * 100
+ * (for example, 950.50 CLP/USD is passed as 95050).
+ */
 export async function getNetLiquidity(usdToClpRate?: number, precomputedBalances?: AccountWithBalance[]): Promise<NetLiquidityData> {
   const accountBalances = precomputedBalances ?? await getAccountBalances()
-  // Support both Spanish types (current) and English types (legacy)
-  const debitTypes = ['Corriente', 'Vista', 'Ahorro', 'Prepago', 'debit']
+  // Support both Spanish types (current) and English types (legacy).
+  // Savings accounts are excluded because net liquidity tracks cash available to pay credit debt.
+  const debitTypes = ['Corriente', 'Vista', 'Prepago', 'debit']
   const creditTypes = ['Crédito', 'credit']
 
   let debitBalance = 0
