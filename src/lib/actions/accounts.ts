@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { db, accounts, movements, categories, investmentSnapshots } from '@/lib/db'
-import { eq, and, desc, isNotNull } from 'drizzle-orm'
+import { eq, and, desc, isNotNull, sql } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 import { generateId } from '@/lib/utils'
 
@@ -70,6 +70,13 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
   const now = new Date()
   const accountId = generateId()
 
+  const [maxOrder] = await db
+    .select({ value: sql<number>`COALESCE(MAX(${accounts.sortOrder}), -1)` })
+    .from(accounts)
+    .where(eq(accounts.userId, session.id))
+
+  const sortOrder = Number(maxOrder?.value ?? -1) + 1
+
   await db.transaction(async (tx) => {
     await tx.insert(accounts).values({
       id: accountId,
@@ -85,6 +92,7 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
       currency: currency as 'CLP' | 'USD',
       color,
       emoji,
+      sortOrder,
     })
 
     if (isInvestment) {
@@ -250,6 +258,42 @@ export async function deleteAccount(id: string): Promise<AccountActionResult> {
 }
 
 /**
+ * Persist the user's preferred account display order.
+ */
+export async function reorderAccounts(accountIds: string[]): Promise<AccountActionResult> {
+  const session = await requireAuth()
+
+  const uniqueIds = Array.from(new Set(accountIds.filter(Boolean)))
+  if (uniqueIds.length !== accountIds.length || uniqueIds.length === 0) {
+    return { success: false, error: 'Invalid account order' }
+  }
+
+  const existingAccounts = await db
+    .select({ id: accounts.id })
+    .from(accounts)
+    .where(eq(accounts.userId, session.id))
+
+  const existingIds = new Set(existingAccounts.map((account) => account.id))
+  if (uniqueIds.length !== existingIds.size || uniqueIds.some((id) => !existingIds.has(id))) {
+    return { success: false, error: 'Account order does not match your accounts' }
+  }
+
+  const now = new Date()
+  await db.transaction(async (tx) => {
+    for (const [index, id] of uniqueIds.entries()) {
+      await tx
+        .update(accounts)
+        .set({ sortOrder: index, updatedAt: now })
+        .where(and(eq(accounts.id, id), eq(accounts.userId, session.id)))
+    }
+  })
+
+  revalidatePath('/')
+  revalidatePath('/settings')
+  return { success: true }
+}
+
+/**
  * Get all accounts for the current user
  */
 export async function getAccounts() {
@@ -259,7 +303,7 @@ export async function getAccounts() {
     .select()
     .from(accounts)
     .where(eq(accounts.userId, session.id))
-    .orderBy(accounts.bankName)
+    .orderBy(sql`${accounts.sortOrder} ASC, ${accounts.bankName} ASC, ${accounts.createdAt} ASC`)
 }
 
 /**

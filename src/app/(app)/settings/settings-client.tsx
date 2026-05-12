@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { createAccount, updateAccount, deleteAccount } from '@/lib/actions/accounts'
+import { useEffect, useState } from 'react'
+import { createAccount, updateAccount, deleteAccount, reorderAccounts } from '@/lib/actions/accounts'
 import { createCategory, updateCategory, deleteCategory } from '@/lib/actions/categories'
 import { formatCurrency } from '@/lib/utils'
 import { BANK_NAMES, ACCOUNT_TYPES } from '@/lib/constants'
@@ -56,6 +56,19 @@ function EditIcon() {
   )
 }
 
+function DragHandleIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="9" cy="5" r="1.5" />
+      <circle cx="15" cy="5" r="1.5" />
+      <circle cx="9" cy="12" r="1.5" />
+      <circle cx="15" cy="12" r="1.5" />
+      <circle cx="9" cy="19" r="1.5" />
+      <circle cx="15" cy="19" r="1.5" />
+    </svg>
+  )
+}
+
 function getAccountIcon(account: Account): string {
   if (account.emoji) return account.emoji
   switch (account.accountType) {
@@ -70,9 +83,12 @@ function getAccountIcon(account: Account): string {
 }
 
 export function SettingsPage({ accounts, accountBalances, categories }: SettingsPageProps) {
+  const [orderedAccounts, setOrderedAccounts] = useState(accounts)
   const [accountLoading, setAccountLoading] = useState(false)
   const [accountError, setAccountError] = useState<string | null>(null)
   const [deletingAccountId, setDeletingAccountId] = useState<string | null>(null)
+  const [draggingAccountId, setDraggingAccountId] = useState<string | null>(null)
+  const [reorderingAccounts, setReorderingAccounts] = useState(false)
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null)
   const [newAccountIsInvestment, setNewAccountIsInvestment] = useState(false)
   const [newAccountType, setNewAccountType] = useState('')
@@ -83,6 +99,10 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
   const [categoryError, setCategoryError] = useState<string | null>(null)
   const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null)
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null)
+
+  useEffect(() => {
+    setOrderedAccounts(accounts)
+  }, [accounts])
 
   async function handleAccountSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -148,6 +168,37 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
     } finally {
       setDeletingAccountId(null)
     }
+  }
+
+  async function persistAccountOrder(nextAccounts: Account[]) {
+    setReorderingAccounts(true)
+    setAccountError(null)
+    try {
+      const result = await reorderAccounts(nextAccounts.map((account) => account.id))
+      if (!result.success) {
+        setOrderedAccounts(accounts)
+        setAccountError(result.error || 'Error al reordenar cuentas')
+      }
+    } catch {
+      setOrderedAccounts(accounts)
+      setAccountError('Ocurrió un error al reordenar cuentas')
+    } finally {
+      setReorderingAccounts(false)
+    }
+  }
+
+  function moveAccount(fromId: string, toId: string) {
+    if (fromId === toId || editingAccountId) return
+
+    const fromIndex = orderedAccounts.findIndex((account) => account.id === fromId)
+    const toIndex = orderedAccounts.findIndex((account) => account.id === toId)
+    if (fromIndex < 0 || toIndex < 0) return
+
+    const nextAccounts = [...orderedAccounts]
+    const [movedAccount] = nextAccounts.splice(fromIndex, 1)
+    nextAccounts.splice(toIndex, 0, movedAccount)
+    setOrderedAccounts(nextAccounts)
+    void persistAccountOrder(nextAccounts)
   }
 
   async function handleCategorySubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -385,7 +436,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {accounts.map((acc) => {
+              {orderedAccounts.map((acc) => {
                 const balanceData = accountBalances.find(b => b.id === acc.id)
                 const balance = balanceData?.balance ?? 0
                 const isEditing = editingAccountId === acc.id
@@ -515,15 +566,49 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
                 }
 
                 return (
-                  <div key={acc.id} style={{
+                  <div
+                    key={acc.id}
+                    data-testid="settings-account-row"
+                    data-account-id={acc.id}
+                    data-account-bank={acc.bankName}
+                    draggable={!editingAccountId && !reorderingAccounts}
+                    onDragStart={(e) => {
+                      if (editingAccountId || reorderingAccounts) return
+                      setDraggingAccountId(acc.id)
+                      e.dataTransfer.effectAllowed = 'move'
+                      e.dataTransfer.setData('text/plain', acc.id)
+                    }}
+                    onDragOver={(e) => {
+                      if (!editingAccountId && draggingAccountId && draggingAccountId !== acc.id) {
+                        e.preventDefault()
+                        e.dataTransfer.dropEffect = 'move'
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const draggedId = e.dataTransfer.getData('text/plain') || draggingAccountId
+                      setDraggingAccountId(null)
+                      if (draggedId) moveAccount(draggedId, acc.id)
+                    }}
+                    onDragEnd={() => setDraggingAccountId(null)}
+                    style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     backgroundColor: '#121225', borderRadius: 12,
                     padding: '12px 14px',
-                    border: '1px solid #2f2f4a',
-                    opacity: deletingAccountId === acc.id ? 0.4 : 1,
+                    border: draggingAccountId === acc.id ? '1px solid #22c55e' : '1px solid #2f2f4a',
+                    opacity: deletingAccountId === acc.id ? 0.4 : draggingAccountId === acc.id ? 0.65 : 1,
+                    cursor: editingAccountId || reorderingAccounts ? 'default' : 'grab',
                   }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span
+                          title="Arrastrar para reordenar"
+                          aria-label="Arrastrar para reordenar cuenta"
+                          data-testid="account-drag-handle"
+                          style={{ color: '#71717a', display: 'inline-flex', cursor: 'grab' }}
+                        >
+                          <DragHandleIcon />
+                        </span>
                         <span style={{ fontSize: 18 }}>{getAccountIcon(acc)}</span>
                         <div>
                           <div style={{ fontSize: 14, fontWeight: 600, color: acc.color || '#e5e5e5' }}>

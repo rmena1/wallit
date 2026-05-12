@@ -22,6 +22,7 @@ export interface AccountWithBalance {
   currency: 'CLP' | 'USD'
   color: string | null
   emoji: string | null
+  sortOrder: number
 }
 
 export type AccountWithBalanceSerialized = Omit<AccountWithBalance, 'currentValueUpdatedAt'> & {
@@ -51,6 +52,7 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       currency: accounts.currency,
       color: accounts.color,
       emoji: accounts.emoji,
+      sortOrder: accounts.sortOrder,
       openingTrackedValue: sql<number | null>`(
         SELECT ${investmentSnapshots.value}
         FROM ${investmentSnapshots}
@@ -76,7 +78,7 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
     .leftJoin(movements, and(eq(accounts.id, movements.accountId), eq(movements.userId, session.id)))
     .where(eq(accounts.userId, session.id))
     .groupBy(accounts.id)
-    .orderBy(accounts.bankName)
+    .orderBy(sql`${accounts.sortOrder} ASC, ${accounts.bankName} ASC, ${accounts.createdAt} ASC`)
 
   return results.map((r) => {
     const performance = r.isInvestment
@@ -110,6 +112,7 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       currency: r.currency,
       color: r.color,
       emoji: r.emoji,
+      sortOrder: r.sortOrder,
     }
   })
 }

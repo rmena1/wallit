@@ -1,7 +1,7 @@
 import { getSession } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { db, accounts, categories } from '@/lib/db'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { getAccountBalances } from '@/lib/actions/balances'
 import { SettingsPage } from './settings-client'
 
@@ -18,7 +18,7 @@ export default async function Settings() {
     .select()
     .from(accounts)
     .where(eq(accounts.userId, session.id))
-    .orderBy(accounts.bankName)
+    .orderBy(sql`${accounts.sortOrder} ASC, ${accounts.bankName} ASC, ${accounts.createdAt} ASC`)
 
   const userCategories = await db
     .select()

@@ -55,6 +55,7 @@ export const accounts = pgTable('accounts', {
   currentValue: integer('current_value'),
   currentValueUpdatedAt: timestamp('current_value_updated_at'),
   creditLimit: integer('credit_limit'),
+  sortOrder: integer('sort_order').notNull().default(0),
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
