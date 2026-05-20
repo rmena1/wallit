@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount } from './helpers'
+import { getFirstAccountId, getUserId, seedConfirmedWorkflowMovement, seedUsdToClpRate } from './db-helper'
 
 async function addExpenseMovement(page: Page, name: string, amount: string) {
   await page.goto('/add')
@@ -27,24 +28,11 @@ async function addExpenseMovement(page: Page, name: string, amount: string) {
   await page.waitForURL('**/', { timeout: 10000 })
 }
 
-async function markAsEmergency(page: Page, movementName: string) {
-  // Click on the movement to edit it
-  await page.locator('div').filter({ hasText: new RegExp(`^${movementName}`) }).first().click()
-  await page.waitForLoadState('networkidle')
-
-  // Check the emergency checkbox
-  const emergencyCheckbox = page.getByText('Gasto de emergencia')
-  await expect(emergencyCheckbox).toBeVisible()
-  await emergencyCheckbox.click()
-
-  // Save
-  await page.getByRole('button', { name: /Guardar cambios/i }).click()
-  await page.waitForURL('**/', { timeout: 10000 })
-}
-
 test.describe('Emergency Expenses', () => {
+  let email: string
+
   test.beforeEach(async ({ page }) => {
-    await registerAndLogin(page)
+    email = await registerAndLogin(page)
     await ensureAccount(page)
   })
 
@@ -57,7 +45,7 @@ test.describe('Emergency Expenses', () => {
     await page.waitForLoadState('networkidle')
 
     // Click on the movement
-    await page.locator('div').filter({ hasText: /Reparación auto/ }).first().click()
+    await page.getByRole('button', { name: /Editar movimiento Reparación auto/ }).click()
     await page.waitForLoadState('networkidle')
 
     // Screenshot: edit page before marking emergency
@@ -91,7 +79,7 @@ test.describe('Emergency Expenses', () => {
     await addExpenseMovement(page, 'Emergencia médica', '300000')
     await page.goto('/')
     await page.waitForLoadState('networkidle')
-    await page.locator('div').filter({ hasText: /Emergencia médica/ }).first().click()
+    await page.getByRole('button', { name: /Editar movimiento Emergencia médica/ }).click()
     await page.waitForLoadState('networkidle')
     await page.locator('input[type="checkbox"]').check()
     await page.getByRole('button', { name: /Guardar cambios/i }).click()
@@ -126,7 +114,7 @@ test.describe('Emergency Expenses', () => {
     await addExpenseMovement(page, 'Reparación techo', '200000')
     await page.goto('/')
     await page.waitForLoadState('networkidle')
-    await page.locator('div').filter({ hasText: /Reparación techo/ }).first().click()
+    await page.getByRole('button', { name: /Editar movimiento Reparación techo/ }).click()
     await page.waitForLoadState('networkidle')
     await page.locator('input[type="checkbox"]').check()
     await page.getByRole('button', { name: /Guardar cambios/i }).click()
@@ -163,12 +151,90 @@ test.describe('Emergency Expenses', () => {
     await page.screenshot({ path: 'e2e-results/screenshots/emergency-07-after-payment.png' })
   })
 
+  test('rejects emergency partial payment above remaining balance', async ({ page }) => {
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const accountId = await getFirstAccountId(userId)
+
+    await seedConfirmedWorkflowMovement(userId, accountId, {
+      name: 'Emergency Overpay Guard',
+      clpAmount: 5000000,
+      type: 'expense',
+      emergency: true,
+    })
+
+    await page.goto('/emergency')
+    await expect(page.getByText('Emergency Overpay Guard')).toBeVisible({ timeout: 5000 })
+    await page.getByText('Emergency Overpay Guard').click()
+    await expect(page.getByText('Restante')).toBeVisible({ timeout: 5000 })
+
+    await page.getByRole('button', { name: /Abonar/i }).click()
+    await expect(page.getByText('Abonar a emergencia')).toBeVisible()
+    const amountInput = page.locator('input[inputmode="decimal"]').first()
+    await amountInput.clear()
+    await amountInput.fill('60000')
+    await page.getByRole('button', { name: /Confirmar abono/i }).click()
+
+    await expect(page.getByText('El abono no puede ser mayor al saldo restante')).toBeVisible({ timeout: 5000 })
+    await page.getByRole('button', { name: 'Cancelar' }).click()
+    await expect(page.locator('main')).toContainText('$50.000')
+    await expect(page.locator('main')).toContainText('$0')
+    await expect(page.locator('main')).not.toContainText('-$')
+    await expect(page.getByText('Abonos (0)')).toBeVisible()
+    await page.screenshot({ path: 'e2e-results/screenshots/emergency-overpay-rejected.png' })
+  })
+
+  test('USD emergency keeps total paid and remaining in USD after partial payment', async ({ page }) => {
+    await seedUsdToClpRate(95000)
+
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const accountId = await getFirstAccountId(userId)
+
+    await seedConfirmedWorkflowMovement(userId, accountId, {
+      name: 'USD Emergency Exact',
+      clpAmount: 9500000,
+      usdAmount: 10000,
+      exchangeRate: 95000,
+      type: 'expense',
+      currency: 'USD',
+      emergency: true,
+    })
+
+    await page.goto('/emergency')
+    await expect(page.getByText('USD Emergency Exact')).toBeVisible({ timeout: 5000 })
+    const emergencyCard = page.locator('main').locator('div').filter({ hasText: 'USD Emergency Exact' }).first()
+    await expect(emergencyCard).toContainText('US$100,00')
+    await expect(emergencyCard).toContainText('Pagado: US$0,00')
+    await expect(emergencyCard).toContainText('Restante: US$100,00')
+
+    await page.getByText('USD Emergency Exact').click()
+    await page.waitForLoadState('networkidle')
+    const emergencySummary = page.locator('main').locator('div').filter({ hasText: 'Total' }).filter({ hasText: 'Pagado' }).filter({ hasText: 'Restante' }).first()
+    await expect(emergencySummary).toContainText('US$100,00')
+    await expect(emergencySummary).toContainText('US$0,00')
+    await page.screenshot({ path: 'e2e-results/screenshots/emergency-usd-01-before-payment.png' })
+
+    await page.getByRole('button', { name: /Abonar/i }).click()
+    await expect(page.getByText('Abonar a emergencia')).toBeVisible()
+    await expect(page.getByText('Monto (USD)')).toBeVisible()
+    const amountInput = page.locator('input[inputmode="decimal"]').first()
+    await amountInput.clear()
+    await amountInput.fill('40')
+    await page.getByRole('button', { name: /Confirmar abono/i }).click()
+
+    await expect(page.getByText('Abonos (1)')).toBeVisible({ timeout: 5000 })
+    await expect(page.locator('main')).toContainText('US$40,00')
+    await expect(page.locator('main')).toContainText('US$60,00')
+    await page.screenshot({ path: 'e2e-results/screenshots/emergency-usd-02-after-payment.png' })
+  })
+
   test('emergency checkbox not visible for income type', async ({ page }) => {
     // Add an expense and go to edit
     await addExpenseMovement(page, 'Test income check', '10000')
     await page.goto('/')
     await page.waitForLoadState('networkidle')
-    await page.locator('div').filter({ hasText: /Test income check/ }).first().click()
+    await page.getByRole('button', { name: /Editar movimiento Test income check/ }).click()
     await page.waitForLoadState('networkidle')
 
     // Switch to income type

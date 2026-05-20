@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { db, movements, accounts } from '@/lib/db'
 import { eq, and, sql, desc } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
+import { movementLedger } from '@/lib/domain/movement-ledger'
 
 export interface UnsettledLoan {
   id: string
@@ -18,6 +19,10 @@ export interface UnsettledLoan {
   remaining: number
 }
 
+function displayAmount(amount: number, amountUsd: number | null, currency: 'CLP' | 'USD') {
+  return currency === 'USD' ? (amountUsd ?? 0) : amount
+}
+
 /**
  * Get all unsettled loans for the current user
  */
@@ -29,12 +34,24 @@ export async function getUnsettledLoans(): Promise<UnsettledLoan[]> {
       id: movements.id,
       name: movements.name,
       amount: movements.amount,
+      amountUsd: movements.amountUsd,
       date: movements.date,
       currency: movements.currency,
       accountId: movements.accountId,
       accountBankName: accounts.bankName,
       accountEmoji: accounts.emoji,
-      totalPaid: sql<number>`COALESCE((SELECT SUM(amount) FROM movements paybacks WHERE paybacks.loan_id = ${movements.id} AND paybacks.user_id = ${session.id} AND paybacks.type = 'expense'), 0)`,
+      totalPaid: sql<number>`COALESCE((
+        SELECT SUM(
+          CASE
+            WHEN ${movements.currency} = 'USD' THEN paybacks.amount_usd
+            ELSE paybacks.amount
+          END
+        )
+        FROM movements paybacks
+        WHERE paybacks.loan_id = ${movements.id}
+          AND paybacks.user_id = ${session.id}
+          AND paybacks.type = 'expense'
+      ), 0)`,
     })
     .from(movements)
     .leftJoin(accounts, eq(movements.accountId, accounts.id))
@@ -45,12 +62,18 @@ export async function getUnsettledLoans(): Promise<UnsettledLoan[]> {
       eq(movements.loanSettled, false),
     ))
 
-  return results.map((r) => ({
-    ...r,
-    currency: r.currency as 'CLP' | 'USD',
-    totalPaid: Number(r.totalPaid),
-    remaining: Math.max(0, r.amount - Number(r.totalPaid)),
-  }))
+  return results.map((r) => {
+    const currency = r.currency as 'CLP' | 'USD'
+    const amount = displayAmount(r.amount, r.amountUsd, currency)
+    const totalPaid = Number(r.totalPaid)
+    return {
+      ...r,
+      amount,
+      currency,
+      totalPaid,
+      remaining: Math.max(0, amount - totalPaid),
+    }
+  })
 }
 
 /**
@@ -112,6 +135,7 @@ export async function getLoanDetail(loanId: string) {
       id: movements.id,
       name: movements.name,
       amount: movements.amount,
+      amountUsd: movements.amountUsd,
       date: movements.date,
       currency: movements.currency,
       accountId: movements.accountId,
@@ -136,6 +160,7 @@ export async function getLoanDetail(loanId: string) {
       id: movements.id,
       name: movements.name,
       amount: movements.amount,
+      amountUsd: movements.amountUsd,
       date: movements.date,
       currency: movements.currency,
       accountId: movements.accountId,
@@ -151,18 +176,24 @@ export async function getLoanDetail(loanId: string) {
     ))
     .orderBy(desc(movements.date), desc(movements.createdAt))
 
-  const totalPaidFromExpenses = expenses.reduce((sum, expense) => sum + expense.amount, 0)
+  const loanCurrency = loan.currency as 'CLP' | 'USD'
+  const loanAmount = displayAmount(loan.amount, loan.amountUsd, loanCurrency)
+  const totalPaidFromExpenses = expenses.reduce((sum, expense) => (
+    sum + displayAmount(expense.amount, expense.amountUsd, loanCurrency)
+  ), 0)
   const totalPaid = loan.loanSettled
-    ? Math.max(totalPaidFromExpenses, loan.amount)
+    ? Math.max(totalPaidFromExpenses, loanAmount)
     : totalPaidFromExpenses
 
   return {
     ...loan,
-    currency: loan.currency as 'CLP' | 'USD',
+    amount: loanAmount,
+    currency: loanCurrency,
     totalPaid,
-    remaining: Math.max(0, loan.amount - totalPaid),
+    remaining: Math.max(0, loanAmount - totalPaid),
     expenses: expenses.map((expense) => ({
       ...expense,
+      amount: displayAmount(expense.amount, expense.amountUsd, loanCurrency),
       currency: expense.currency as 'CLP' | 'USD',
     })),
   }
@@ -185,109 +216,16 @@ export async function settleLoan(
   date: string,
 ): Promise<SettleLoanResult> {
   const session = await requireAuth()
+  const result = expenseMovementId === 'cash'
+    ? await movementLedger.settleLoanWithCash(session.id, loanId)
+    : await movementLedger.settleLoanWithExistingMovement(session.id, loanId, expenseMovementId, date)
 
-  const [loan] = await db
-    .select({
-      id: movements.id,
-      amount: movements.amount,
-      loanSettled: movements.loanSettled,
-    })
-    .from(movements)
-    .where(and(
-      eq(movements.id, loanId),
-      eq(movements.userId, session.id),
-      eq(movements.type, 'income'),
-      eq(movements.loan, true),
-    ))
-    .limit(1)
-
-  if (!loan) {
-    return { success: false, error: 'Préstamo no encontrado' }
-  }
-
-  if (loan.loanSettled) {
-    return { success: false, error: 'Este préstamo ya está saldado' }
-  }
-
-  if (expenseMovementId === 'cash') {
-    await db
-      .update(movements)
-      .set({ loanSettled: true, updatedAt: new Date() })
-      .where(and(eq(movements.id, loanId), eq(movements.userId, session.id)))
-
+  if (result.success) {
     revalidatePath('/')
     revalidatePath('/loans')
     revalidatePath(`/loans/${loanId}`)
-
-    return {
-      success: true,
-      remaining: 0,
-      settled: true,
-      totalPaid: loan.amount,
-    }
+    revalidatePath('/reports')
   }
 
-  const [expense] = await db
-    .select({
-      id: movements.id,
-      loanId: movements.loanId,
-      type: movements.type,
-    })
-    .from(movements)
-    .where(and(eq(movements.id, expenseMovementId), eq(movements.userId, session.id)))
-    .limit(1)
-
-  if (!expense) {
-    return { success: false, error: 'Gasto no encontrado' }
-  }
-
-  if (expense.type !== 'expense') {
-    return { success: false, error: 'El movimiento seleccionado no es un gasto' }
-  }
-
-  if (expense.loanId === loanId) {
-    return { success: false, error: 'Este gasto ya está vinculado a este préstamo' }
-  }
-
-  if (expense.loanId) {
-    return { success: false, error: 'Este gasto ya está vinculado a otro préstamo' }
-  }
-
-  await db
-    .update(movements)
-    .set({
-      loanId,
-      date,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(movements.id, expenseMovementId), eq(movements.userId, session.id)))
-
-  const [totalResult] = await db
-    .select({ total: sql<number>`COALESCE(SUM(${movements.amount}), 0)` })
-    .from(movements)
-    .where(and(
-      eq(movements.userId, session.id),
-      eq(movements.type, 'expense'),
-      eq(movements.loanId, loanId),
-    ))
-
-  const totalPaid = Number(totalResult?.total ?? 0)
-  const remaining = Math.max(0, loan.amount - totalPaid)
-  const settled = remaining <= 0
-
-  await db
-    .update(movements)
-    .set({ loanSettled: settled, updatedAt: new Date() })
-    .where(and(eq(movements.id, loanId), eq(movements.userId, session.id)))
-
-  revalidatePath('/')
-  revalidatePath('/loans')
-  revalidatePath(`/loans/${loanId}`)
-
-  return {
-    success: true,
-    remaining,
-    settled,
-    totalPaid,
-  }
+  return result
 }

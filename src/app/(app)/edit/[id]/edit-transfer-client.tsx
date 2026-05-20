@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { updateTransfer, deleteTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
-import { formatCurrency, parseMoney } from '@/lib/utils'
+import { parseMoney } from '@/lib/utils'
 import type { Account } from '@/lib/db'
 
 interface TransferMovement {
@@ -141,8 +141,14 @@ export function EditTransferClient({ transfer, accounts }: Props) {
 
   async function handleDelete() {
     setLoading(true)
+    setError(null)
     try {
-      await deleteTransfer(transfer.transferId)
+      const result = await deleteTransfer(transfer.transferId)
+      if (!result.success) {
+        setError(result.error || 'Error al eliminar')
+        setLoading(false)
+        return
+      }
       setShowDeleteConfirm(false)
       router.push('/')
     } catch {

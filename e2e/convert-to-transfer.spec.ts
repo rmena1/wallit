@@ -1,33 +1,10 @@
 import { test, expect, Page } from '@playwright/test'
-import { registerAndLogin, ensureAccount, screenshot } from './helpers'
+import { createAccount, screenshot, TEST_PASSWORD } from './helpers'
 import { getUserId, getFirstAccountId, getAccounts, seedReviewMovement, seedConfirmedMovement } from './db-helper'
 
 async function createTwoAccounts(page: Page) {
-  await page.goto('/settings')
-  await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: 5000 })
-
-  // First account: BCI CLP
-  const bankSelect = page.locator('select[name="bankName"]')
-  if (!await bankSelect.isVisible()) {
-    await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
-    await bankSelect.waitFor({ state: 'visible', timeout: 3000 })
-  }
-  await bankSelect.selectOption('BCI')
-  await page.locator('select[name="accountType"]').selectOption('Corriente')
-  await page.getByPlaceholder('Últimos 4 dígitos').fill('1111')
-  await page.getByPlaceholder('Saldo inicial').fill('1000000')
-  await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
-  await expect(page.getByText('···1111')).toBeVisible({ timeout: 5000 })
-
-  // Second account: Santander CLP
-  await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
-  await bankSelect.waitFor({ state: 'visible', timeout: 3000 })
-  await bankSelect.selectOption('Santander')
-  await page.locator('select[name="accountType"]').selectOption('Vista')
-  await page.getByPlaceholder('Últimos 4 dígitos').fill('2222')
-  await page.getByPlaceholder('Saldo inicial').fill('500000')
-  await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
-  await expect(page.getByText('···2222')).toBeVisible({ timeout: 5000 })
+  await createAccount(page, { bankName: 'BCI', accountType: 'Corriente', lastFourDigits: '1111', initialBalance: '1000000' })
+  await createAccount(page, { bankName: 'Santander', accountType: 'Vista', lastFourDigits: '2222', initialBalance: '500000' })
 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
@@ -37,7 +14,7 @@ async function registerUser(page: Page): Promise<string> {
   const email = `e2e-convert-${Date.now()}-${Math.random().toString(36).slice(2, 5)}@wallit.app`
   await page.goto('/register')
   await page.getByLabel('Email').fill(email)
-  await page.getByLabel('Contraseña').fill('testpass123')
+  await page.getByLabel('Contraseña').fill(TEST_PASSWORD)
   await page.getByRole('button', { name: 'Crear cuenta' }).click()
   await page.waitForURL('**/', { timeout: 10000 })
   return email

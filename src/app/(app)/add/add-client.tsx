@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createMovement } from '@/lib/actions/movements'
-import { createTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
+import { recordReportableMovement } from '@/lib/actions/movements'
+import { recordTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { today, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
@@ -81,6 +81,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
   const [accountId, setAccountId] = useState('')
   const [name, setName] = useState('')
   const [amount, setAmount] = useState('')
+  const [emergency, setEmergency] = useState(false)
 
   // Transfer form state
   const [fromAccountId, setFromAccountId] = useState('')
@@ -90,17 +91,32 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
   const [note, setNote] = useState('')
   const [exchangeRate, setExchangeRate] = useState<number | null>(null)
 
-  // Get exchange rate for currency conversion
-  useEffect(() => {
-    getCurrentExchangeRate().then(setExchangeRate).catch(() => {})
-  }, [])
-
   // Get currencies for selected accounts
   const fromAccount = accounts.find(a => a.id === fromAccountId)
   const toAccount = accounts.find(a => a.id === toAccountId)
   const fromCurrency = fromAccount?.currency || 'CLP'
   const toCurrency = toAccount?.currency || 'CLP'
   const currenciesDiffer = fromCurrency !== toCurrency
+
+  useEffect(() => {
+    if (type !== 'expense' && emergency) setEmergency(false)
+  }, [type, emergency])
+
+  // Load exchange rate only when the transfer form actually needs currency conversion.
+  // Fetching it on every add-page visit can block the UI on slow/offline networks.
+  useEffect(() => {
+    if (type !== 'transfer' || !currenciesDiffer) {
+      setExchangeRate(null)
+      return
+    }
+
+    let cancelled = false
+    getCurrentExchangeRate()
+      .then(rate => { if (!cancelled) setExchangeRate(rate) })
+      .catch(() => { if (!cancelled) setExchangeRate(null) })
+
+    return () => { cancelled = true }
+  }, [type, currenciesDiffer])
 
   // Auto-calculate toAmount when fromAmount changes (for different currencies)
   useEffect(() => {
@@ -208,7 +224,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
         const fromCents = parseMoney(fromAmount)
         const toCents = currenciesDiffer ? parseMoney(toAmount) : fromCents
         
-        const result = await createTransfer({
+        const result = await recordTransfer({
           fromAccountId,
           toAccountId,
           fromAmount: fromCents,
@@ -241,11 +257,13 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
         formData.set('name', name)
         formData.set('amount', parseMoney(amount).toString())
         formData.set('currency', currency)
+        formData.set('amountInputMode', 'inputCurrency')
         formData.set('date', date)
         if (time) formData.set('time', time)
         if (selectedCategoryId) formData.set('categoryId', selectedCategoryId)
+        if (type === 'expense' && emergency) formData.set('emergency', 'true')
         
-        const result = await createMovement(formData)
+        const result = await recordReportableMovement(formData)
         if (!result.success) {
           setError(result.error || 'Error al crear movimiento')
         } else {
@@ -309,26 +327,30 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
               display: 'flex', backgroundColor: '#1a1a1a', borderRadius: 12,
               padding: 4, gap: 4, border: '1px solid #2a2a2a',
             }}>
-              {(['expense', 'income', 'transfer'] as const).map((t) => (
-                <label key={t} style={{
-                  flex: 1, textAlign: 'center', cursor: 'pointer',
-                }}>
-                  <input
-                    type="radio" name="type" value={t}
-                    checked={type === t}
-                    onChange={() => setType(t)}
-                    style={{ display: 'none' }}
-                    className="type-radio"
-                  />
-                  <span className={`type-label type-label-${t}`} style={{
-                    display: 'block', padding: '10px 0', borderRadius: 10,
-                    fontSize: 14, fontWeight: 500,
-                    transition: 'all 0.2s ease',
-                  }}>
+              {(['expense', 'income', 'transfer'] as const).map((t) => {
+                const selected = type === t
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    aria-label={t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transferencia'}
+                    aria-pressed={selected}
+                    onClick={() => setType(t)}
+                    style={{
+                      flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
+                      fontSize: 14, fontWeight: 500, cursor: 'pointer',
+                      backgroundColor: selected ? '#27272a' : 'transparent',
+                      color: selected
+                        ? (t === 'expense' ? '#f87171' : t === 'income' ? '#4ade80' : '#60a5fa')
+                        : '#52525b',
+                      boxShadow: selected ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
                     {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transferencia'}
-                  </span>
-                </label>
-              ))}
+                  </button>
+                )
+              })}
             </div>
 
             {type === 'transfer' ? (
@@ -336,8 +358,10 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
               <>
                 {/* From Account */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Desde cuenta</label>
+                  <label htmlFor="add-transfer-from-account" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Desde cuenta</label>
                   <select 
+                    id="add-transfer-from-account"
+                    aria-label="Desde cuenta"
                     value={fromAccountId} 
                     onChange={e => { setFromAccountId(e.target.value); clearFieldError('fromAccountId') }}
                     style={fieldErrors.fromAccountId ? selectErrorStyle : selectStyle}
@@ -363,8 +387,10 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* To Account */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Hacia cuenta</label>
+                  <label htmlFor="add-transfer-to-account" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Hacia cuenta</label>
                   <select 
+                    id="add-transfer-to-account"
+                    aria-label="Hacia cuenta"
                     value={toAccountId} 
                     onChange={e => { setToAccountId(e.target.value); clearFieldError('toAccountId') }}
                     style={fieldErrors.toAccountId ? selectErrorStyle : selectStyle}
@@ -391,10 +417,12 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                 {/* Amount(s) */}
                 <div style={{ display: 'flex', gap: 12 }}>
                   <div style={{ flex: 1 }}>
-                    <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>
+                    <label htmlFor="add-transfer-from-amount" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>
                       Monto origen {fromCurrency && `(${fromCurrency})`}
                     </label>
                     <input
+                      id="add-transfer-from-amount"
+                      aria-label="Monto origen"
                       type="text" 
                       placeholder="0.00"
                       inputMode="decimal" 
@@ -416,10 +444,12 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                   </div>
                   {currenciesDiffer && (
                     <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>
+                      <label htmlFor="add-transfer-to-amount" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>
                         Monto destino ({toCurrency})
                       </label>
                       <input
+                        id="add-transfer-to-amount"
+                        aria-label="Monto destino"
                         type="text" 
                         placeholder="0.00"
                         inputMode="decimal" 
@@ -452,8 +482,10 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* Date */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Fecha</label>
+                  <label htmlFor="add-transfer-date" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Fecha</label>
                   <input
+                    id="add-transfer-date"
+                    aria-label="Fecha"
                     type="date" 
                     value={date}
                     onChange={e => { setDate(e.target.value); clearFieldError('date') }}
@@ -473,8 +505,10 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* Note (optional) */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Nota (opcional)</label>
+                  <label htmlFor="add-transfer-note" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Nota (opcional)</label>
                   <input
+                    id="add-transfer-note"
+                    aria-label="Nota"
                     type="text" 
                     placeholder="ej: Pago tarjeta de crédito"
                     autoComplete="off"
@@ -489,8 +523,10 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
               <>
                 {/* Account selector */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Cuenta</label>
+                  <label htmlFor="add-movement-account" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Cuenta</label>
                   <select 
+                    id="add-movement-account"
+                    aria-label="Cuenta"
                     name="accountId"
                     value={accountId} 
                     onChange={e => { setAccountId(e.target.value); clearFieldError('accountId') }}
@@ -517,8 +553,10 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* Name */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Descripción</label>
+                  <label htmlFor="add-movement-name" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Descripción</label>
                   <input
+                    id="add-movement-name"
+                    aria-label="Descripción"
                     type="text" 
                     placeholder="¿En qué se gastó?"
                     autoComplete="off"
@@ -541,8 +579,10 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                 {/* Amount + Currency */}
                 <div style={{ display: 'flex', gap: 12 }}>
                   <div style={{ flex: 2 }}>
-                    <label style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>{currency === 'USD' ? 'Monto (USD)' : 'Monto'}</label>
+                    <label htmlFor="add-movement-amount" style={{ fontSize: 13, color: '#71717a', marginBottom: 6, display: 'block' }}>{currency === 'USD' ? 'Monto (USD)' : 'Monto'}</label>
                     <input
+                      id="add-movement-amount"
+                      aria-label="Monto"
                       type="text" 
                       placeholder="0.00"
                       inputMode="decimal" 
@@ -563,8 +603,8 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                     )}
                   </div>
                   <div style={{ flex: 1 }}>
-                    <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Moneda</label>
-                    <select name="currency" value={currency} onChange={e => setCurrency(e.target.value as 'CLP' | 'USD')} style={selectStyle}>
+                    <label htmlFor="add-movement-currency" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Moneda</label>
+                    <select id="add-movement-currency" name="currency" value={currency} onChange={e => setCurrency(e.target.value as 'CLP' | 'USD')} style={selectStyle}>
                       <option value="CLP">CLP</option>
                       <option value="USD">USD</option>
                     </select>
@@ -574,8 +614,9 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                 {/* Date + Time */}
                 <div style={{ display: 'flex', gap: 12 }}>
                   <div style={{ flex: 2 }}>
-                    <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Fecha</label>
+                    <label htmlFor="add-movement-date" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Fecha</label>
                     <input
+                      id="add-movement-date"
                       type="date" 
                       value={date}
                       onChange={e => { setDate(e.target.value); clearFieldError('date') }}
@@ -593,8 +634,10 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                     )}
                   </div>
                   <div style={{ flex: 1 }}>
-                    <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Hora</label>
+                    <label htmlFor="add-movement-time" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Hora</label>
                     <input
+                      id="add-movement-time"
+                      aria-label="Hora"
                       name="time"
                       type="time"
                       value={time}
@@ -606,9 +649,11 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
                 {/* Category */}
                 <div>
-                  <label style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Categoría</label>
+                  <label htmlFor="add-movement-category" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Categoría</label>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <select 
+                      id="add-movement-category"
+                      aria-label="Categoría"
                       name="categoryId" 
                       value={selectedCategoryId} 
                       onChange={e => setSelectedCategoryId(e.target.value)} 
@@ -628,7 +673,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                         </option>
                       ))}
                     </select>
-                    <button type="button" onClick={() => setShowCreateCategory(true)} style={{
+                    <button type="button" aria-label="Crear categoría" onClick={() => setShowCreateCategory(true)} style={{
                       width: 48, height: 48, borderRadius: 12, border: '1px solid #2a2a2a',
                       backgroundColor: '#1a1a1a', color: '#22c55e', fontSize: 20,
                       cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -642,6 +687,32 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                     </div>
                   )}
                 </div>
+
+                {/* Emergency expense checkbox (only for expenses) */}
+                {type === 'expense' && (
+                  <label style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                    backgroundColor: emergency ? '#2a1a1a' : 'transparent',
+                    border: emergency ? '1px solid #dc2626' : '1px solid #2a2a2a',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={emergency}
+                      onChange={e => setEmergency(e.target.checked)}
+                      style={{ width: 18, height: 18, accentColor: '#dc2626', cursor: 'pointer' }}
+                    />
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: emergency ? '#f87171' : '#e5e5e5' }}>
+                        🚨 Gasto de emergencia
+                      </div>
+                      <div style={{ fontSize: 11, color: '#a1a1aa' }}>
+                        No cuenta en reportes regulares. Se puede saldar parcialmente.
+                      </div>
+                    </div>
+                  </label>
+                )}
               </>
             )}
 

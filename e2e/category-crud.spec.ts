@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { registerAndLogin, screenshot } from './helpers'
+import { expectAccountVisibleInSettings, expectCategoryVisibleInSettings, registerAndLogin, screenshot } from './helpers'
 
 test.describe('Category CRUD — Complete Flow', () => {
   test('create, edit, and delete categories with form validation', async ({ page }) => {
@@ -14,21 +14,21 @@ test.describe('Category CRUD — Complete Flow', () => {
     await page.getByPlaceholder('🍕').fill('🍔')
     await page.getByPlaceholder('Nombre de categoría').fill('Comida')
     await page.locator('form').filter({ has: page.getByPlaceholder('Nombre de categoría') }).locator('button[type="submit"]').click()
-    await expect(page.getByText('Comida')).toBeVisible({ timeout: 5000 })
+    await expectCategoryVisibleInSettings(page, 'Comida')
     await screenshot(page, 'category-crud-02-food-created')
 
     // 3. Create second category - Transport
     await page.getByPlaceholder('🍕').fill('🚗')
     await page.getByPlaceholder('Nombre de categoría').fill('Transporte')
     await page.locator('form').filter({ has: page.getByPlaceholder('Nombre de categoría') }).locator('button[type="submit"]').click()
-    await expect(page.getByText('Transporte')).toBeVisible({ timeout: 5000 })
+    await expectCategoryVisibleInSettings(page, 'Transporte')
     await screenshot(page, 'category-crud-03-transport-created')
 
     // 4. Create third category - Entertainment
     await page.getByPlaceholder('🍕').fill('🎬')
     await page.getByPlaceholder('Nombre de categoría').fill('Entretenimiento')
     await page.locator('form').filter({ has: page.getByPlaceholder('Nombre de categoría') }).locator('button[type="submit"]').click()
-    await expect(page.getByText('Entretenimiento')).toBeVisible({ timeout: 5000 })
+    await expectCategoryVisibleInSettings(page, 'Entretenimiento')
     await screenshot(page, 'category-crud-04-entertainment-created')
 
     // 5. Edit a category by clicking on it
@@ -48,7 +48,7 @@ test.describe('Category CRUD — Complete Flow', () => {
       const saveBtn = page.getByRole('button', { name: /✓|Guardar/i }).first()
       if (await saveBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
         await saveBtn.click()
-        await expect(page.getByText('Comida Rápida')).toBeVisible({ timeout: 5000 })
+        await expectCategoryVisibleInSettings(page, 'Comida Rápida')
         await screenshot(page, 'category-crud-07-edit-saved')
       }
     }
@@ -91,7 +91,7 @@ test.describe('Category CRUD — Complete Flow', () => {
       await page.getByPlaceholder('Últimos 4 dígitos').fill('1234')
       await page.getByPlaceholder('Saldo inicial').fill('100000')
       await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
-      await expect(page.getByText('···1234')).toBeVisible({ timeout: 5000 })
+      await expectAccountVisibleInSettings(page, '1234')
     }
 
     await page.goto('/add')
@@ -114,7 +114,7 @@ test.describe('Category CRUD — Complete Flow', () => {
     await page.getByPlaceholder('🍕').fill('📚')
     await page.getByPlaceholder('Nombre de categoría').fill('Libros')
     await page.locator('form').filter({ has: page.getByPlaceholder('Nombre de categoría') }).locator('button[type="submit"]').click()
-    await expect(page.getByText('Libros')).toBeVisible({ timeout: 5000 })
+    await expectCategoryVisibleInSettings(page, 'Libros')
     await screenshot(page, 'category-cancel-01-created')
 
     // Click to edit

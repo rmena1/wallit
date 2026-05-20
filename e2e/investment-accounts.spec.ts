@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { registerAndLogin, screenshot, TEST_PASSWORD } from './helpers'
+import { expectAccountVisibleInSettings, registerAndLogin, screenshot, TEST_PASSWORD } from './helpers'
 import { createInvestmentAccount, getUserId, seedInvestmentSnapshot, seedTransferMovement } from './db-helper'
 import postgres from 'postgres'
 
@@ -70,9 +70,10 @@ test.describe('Investment Accounts', () => {
     // Submit
     await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
     
-    // Wait for account to appear in list
-    await expect(page.getByText('BCI')).toBeVisible({ timeout: 5000 })
-    await expect(page.getByText('Inversión')).toBeVisible({ timeout: 3000 })
+    // Wait for the created account row rather than hidden select options.
+    const createdAccountRow = await expectAccountVisibleInSettings(page, '1234')
+    await expect(createdAccountRow).toContainText('BCI')
+    await expect(createdAccountRow).toContainText('Inversión')
     await screenshot(page, 'invest-04-account-created')
 
     // 3. Go to home and verify the investment account card

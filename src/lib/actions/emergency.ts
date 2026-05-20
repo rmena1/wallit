@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { db, movements, accounts, emergencyPayments } from '@/lib/db'
 import { eq, and, sql } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
-import { generateId } from '@/lib/utils'
+import { movementLedger } from '@/lib/domain/movement-ledger'
 
 export interface UnsettledEmergency {
   id: string
@@ -19,6 +19,10 @@ export interface UnsettledEmergency {
   remaining: number
 }
 
+function displayAmount(amount: number, amountUsd: number | null, currency: 'CLP' | 'USD') {
+  return currency === 'USD' ? (amountUsd ?? 0) : amount
+}
+
 /**
  * Get all unsettled emergency expenses for the current user
  */
@@ -30,6 +34,7 @@ export async function getUnsettledEmergencies(): Promise<UnsettledEmergency[]> {
       id: movements.id,
       name: movements.name,
       amount: movements.amount,
+      amountUsd: movements.amountUsd,
       date: movements.date,
       currency: movements.currency,
       accountId: movements.accountId,
@@ -45,12 +50,18 @@ export async function getUnsettledEmergencies(): Promise<UnsettledEmergency[]> {
       eq(movements.emergencySettled, false),
     ))
 
-  return results.map(r => ({
-    ...r,
-    currency: r.currency as 'CLP' | 'USD',
-    totalPaid: Number(r.totalPaid),
-    remaining: r.amount - Number(r.totalPaid),
-  }))
+  return results.map(r => {
+    const currency = r.currency as 'CLP' | 'USD'
+    const amount = displayAmount(r.amount, r.amountUsd, currency)
+    const totalPaid = Math.min(Number(r.totalPaid), amount)
+    return {
+      ...r,
+      amount,
+      currency,
+      totalPaid,
+      remaining: Math.max(0, amount - totalPaid),
+    }
+  })
 }
 
 /**
@@ -99,18 +110,6 @@ export async function getEmergencyPayments(emergencyId: string): Promise<Emergen
 
   if (!emergency) return []
 
-  // Alias for the two account joins
-  const fromAcc = db
-    .select({ id: accounts.id, bankName: accounts.bankName, emoji: accounts.emoji })
-    .from(accounts)
-    .as('from_acc')
-
-  const toAcc = db
-    .select({ id: accounts.id, bankName: accounts.bankName, emoji: accounts.emoji })
-    .from(accounts)
-    .as('to_acc')
-
-  // Use raw SQL for the join since drizzle aliasing is complex
   const results = await db
     .select({
       id: emergencyPayments.id,
@@ -145,6 +144,20 @@ export async function getEmergencyPayments(emergencyId: string): Promise<Emergen
  * Check if an emergency expense has any payments
  */
 export async function hasEmergencyPayments(emergencyId: string): Promise<boolean> {
+  const session = await requireAuth()
+
+  const [emergency] = await db
+    .select({ id: movements.id })
+    .from(movements)
+    .where(and(
+      eq(movements.id, emergencyId),
+      eq(movements.userId, session.id),
+      eq(movements.emergency, true),
+    ))
+    .limit(1)
+
+  if (!emergency) return false
+
   const result = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(emergencyPayments)
@@ -156,6 +169,7 @@ export async function hasEmergencyPayments(emergencyId: string): Promise<boolean
 export interface SettleResult {
   success: boolean
   error?: string
+  totalPaid?: number
   remaining?: number
   settled?: boolean
 }
@@ -171,112 +185,14 @@ export async function settleEmergencyPartial(
   date: string,
 ): Promise<SettleResult> {
   const session = await requireAuth()
-
-  if (amount <= 0) {
-    return { success: false, error: 'El monto debe ser mayor a 0' }
+  const result = await movementLedger.settleEmergencyPartially(session.id, emergencyId, fromAccountId, toAccountId, amount, date)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/emergency')
+    revalidatePath(`/emergency/${emergencyId}`)
+    revalidatePath('/reports')
   }
-
-  // Verify the emergency belongs to this user and is unsettled
-  const [emergency] = await db
-    .select({ id: movements.id, amount: movements.amount, emergencySettled: movements.emergencySettled, accountId: movements.accountId })
-    .from(movements)
-    .where(and(
-      eq(movements.id, emergencyId),
-      eq(movements.userId, session.id),
-      eq(movements.emergency, true),
-    ))
-    .limit(1)
-
-  if (!emergency) {
-    return { success: false, error: 'Gasto de emergencia no encontrado' }
-  }
-
-  if (emergency.emergencySettled) {
-    return { success: false, error: 'Este gasto de emergencia ya está saldado' }
-  }
-
-  // Verify both accounts belong to this user
-  const [fromAccount, toAccount] = await Promise.all([
-    db.select({ id: accounts.id, bankName: accounts.bankName, currency: accounts.currency })
-      .from(accounts)
-      .where(and(eq(accounts.id, fromAccountId), eq(accounts.userId, session.id)))
-      .limit(1),
-    db.select({ id: accounts.id, bankName: accounts.bankName, currency: accounts.currency })
-      .from(accounts)
-      .where(and(eq(accounts.id, toAccountId), eq(accounts.userId, session.id)))
-      .limit(1),
-  ])
-
-  if (!fromAccount[0]) return { success: false, error: 'Cuenta origen no válida' }
-  if (!toAccount[0]) return { success: false, error: 'Cuenta destino no válida' }
-
-  let transferId: string | null = null
-
-  // If accounts are different, create a transfer (pair of movements)
-  if (fromAccountId !== toAccountId) {
-    transferId = generateId()
-    const fromMovementId = generateId()
-    const toMovementId = generateId()
-
-    await db.insert(movements).values([
-      {
-        id: fromMovementId,
-        userId: session.id,
-        accountId: fromAccountId,
-        categoryId: null,
-        name: `Abono emergencia: ${emergency.accountId ? 'pago' : 'pago'}`,
-        date,
-        amount,
-        type: 'expense',
-        currency: 'CLP',
-        transferId,
-        transferPairId: toMovementId,
-      },
-      {
-        id: toMovementId,
-        userId: session.id,
-        accountId: toAccountId,
-        categoryId: null,
-        name: `Abono emergencia: recibido`,
-        date,
-        amount,
-        type: 'income',
-        currency: 'CLP',
-        transferId,
-        transferPairId: fromMovementId,
-      },
-    ])
-  }
-
-  // Insert emergency payment record
-  await db.insert(emergencyPayments).values({
-    id: generateId(),
-    emergencyId,
-    fromAccountId,
-    toAccountId,
-    amount,
-    date,
-    transferId,
-  })
-
-  // Check if fully settled
-  const [totalResult] = await db
-    .select({ total: sql<number>`COALESCE(SUM(amount), 0)` })
-    .from(emergencyPayments)
-    .where(eq(emergencyPayments.emergencyId, emergencyId))
-
-  const totalPaid = Number(totalResult?.total ?? 0)
-  const remaining = emergency.amount - totalPaid
-  const settled = remaining <= 0
-
-  if (settled) {
-    await db.update(movements)
-      .set({ emergencySettled: true, updatedAt: new Date() })
-      .where(eq(movements.id, emergencyId))
-  }
-
-  revalidatePath('/')
-  return { success: true, remaining: Math.max(0, remaining), settled }
+  return result
 }
 
 /**
@@ -286,31 +202,14 @@ export async function settleEmergencyDirect(
   emergencyId: string,
 ): Promise<{ success: boolean; error?: string }> {
   const session = await requireAuth()
-
-  const [emergency] = await db
-    .select({ id: movements.id, emergencySettled: movements.emergencySettled })
-    .from(movements)
-    .where(and(
-      eq(movements.id, emergencyId),
-      eq(movements.userId, session.id),
-      eq(movements.emergency, true),
-    ))
-    .limit(1)
-
-  if (!emergency) {
-    return { success: false, error: 'Gasto de emergencia no encontrado' }
+  const result = await movementLedger.settleEmergencyDirectly(session.id, emergencyId)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/emergency')
+    revalidatePath(`/emergency/${emergencyId}`)
+    revalidatePath('/reports')
   }
-
-  if (emergency.emergencySettled) {
-    return { success: false, error: 'Este gasto de emergencia ya está saldado' }
-  }
-
-  await db.update(movements)
-    .set({ emergencySettled: true, updatedAt: new Date() })
-    .where(eq(movements.id, emergencyId))
-
-  revalidatePath('/')
-  return { success: true }
+  return result
 }
 
 /**
@@ -324,6 +223,7 @@ export async function getEmergencyDetail(emergencyId: string) {
       id: movements.id,
       name: movements.name,
       amount: movements.amount,
+      amountUsd: movements.amountUsd,
       date: movements.date,
       currency: movements.currency,
       accountId: movements.accountId,
@@ -343,12 +243,16 @@ export async function getEmergencyDetail(emergencyId: string) {
   if (!emergency) return null
 
   const payments = await getEmergencyPayments(emergencyId)
-  const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0)
+  const currency = emergency.currency as 'CLP' | 'USD'
+  const amount = displayAmount(emergency.amount, emergency.amountUsd, currency)
+  const totalPaid = Math.min(payments.reduce((sum, p) => sum + p.amount, 0), amount)
 
   return {
     ...emergency,
+    amount,
+    currency,
     totalPaid,
-    remaining: emergency.amount - totalPaid,
+    remaining: Math.max(0, amount - totalPaid),
     payments,
   }
 }

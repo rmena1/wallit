@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, categories } from '@/lib/db'
+import { db, categories, type Category } from '@/lib/db'
 import { eq, and } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 import { generateId } from '@/lib/utils'
@@ -10,6 +10,7 @@ export type CategoryActionResult = {
   success: boolean
   error?: string
   categoryId?: string
+  category?: Category
 }
 
 /**
@@ -30,15 +31,21 @@ export async function createCategory(formData: FormData): Promise<CategoryAction
   }
   
   const id = generateId()
-  await db.insert(categories).values({
+  const now = new Date()
+  const newCategory = {
     id,
     userId: session.id,
     name: name.trim(),
     emoji: emoji.trim(),
-  })
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  await db.insert(categories).values(newCategory)
   
   revalidatePath('/')
-  return { success: true, categoryId: id }
+  revalidatePath('/settings')
+  return { success: true, categoryId: id, category: newCategory }
 }
 
 /**
@@ -61,7 +68,7 @@ export async function updateCategory(formData: FormData): Promise<CategoryAction
     return { success: false, error: 'Emoji is required' }
   }
   
-  await db.update(categories).set({
+  const [updatedCategory] = await db.update(categories).set({
     name: name.trim(),
     emoji: emoji.trim(),
     updatedAt: new Date(),
@@ -70,10 +77,11 @@ export async function updateCategory(formData: FormData): Promise<CategoryAction
       eq(categories.id, id),
       eq(categories.userId, session.id)
     )
-  )
+  ).returning()
   
   revalidatePath('/')
-  return { success: true, categoryId: id }
+  revalidatePath('/settings')
+  return { success: true, categoryId: id, category: updatedCategory }
 }
 
 /**
@@ -90,6 +98,7 @@ export async function deleteCategory(id: string): Promise<CategoryActionResult> 
   )
   
   revalidatePath('/')
+  revalidatePath('/settings')
   return { success: true }
 }
 

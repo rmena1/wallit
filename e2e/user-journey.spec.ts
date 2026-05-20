@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { screenshot } from './helpers'
+import { expectAccountVisibleInSettings, screenshot } from './helpers'
 
 /**
  * Complete User Journey Test
@@ -41,10 +41,9 @@ test.describe('Complete User Journey', () => {
     await page.waitForURL('**/', { timeout: 10000 })
     await screenshot(page, 'journey-03-first-login')
 
-    // 1.4 Verify empty state / onboarding message
-    const hasWelcome = await page.getByText('¡Bienvenido a Wallit!').isVisible().catch(() => false)
-    const hasNoAccounts = await page.getByText('Agrega tu primera cuenta bancaria').isVisible().catch(() => false)
-    expect(hasWelcome || hasNoAccounts).toBeTruthy()
+    // 1.4 Verify empty state / onboarding message. The dashboard is server-rendered and can briefly show its route skeleton after redirect.
+    await expect(page.getByText('¡Bienvenido a Wallit!')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Agrega tu primera cuenta bancaria')).toBeVisible()
     await screenshot(page, 'journey-04-empty-state')
 
     // ========================================
@@ -72,7 +71,7 @@ test.describe('Complete User Journey', () => {
 
     // 2.4 Submit and verify account created
     await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
-    await expect(page.getByText('···1234')).toBeVisible({ timeout: 5000 })
+    await expectAccountVisibleInSettings(page, '1234')
     await screenshot(page, 'journey-07-first-account-created')
 
     // 2.5 Create a second account - Santander Savings
@@ -82,7 +81,7 @@ test.describe('Complete User Journey', () => {
     await page.getByPlaceholder('Últimos 4 dígitos').fill('5678')
     await page.getByPlaceholder('Saldo inicial').fill('200000')
     await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
-    await expect(page.getByText('···5678')).toBeVisible({ timeout: 5000 })
+    await expectAccountVisibleInSettings(page, '5678')
     await screenshot(page, 'journey-08-two-accounts')
 
     // ========================================

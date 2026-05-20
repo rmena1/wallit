@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, accounts, movements, categories, investmentSnapshots } from '@/lib/db'
+import { db, accounts, movements, categories, investmentSnapshots, type Account } from '@/lib/db'
 import { eq, and, desc, isNotNull, sql } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 import { generateId } from '@/lib/utils'
@@ -9,6 +9,7 @@ import { generateId } from '@/lib/utils'
 export type AccountActionResult = {
   success: boolean
   error?: string
+  account?: Account
 }
 
 /**
@@ -77,8 +78,7 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
 
   const sortOrder = Number(maxOrder?.value ?? -1) + 1
 
-  await db.transaction(async (tx) => {
-    await tx.insert(accounts).values({
+  const newAccount = {
       id: accountId,
       userId: session.id,
       bankName,
@@ -93,7 +93,12 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
       color,
       emoji,
       sortOrder,
-    })
+      createdAt: now,
+      updatedAt: now,
+    }
+
+  await db.transaction(async (tx) => {
+    await tx.insert(accounts).values(newAccount)
 
     if (isInvestment) {
       await tx.insert(investmentSnapshots).values({
@@ -109,7 +114,7 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
 
   revalidatePath('/')
   revalidatePath('/settings')
-  return { success: true }
+  return { success: true, account: newAccount }
 }
 
 /**

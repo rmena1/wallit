@@ -1,6 +1,6 @@
 import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount, ensureCategory, screenshot } from './helpers'
-import { getUserId, getFirstAccountId, seedReviewMovements, seedReviewMovement } from './db-helper'
+import { getUserId, getFirstAccountId, seedReviewMovements, seedReviewMovement, seedTypedReviewMovement } from './db-helper'
 
 async function registerUser(page: Page): Promise<string> {
   const email = `e2e-review-${Date.now()}-${Math.random().toString(36).slice(2, 5)}@wallit.app`
@@ -112,8 +112,8 @@ test.describe('Review Flow — Complete', () => {
     await expect(page.getByText('1/2')).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'review-recv-01-initial')
 
-    // First movement: "Almuerzo con Juan" — mark as receivable
-    await expect(page.getByText('Almuerzo con Juan')).toBeVisible({ timeout: 5000 })
+    // Review queue is latest-first; mark the newest movement as receivable first.
+    await expect(page.getByText('Compra desconocida')).toBeVisible({ timeout: 5000 })
     await page.getByRole('button', { name: /💰 Cobrar/i }).click()
     await expect(page.getByText('Marcar como Por Cobrar')).toBeVisible({ timeout: 3000 })
     await screenshot(page, 'review-recv-02-dialog')
@@ -127,28 +127,57 @@ test.describe('Review Flow — Complete', () => {
     await page.waitForTimeout(1000) // Wait for re-render after server action
     await screenshot(page, 'review-recv-03-after-receivable')
 
-    // After marking receivable, page re-renders. Second movement should now be visible
-    const secondMovement = page.getByText('Compra desconocida')
-    if (await secondMovement.isVisible({ timeout: 3000 }).catch(() => false)) {
-      // Edit the description
-      const descInput = page.locator('input').first()
-      await descInput.clear()
-      await descInput.fill('Cena con amigos')
+    // After marking receivable, the older movement should now be visible.
+    const secondMovement = page.getByText('Almuerzo con Juan')
+    await expect(secondMovement).toBeVisible({ timeout: 5000 })
 
-      // Switch to income
-      await page.getByText('↑ Ingreso').click()
-      await screenshot(page, 'review-recv-04-edited-fields')
+    // Edit the description
+    const descInput = page.locator('input').first()
+    await descInput.clear()
+    await descInput.fill('Cena con amigos')
 
-      // Confirm
-      await page.getByRole('button', { name: '✓ Confirmar' }).click()
-      await page.waitForTimeout(1000)
-    }
+    // Switch to income
+    await page.getByText('↑ Ingreso').click()
+    await screenshot(page, 'review-recv-04-edited-fields')
+
+    // Confirm
+    await page.getByRole('button', { name: '✓ Confirmar' }).click()
+    await page.waitForTimeout(1000)
 
     // Should eventually show completion or empty state
     const completed = page.getByText('¡Revisión completada!')
     const empty = page.getByText('No hay movimientos pendientes')
     await expect(completed.or(empty)).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'review-recv-05-completed')
+  })
+
+  test('confirm pending movements as emergency expense and loan income', async ({ page }) => {
+    const email = await registerUser(page)
+    await ensureAccount(page)
+
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const accountId = await getFirstAccountId(userId)
+
+    await seedTypedReviewMovement(userId, accountId, { name: 'Pending loan income', amount: 8000000, type: 'income' })
+    await seedTypedReviewMovement(userId, accountId, { name: 'Pending emergency expense', amount: 12000000, type: 'expense' })
+
+    await page.goto('/review')
+    await expect(page.getByText('Pending emergency expense')).toBeVisible({ timeout: 5000 })
+    await page.getByLabel('Gasto de emergencia').check()
+    await screenshot(page, 'review-workflow-01-emergency-checked')
+    await page.getByRole('button', { name: '✓ Confirmar' }).click()
+
+    await expect(page.getByText('Pending loan income')).toBeVisible({ timeout: 5000 })
+    await page.getByLabel('Préstamo').check()
+    await screenshot(page, 'review-workflow-02-loan-checked')
+    await page.getByRole('button', { name: '✓ Confirmar' }).click()
+
+    await page.goto('/emergency')
+    await expect(page.getByText('Pending emergency expense')).toBeVisible({ timeout: 5000 })
+    await page.goto('/loans')
+    await expect(page.getByText('Pending loan income')).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'review-workflow-03-workflows-visible')
   })
 
   test('split movement into multiple parts with cancel and confirm', async ({ page }) => {

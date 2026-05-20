@@ -1,9 +1,10 @@
 import { db, exchangeRates } from '@/lib/db'
 import { and, eq, desc } from 'drizzle-orm'
-import { generateId } from '@/lib/utils'
 
 const API_URL = 'https://open.er-api.com/v6/latest/USD'
 const CACHE_DURATION_MS = 24 * 60 * 60 * 1000 // 24 hours
+const FETCH_TIMEOUT_MS = 3000
+const FALLBACK_USD_TO_CLP_RATE = 95000 // 950.00 CLP/USD, used only when live + cached rates are unavailable
 
 /**
  * Get the current USD→CLP exchange rate.
@@ -36,8 +37,11 @@ export async function getUsdToClpRate(): Promise<number> {
   const raceKey = `USD_CLP_${fetchWindow}`
 
   try {
-    // Fetch fresh rate
-    const res = await fetch(API_URL, { next: { revalidate: 0 } })
+    // Fetch fresh rate, but never let an external API stall app interactions.
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+    const res = await fetch(API_URL, { next: { revalidate: 0 }, signal: controller.signal })
+    clearTimeout(timeout)
     if (!res.ok) {
       // If fetch fails but we have a cached rate, use it
       if (cached.length > 0) return cached[0].rate
@@ -81,10 +85,11 @@ export async function getUsdToClpRate(): Promise<number> {
     }
 
     return rateInt
-  } catch (error) {
-    // If all fails but we have cached data, use it (graceful degradation)
+  } catch {
+    // If all fails but we have cached data, use it (graceful degradation).
+    // Otherwise fall back to a deterministic approximate rate so transfers stay usable offline.
     if (cached.length > 0) return cached[0].rate
-    throw error
+    return FALLBACK_USD_TO_CLP_RATE
   }
 }
 

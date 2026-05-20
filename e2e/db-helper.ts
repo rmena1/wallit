@@ -29,6 +29,42 @@ export async function createAccount(userId: string): Promise<string> {
   return id
 }
 
+export async function createRegularAccount(userId: string, opts: {
+  bankName?: string
+  accountType?: string
+  lastFourDigits?: string
+  initialBalance?: number
+  currency?: 'CLP' | 'USD'
+} = {}): Promise<string> {
+  const now = new Date()
+  const id = `acc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  await sql`
+    INSERT INTO accounts (id, user_id, bank_name, account_type, last_four_digits, initial_balance, currency, created_at, updated_at)
+    VALUES (
+      ${id},
+      ${userId},
+      ${opts.bankName ?? 'BCI'},
+      ${opts.accountType ?? 'Corriente'},
+      ${opts.lastFourDigits ?? '9999'},
+      ${opts.initialBalance ?? 100000000},
+      ${opts.currency ?? 'CLP'},
+      ${now},
+      ${now}
+    )
+  `
+  return id
+}
+
+export async function seedCategory(userId: string, opts: { name: string; emoji?: string }): Promise<string> {
+  const now = new Date()
+  const id = `cat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  await sql`
+    INSERT INTO categories (id, user_id, name, emoji, created_at, updated_at)
+    VALUES (${id}, ${userId}, ${opts.name}, ${opts.emoji ?? '📦'}, ${now}, ${now})
+  `
+  return id
+}
+
 export async function createInvestmentAccount(userId: string, opts: {
   bankName?: string
   accountType?: string
@@ -146,6 +182,106 @@ export async function seedReviewMovement(userId: string, accountId: string | nul
   await sql`
     INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
     VALUES (${id}, ${userId}, ${accountId}, ${name}, ${today}, ${amount}, 'expense', true, 'CLP', false, false, ${now}, ${now})
+  `
+  return id
+}
+
+export async function seedTypedReviewMovement(userId: string, accountId: string | null, opts: {
+  name: string
+  amount: number
+  type: 'income' | 'expense'
+}): Promise<string> {
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  const id = `rev-typed-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  await sql`
+    INSERT INTO movements (id, user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
+    VALUES (${id}, ${userId}, ${accountId}, ${opts.name}, ${today}, ${opts.amount}, ${opts.type}, true, 'CLP', false, false, ${now}, ${now})
+  `
+  return id
+}
+
+export async function seedConfirmedWorkflowMovement(userId: string, accountId: string | null, opts: {
+  name: string
+  clpAmount: number
+  type: 'income' | 'expense'
+  categoryId?: string | null
+  currency?: 'CLP' | 'USD'
+  usdAmount?: number | null
+  exchangeRate?: number | null
+  emergency?: boolean
+  loan?: boolean
+  loanId?: string | null
+}): Promise<string> {
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  const id = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  await sql`
+    INSERT INTO movements (
+      id, user_id, category_id, account_id, name, date, amount, type,
+      needs_review, currency, amount_usd, exchange_rate,
+      receivable, received, emergency, emergency_settled,
+      loan, loan_settled, loan_id, created_at, updated_at
+    )
+    VALUES (
+      ${id},
+      ${userId},
+      ${opts.categoryId ?? null},
+      ${accountId},
+      ${opts.name},
+      ${today},
+      ${opts.clpAmount},
+      ${opts.type},
+      false,
+      ${opts.currency ?? 'CLP'},
+      ${opts.usdAmount ?? null},
+      ${opts.exchangeRate ?? null},
+      false,
+      false,
+      ${opts.emergency ?? false},
+      false,
+      ${opts.loan ?? false},
+      false,
+      ${opts.loanId ?? null},
+      ${now},
+      ${now}
+    )
+  `
+  return id
+}
+
+export async function seedUsdReviewMovement(userId: string, accountId: string | null, name: string, opts: {
+  clpAmount: number
+  usdAmount: number
+  exchangeRate: number
+  type?: 'income' | 'expense'
+}): Promise<string> {
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  const id = `rev-usd-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  await sql`
+    INSERT INTO movements (
+      id, user_id, account_id, name, date, amount, type,
+      needs_review, currency, amount_usd, exchange_rate,
+      receivable, received, created_at, updated_at
+    )
+    VALUES (
+      ${id},
+      ${userId},
+      ${accountId},
+      ${name},
+      ${today},
+      ${opts.clpAmount},
+      ${opts.type ?? 'expense'},
+      true,
+      'USD',
+      ${opts.usdAmount},
+      ${opts.exchangeRate},
+      false,
+      false,
+      ${now},
+      ${now}
+    )
   `
   return id
 }

@@ -18,6 +18,7 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
       id: movements.id,
       name: movements.name,
       amount: movements.amount,
+      amountUsd: movements.amountUsd,
       date: movements.date,
       currency: movements.currency,
       accountBankName: accounts.bankName,
@@ -29,11 +30,25 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
     .where(and(
       eq(movements.userId, session.id),
       eq(movements.type, 'expense'),
+      eq(movements.needsReview, false),
+      eq(movements.receivable, false),
+      eq(movements.emergency, false),
+      eq(movements.loan, false),
       isNull(movements.loanId),
       isNull(movements.transferId),
+      isNull(movements.transferPairId),
+      isNull(movements.receivableId),
     ))
     .orderBy(desc(movements.date), desc(movements.createdAt))
     .limit(30)
 
-  return <LoanDetailClient loan={loan} candidateExpenses={candidateExpenses} />
+  const loanCurrency = loan.currency as 'CLP' | 'USD'
+  const displayCandidateExpenses = candidateExpenses
+    .filter((expense) => loanCurrency === 'CLP' || expense.amountUsd != null)
+    .map((expense) => ({
+      ...expense,
+      amount: loanCurrency === 'USD' && expense.amountUsd != null ? expense.amountUsd : expense.amount,
+    }))
+
+  return <LoanDetailClient loan={loan} candidateExpenses={displayCandidateExpenses} />
 }

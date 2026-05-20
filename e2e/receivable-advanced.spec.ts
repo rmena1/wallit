@@ -107,6 +107,57 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     await screenshot(page, 'recv-unmark-06-still-exists')
   })
 
+  test('receivable payment action opens payment flow without navigating to edit', async ({ page }) => {
+    const email = await registerUser(page)
+    await ensureAccount(page)
+
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const accountId = await getFirstAccountId(userId)
+    await seedReceivable(userId, accountId, 'Sofía me debe entrada', 1800000)
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByText('Sofía me debe entrada')).toBeVisible({ timeout: 5000 })
+    await expect(page.locator('button button')).toHaveCount(0)
+
+    await page.getByRole('button', { name: /Marcar como cobrado Sofía me debe entrada/i }).click()
+    expect(new URL(page.url()).pathname).toBe('/')
+    await expect(page.getByText('Cobrar gasto')).toBeVisible({ timeout: 3000 })
+    await expect(page.getByText('Editar Movimiento')).not.toBeVisible()
+    await screenshot(page, 'recv-payment-action-dialog-no-edit')
+
+    await page.getByRole('button', { name: 'Cancelar' }).click()
+    await page.getByRole('button', { name: /Editar movimiento Sofía me debe entrada/i }).click()
+    await page.waitForURL('**/edit/**', { timeout: 5000 })
+    await expect(page.getByText('Editar Movimiento')).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'recv-payment-action-row-edit')
+  })
+
+  test('receivable edit flow cannot enable emergency workflow', async ({ page }) => {
+    const email = await registerUser(page)
+    await ensureAccount(page)
+
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const accountId = await getFirstAccountId(userId)
+    await seedReceivable(userId, accountId, 'Receivable cannot become emergency', 3200000)
+
+    await page.goto('/')
+    await expect(page.getByText('Receivable cannot become emergency')).toBeVisible({ timeout: 5000 })
+    await page.getByRole('button', { name: /Editar movimiento Receivable cannot become emergency/i }).click()
+    await expect(page.getByText('Editar Movimiento')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Gasto de emergencia')).not.toBeVisible()
+    await expect(page.locator('input[type="checkbox"]')).toHaveCount(0)
+    await screenshot(page, 'recv-no-emergency-checkbox')
+
+    await page.getByRole('button', { name: /Guardar cambios/i }).click()
+    await page.waitForURL('**/', { timeout: 5000 })
+    await page.goto('/emergency')
+    await expect(page.getByText('Receivable cannot become emergency')).not.toBeVisible({ timeout: 3000 })
+    await screenshot(page, 'recv-no-emergency-persisted')
+  })
+
   test('mark as received by linking to existing income', async ({ page }) => {
     // 1. Setup
     const email = await registerUser(page)
@@ -136,36 +187,33 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     await expect(page.getByText('Juan me debe almuerzo')).toBeVisible({ timeout: 5000 })
     await screenshot(page, 'recv-link-03-filtered')
 
-    // 5. Click the checkbox/button on the receivable to open payment dialog
-    const receivableRow = page.locator('div').filter({ hasText: /Juan me debe almuerzo/ }).first()
-    const checkBtn = receivableRow.locator('button').first()
-    if (await checkBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await checkBtn.click()
+    // 5. Click the receivable action button to open payment dialog
+    await page.getByRole('button', { name: /Marcar como cobrado Juan me debe almuerzo/i }).click()
+    expect(new URL(page.url()).pathname).toBe('/')
+    await expect(page.getByText('Cobrar gasto')).toBeVisible({ timeout: 3000 })
+    await screenshot(page, 'recv-link-04-payment-dialog')
+
+    // 6. Switch to "Vincular existente" tab
+    const linkTab = page.getByRole('button', { name: /Vincular existente/i })
+    if (await linkTab.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await linkTab.click()
       await page.waitForTimeout(500)
-      await screenshot(page, 'recv-link-04-payment-dialog')
+      await screenshot(page, 'recv-link-05-link-tab')
 
-      // 6. Switch to "Vincular existente" tab
-      const linkTab = page.getByRole('button', { name: /Vincular existente/i })
-      if (await linkTab.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await linkTab.click()
-        await page.waitForTimeout(500)
-        await screenshot(page, 'recv-link-05-link-tab')
+      // 7. Select the existing income
+      const incomeOption = page.getByText('Transferencia de Juan').last()
+      if (await incomeOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await incomeOption.click()
+        await screenshot(page, 'recv-link-06-income-selected')
 
-        // 7. Select the existing income
-        const incomeOption = page.getByText('Transferencia de Juan').last()
-        if (await incomeOption.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await incomeOption.click()
-          await screenshot(page, 'recv-link-06-income-selected')
+        // 8. Confirm
+        await page.getByRole('button', { name: /Confirmar/i }).click()
+        await page.waitForTimeout(1000)
+        await screenshot(page, 'recv-link-07-confirmed')
 
-          // 8. Confirm
-          await page.getByRole('button', { name: /Confirmar/i }).click()
-          await page.waitForTimeout(1000)
-          await screenshot(page, 'recv-link-07-confirmed')
-
-          // 9. Verify receivable is now marked as received (removed from filter)
-          await expect(page.getByText('Juan me debe almuerzo')).not.toBeVisible({ timeout: 3000 })
-          await screenshot(page, 'recv-link-08-removed-from-filter')
-        }
+        // 9. Verify receivable is now marked as received (removed from filter)
+        await expect(page.getByText('Juan me debe almuerzo')).not.toBeVisible({ timeout: 3000 })
+        await screenshot(page, 'recv-link-08-removed-from-filter')
       }
     }
   })
@@ -189,14 +237,10 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     await page.waitForTimeout(500)
     await screenshot(page, 'recv-cash-01-filtered')
 
-    // 3. Click the receivable checkbox button (the small yellow-bordered button)
-    // Find it by looking for the receivable card
+    // 3. Click the receivable action button
     await expect(page.getByText('Pedro me debe taxi')).toBeVisible({ timeout: 5000 })
-    
-    // The checkbox is the first button inside the movement card container
-    const movementCards = page.locator('div[style*="backgroundColor: rgb(42, 32, 0)"]').first()
-    const checkboxBtn = movementCards.locator('button').first()
-    
+
+    const checkboxBtn = page.getByRole('button', { name: /Marcar como cobrado Pedro me debe taxi/i })
     if (await checkboxBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await checkboxBtn.click()
       await page.waitForTimeout(500)
@@ -262,10 +306,9 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     // 3. Verify receivable is visible
     await expect(page.getByText('María me debe libro')).toBeVisible({ timeout: 5000 })
     
-    // 4. Click the checkbox button to open payment dialog
-    const movementCards = page.locator('div[style*="backgroundColor: rgb(42, 32, 0)"]').first()
-    const checkboxBtn = movementCards.locator('button').first()
-    
+    // 4. Click the receivable action button to open payment dialog
+    const checkboxBtn = page.getByRole('button', { name: /Marcar como cobrado María me debe libro/i })
+
     if (await checkboxBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await checkboxBtn.click()
       await page.waitForTimeout(500)

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { db, movements, categories, accounts } from '@/lib/db'
+import { movementLedger, type AmountInputMode } from '@/lib/domain/movement-ledger'
 import { eq, and, desc, sql } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth'
 
@@ -43,7 +44,7 @@ export async function getPendingReviewMovements() {
     .orderBy(desc(movements.date), desc(movements.createdAt))
 }
 
-export async function confirmMovement(id: string, data: {
+export async function confirmPendingAsReportable(id: string, data: {
   name: string
   date: string
   amount: number
@@ -53,328 +54,90 @@ export async function confirmMovement(id: string, data: {
   categoryId: string | null
   amountUsd: number | null
   exchangeRate: number | null
+  amountInputMode?: AmountInputMode
   time?: string | null
+  emergency?: boolean
+  loan?: boolean
 }) {
   const session = await requireAuth()
-
-  // Verify account belongs to the current user and get its currency (IDOR protection)
-  let accountCurrency: 'CLP' | 'USD' | null = null
-  if (data.accountId) {
-    const [ownedAccount] = await db
-      .select({ id: accounts.id, currency: accounts.currency })
-      .from(accounts)
-      .where(and(eq(accounts.id, data.accountId), eq(accounts.userId, session.id)))
-      .limit(1)
-    if (!ownedAccount) {
-      return { success: false, error: 'Invalid account' }
-    }
-    accountCurrency = ownedAccount.currency
+  const result = await movementLedger.confirmPendingAsReportable(session.id, id, {
+    ...data,
+    amountInputMode: data.amountInputMode ?? 'canonicalClp',
+  })
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/review')
+    revalidatePath('/emergency')
+    revalidatePath('/loans')
+    revalidatePath('/reports')
   }
-
-  // Verify category belongs to the current user (IDOR protection)
-  if (data.categoryId) {
-    const [ownedCategory] = await db
-      .select({ id: categories.id })
-      .from(categories)
-      .where(and(eq(categories.id, data.categoryId), eq(categories.userId, session.id)))
-      .limit(1)
-    if (!ownedCategory) {
-      return { success: false, error: 'Invalid category' }
-    }
-  }
-
-  // Handle currency conversion to ensure amountUsd is correctly set for USD accounts
-  // This mirrors the logic in createMovement to prevent balance calculation bugs
-  let finalAmount = data.amount
-  let finalAmountUsd = data.amountUsd
-  let finalExchangeRate = data.exchangeRate
-
-  if (data.currency === 'USD') {
-    // USD input - convert to CLP for storage, keep USD in amountUsd
-    if (!data.amountUsd) {
-      try {
-        const { convertUsdToClp } = await import('@/lib/exchange-rate')
-        const conversion = await convertUsdToClp(data.amount)
-        finalAmountUsd = data.amount
-        finalAmount = conversion.clpCents
-        finalExchangeRate = conversion.rate
-      } catch {
-        return { success: false, error: 'Error al obtener tipo de cambio' }
-      }
-    }
-  } else if (accountCurrency === 'USD' && data.currency === 'CLP') {
-    // CLP input on USD account - convert CLP to USD for amountUsd
-    // This ensures balance calculation works correctly for USD accounts
-    if (!data.amountUsd) {
-      try {
-        const { getUsdToClpRate } = await import('@/lib/exchange-rate')
-        const rate = await getUsdToClpRate()
-        finalAmountUsd = Math.round(data.amount * 100 / rate) // Convert CLP cents to USD cents
-        finalExchangeRate = rate
-      } catch {
-        return { success: false, error: 'Error al obtener tipo de cambio' }
-      }
-    }
-  }
-
-  await db
-    .update(movements)
-    .set({
-      name: data.name,
-      date: data.date,
-      amount: finalAmount,
-      type: data.type,
-      currency: data.currency,
-      accountId: data.accountId,
-      categoryId: data.categoryId,
-      amountUsd: finalAmountUsd,
-      exchangeRate: finalExchangeRate,
-      time: data.time,
-      needsReview: false,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
-  
-  revalidatePath('/')
-  return { success: true }
+  return result
 }
 
-export async function deleteReviewMovement(id: string) {
+export async function deletePendingMovement(id: string) {
   const session = await requireAuth()
-  await db.delete(movements).where(and(eq(movements.id, id), eq(movements.userId, session.id)))
-  revalidatePath('/')
-  return { success: true }
+  const result = await movementLedger.deletePendingMovement(session.id, id)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/review')
+  }
+  return result
 }
 
 export async function markAsReceivable(id: string, reminderText: string) {
   const session = await requireAuth()
-  await db
-    .update(movements)
-    .set({
-      name: reminderText,
-      receivable: true,
-      needsReview: false,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
-  revalidatePath('/')
-  return { success: true }
+  const result = await movementLedger.markAsReceivable(session.id, id, reminderText)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/review')
+    revalidatePath('/receivables')
+    revalidatePath('/reports')
+  }
+  return result
 }
 
 export async function unmarkReceivable(id: string) {
   const session = await requireAuth()
-  
-  // Delete any payment income linked to this receivable
-  await db
-    .delete(movements)
-    .where(and(eq(movements.receivableId, id), eq(movements.userId, session.id)))
-  
-  // Unmark the receivable
-  await db
-    .update(movements)
-    .set({
-      receivable: false,
-      received: false,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
-  revalidatePath('/')
-  revalidatePath('/receivables')
-  return { success: true }
+  const result = await movementLedger.unmarkReceivable(session.id, id)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/receivables')
+    revalidatePath('/reports')
+  }
+  return result
 }
 
 export async function splitMovement(originalId: string, splits: { name: string; amount: number }[]) {
   const session = await requireAuth()
-
-  // Validate splits input
-  if (!Array.isArray(splits) || splits.length < 2 || splits.length > 20) {
-    return { success: false, error: 'Splits must contain between 2 and 20 items' }
+  const result = await movementLedger.splitMovement(session.id, originalId, splits)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/review')
+    revalidatePath('/reports')
   }
-
-  for (const split of splits) {
-    if (typeof split.name !== 'string' || split.name.trim().length === 0 || split.name.length > 200) {
-      return { success: false, error: 'Each split must have a valid name (1-200 chars)' }
-    }
-    if (typeof split.amount !== 'number' || !Number.isInteger(split.amount) || split.amount <= 0) {
-      return { success: false, error: 'Each split amount must be a positive integer' }
-    }
-  }
-  
-  // Get original movement
-  const [original] = await db
-    .select()
-    .from(movements)
-    .where(and(eq(movements.id, originalId), eq(movements.userId, session.id)))
-  
-  if (!original) return { success: false, error: 'Movement not found' }
-
-  const { generateId } = await import('@/lib/utils')
-  const totalOriginal = original.amount
-  
-  // Validate split amounts sum to original
-  const splitTotal = splits.reduce((sum, s) => sum + s.amount, 0)
-  if (splitTotal !== totalOriginal) {
-    return { success: false, error: 'Split amounts must equal the original amount' }
-  }
-  
-  // Calculate amountUsd for each split with remainder-based rounding
-  // This ensures the sum of split USD amounts equals the original exactly
-  let usdSplits: (number | null)[] = []
-  if (original.currency === 'USD' && original.amountUsd) {
-    const originalUsd = original.amountUsd
-    let usdAllocated = 0
-    for (let i = 0; i < splits.length; i++) {
-      if (i === splits.length - 1) {
-        // Last split gets the remainder to ensure exact sum
-        usdSplits.push(originalUsd - usdAllocated)
-      } else {
-        const proportion = totalOriginal !== 0 ? splits[i].amount / totalOriginal : 0
-        const usdAmount = Math.round(originalUsd * proportion)
-        usdSplits.push(usdAmount)
-        usdAllocated += usdAmount
-      }
-    }
-  } else {
-    usdSplits = splits.map(() => null)
-  }
-
-  // Use a transaction to ensure atomicity
-  await db.transaction(async (tx) => {
-    // Delete original
-    await tx.delete(movements).where(eq(movements.id, originalId))
-    
-    // Create split movements
-    for (let i = 0; i < splits.length; i++) {
-      const split = splits[i]
-      await tx.insert(movements).values({
-        id: generateId(),
-        userId: session.id,
-        categoryId: original.categoryId,
-        accountId: original.accountId,
-        name: split.name,
-        date: original.date,
-        amount: split.amount,
-        type: original.type,
-        currency: original.currency,
-        amountUsd: usdSplits[i],
-        exchangeRate: original.exchangeRate,
-        time: original.time,
-        originalName: original.originalName,
-        needsReview: true,
-        receivable: false,
-        received: false,
-        // Use a future createdAt so they sort first in review queue
-        createdAt: new Date(Date.now() + 1000),
-        updatedAt: new Date(),
-      })
-    }
-  })
-  
-  revalidatePath('/')
-  revalidatePath('/review')
-  return { success: true }
+  return result
 }
 
-export async function markAsReceived(id: string, paymentAccountId?: string) {
+export async function settleReceivableWithNewMovement(id: string, paymentAccountId?: string) {
   const session = await requireAuth()
-  
-  // Get the original receivable movement
-  const [original] = await db
-    .select()
-    .from(movements)
-    .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
-  
-  if (!original) return { success: false, error: 'Movement not found' }
-  
-  // Verify the payment account belongs to the current user (IDOR protection)
-  if (paymentAccountId) {
-    const [ownedAccount] = await db
-      .select({ id: accounts.id })
-      .from(accounts)
-      .where(and(eq(accounts.id, paymentAccountId), eq(accounts.userId, session.id)))
-      .limit(1)
-    if (!ownedAccount) {
-      return { success: false, error: 'Invalid account' }
-    }
+  const result = await movementLedger.settleReceivableWithNewMovement(session.id, id, paymentAccountId)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/receivables')
+    revalidatePath('/reports')
   }
-  
-  const { generateId } = await import('@/lib/utils')
-  
-  // Use a transaction to ensure atomicity
-  await db.transaction(async (tx) => {
-    // Mark the original as received
-    await tx
-      .update(movements)
-      .set({ received: true, updatedAt: new Date() })
-      .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
-    
-    // If an account was selected (not cash), create an income movement
-    if (paymentAccountId) {
-      await tx.insert(movements).values({
-        id: generateId(),
-        userId: session.id,
-        categoryId: original.categoryId,
-        accountId: paymentAccountId,
-        name: `Cobro: ${original.name}`,
-        date: new Date().toISOString().slice(0, 10),
-        amount: original.amount,
-        type: 'income',
-        currency: original.currency,
-        amountUsd: original.amountUsd,
-        exchangeRate: original.exchangeRate,
-        time: original.time,
-        receivable: false,
-        received: false,
-        receivableId: id, // link to original receivable
-        needsReview: false,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-    }
-  })
-  
-  revalidatePath('/')
-  return { success: true }
+  return result
 }
 
-export async function markAsReceivedWithExisting(receivableId: string, existingIncomeId: string) {
+export async function settleReceivableWithExistingMovement(receivableId: string, existingIncomeId: string) {
   const session = await requireAuth()
-  
-  // Verify both movements exist and belong to user
-  const [receivable] = await db
-    .select()
-    .from(movements)
-    .where(and(eq(movements.id, receivableId), eq(movements.userId, session.id)))
-  
-  const [income] = await db
-    .select()
-    .from(movements)
-    .where(and(eq(movements.id, existingIncomeId), eq(movements.userId, session.id)))
-  
-  if (!receivable) return { success: false, error: 'Receivable not found' }
-  if (!income) return { success: false, error: 'Income movement not found' }
-  if (income.type !== 'income') return { success: false, error: 'Selected movement is not an income' }
-  if (income.loan) return { success: false, error: 'Selected movement is marked as a loan' }
-  if (income.receivableId) return { success: false, error: 'Income is already linked to another receivable' }
-  
-  // Use a transaction to ensure atomicity
-  await db.transaction(async (tx) => {
-    // Mark the receivable as received
-    await tx
-      .update(movements)
-      .set({ received: true, updatedAt: new Date() })
-      .where(and(eq(movements.id, receivableId), eq(movements.userId, session.id)))
-    
-    // Link the existing income to this receivable
-    await tx
-      .update(movements)
-      .set({ receivableId: receivableId, updatedAt: new Date() })
-      .where(and(eq(movements.id, existingIncomeId), eq(movements.userId, session.id)))
-  })
-  
-  revalidatePath('/')
-  revalidatePath('/receivables')
-  return { success: true }
+  const result = await movementLedger.settleReceivableWithExistingMovement(session.id, receivableId, existingIncomeId)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/receivables')
+    revalidatePath('/reports')
+  }
+  return result
 }
 
 export async function getAccountsAndCategories() {

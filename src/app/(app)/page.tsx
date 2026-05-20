@@ -1,11 +1,12 @@
 import { getSession } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { db, movements, categories, accounts } from '@/lib/db'
-import { eq, desc, sql, and, isNull, gte } from 'drizzle-orm'
+import { eq, desc, sql, and, gte } from 'drizzle-orm'
 import { getAccountBalances, getNetLiquidity, type AccountWithBalanceSerialized, type NetLiquidityData } from '@/lib/actions/balances'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { getUnsettledEmergencyCount } from '@/lib/actions/emergency'
 import { getUnsettledLoanCount } from '@/lib/actions/loans'
+import { reportableMovementSqlFilters } from '@/lib/domain/reporting'
 import { HomePage } from './home-client'
 
 export default async function Home() {
@@ -20,6 +21,8 @@ export default async function Home() {
   
   // Only fetch USD rate if user has at least one USD account (avoids unnecessary API calls)
   const hasUsdAccount = accountBalances.some(a => a.currency === 'USD')
+
+  const reportableMovementWhere = sql.join(reportableMovementSqlFilters(session.id), sql` AND `)
 
   // Run remaining data fetches in parallel for faster page load
   const [
@@ -70,14 +73,14 @@ export default async function Home() {
       .orderBy(desc(movements.date), desc(movements.createdAt))
       .limit(20),
 
-    // Totals (excluding transfers and receivables)
+    // Totals for confirmed reportable movements only
     db
       .select({
-        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN type = 'income' AND (${movements.receivable} = false OR ${movements.receivable} IS NULL) AND (${movements.receivableId} IS NULL) AND (${movements.transferId} IS NULL) AND (${movements.emergency} = false OR ${movements.emergency} IS NULL) AND (${movements.loan} = false OR ${movements.loan} IS NULL) AND (${movements.loanId} IS NULL) THEN amount ELSE 0 END), 0)`,
-        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN type = 'expense' AND (${movements.receivable} = false OR ${movements.receivable} IS NULL) AND (${movements.transferId} IS NULL) AND (${movements.emergency} = false OR ${movements.emergency} IS NULL) AND (${movements.loanId} IS NULL) THEN amount ELSE 0 END), 0)`,
+        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN ${movements.amount} ELSE 0 END), 0)`,
+        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN ${movements.amount} ELSE 0 END), 0)`,
       })
       .from(movements)
-      .where(eq(movements.userId, session.id)),
+      .where(reportableMovementWhere),
 
     // Pending review count
     db
@@ -91,7 +94,7 @@ export default async function Home() {
     // Unsettled loan count
     getUnsettledLoanCount().catch(() => 0),
 
-    // Recent unlinked incomes (last 30 days, no receivableId, type=income)
+    // Recent confirmed reportable incomes eligible for receivable matching
     db
       .select({
         id: movements.id,
@@ -110,13 +113,8 @@ export default async function Home() {
       .leftJoin(categories, eq(movements.categoryId, categories.id))
       .leftJoin(accounts, eq(movements.accountId, accounts.id))
       .where(and(
-        eq(movements.userId, session.id),
+        ...reportableMovementSqlFilters(session.id),
         eq(movements.type, 'income'),
-        isNull(movements.receivableId),
-        isNull(movements.loanId),
-        eq(movements.receivable, false),
-        eq(movements.loan, false),
-        eq(movements.needsReview, false),
         gte(movements.date, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)),
       ))
       .orderBy(desc(movements.date), desc(movements.createdAt))

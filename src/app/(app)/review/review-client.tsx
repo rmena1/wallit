@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { confirmMovement, deleteReviewMovement, getPendingReviewMovements, markAsReceivable, splitMovement } from '@/lib/actions/review'
-import { convertToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
+import { confirmPendingAsReportable, deletePendingMovement, getPendingReviewMovements, markAsReceivable, splitMovement } from '@/lib/actions/review'
+import { confirmPendingAsTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { formatMovementDisplayAmount, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
@@ -79,6 +79,8 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
   const [formAmountUsd, setFormAmountUsd] = useState(current?.amountUsd ? centsToDisplay(current.amountUsd) : '')
   const [formExchangeRate, setFormExchangeRate] = useState(current?.exchangeRate ? (current.exchangeRate / 100).toString() : '')
   const [formTime, setFormTime] = useState(current?.time ?? '')
+  const [formEmergency, setFormEmergency] = useState(false)
+  const [formLoan, setFormLoan] = useState(false)
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReceivable, setShowReceivable] = useState(false)
@@ -99,6 +101,15 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
   useEffect(() => {
     getCurrentExchangeRate().then(setExchangeRate).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (formCurrency !== 'USD' || !exchangeRate || formAmountUsd || formExchangeRate) return
+    const clpCents = parseMoney(formAmount)
+    if (clpCents <= 0) return
+    const usdCents = Math.round(clpCents * 100 / exchangeRate)
+    setFormAmountUsd(centsToDisplay(usdCents))
+    setFormExchangeRate((exchangeRate / 100).toFixed(2))
+  }, [exchangeRate, formAmount, formAmountUsd, formCurrency, formExchangeRate])
 
   const batchDone = currentIndex >= total
   const done = batchDone && allPendingReviewed
@@ -140,6 +151,8 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     setFormAmountUsd(m.amountUsd ? centsToDisplay(m.amountUsd) : '')
     setFormExchangeRate(m.exchangeRate ? (m.exchangeRate / 100).toString() : '')
     setFormTime(m.time ?? '')
+    setFormEmergency(false)
+    setFormLoan(false)
     setError(null)
     // Reset transfer mode when moving to new movement
     setIsTransferMode(false)
@@ -165,7 +178,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
   useEffect(() => {
     if (!isTransferMode || !transferToAccountId || !formAmount) return
     
-    const fromCents = parseMoney(formAmount)
+    const fromCents = fromCurrency === 'USD' ? parseMoney(formAmountUsd) : parseMoney(formAmount)
     if (fromCents <= 0) return
     
     if (currenciesDifferTransfer && exchangeRate) {
@@ -181,7 +194,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     } else if (!currenciesDifferTransfer) {
       setTransferToAmount(formAmount)
     }
-  }, [isTransferMode, formAmount, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
+  }, [isTransferMode, formAmount, formAmountUsd, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
 
   function loadMovement(idx: number) {
     const m = reviewMovements[idx]
@@ -196,6 +209,8 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     setFormAmountUsd(m.amountUsd ? centsToDisplay(m.amountUsd) : '')
     setFormExchangeRate(m.exchangeRate ? (m.exchangeRate / 100).toString() : '')
     setFormTime(m.time ?? '')
+    setFormEmergency(false)
+    setFormLoan(false)
     setError(null)
     // Reset transfer mode
     setIsTransferMode(false)
@@ -243,24 +258,28 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
           setLoading(false)
           return
         }
+        const sourceAmountCents = fromCurrency === 'USD' ? parseMoney(formAmountUsd) : amountCents
+        if (sourceAmountCents <= 0) {
+          setError('Monto origen inválido')
+          setLoading(false)
+          return
+        }
         
-        // First confirm the movement with updated data
-        await confirmMovement(current.id, {
-          name: formName.trim(),
-          date: formDate,
-          amount: amountCents,
-          type: 'expense', // Transfers are always expense from origin
-          currency: formCurrency,
-          accountId: formAccountId,
-          categoryId: null, // Transfers don't have category
-          amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
-          exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
-          time: formTime || null,
-        })
-        
-        // Then convert to transfer
-        const result = await convertToTransfer({
+        const result = await confirmPendingAsTransfer({
           movementId: current.id,
+          source: {
+            name: formName.trim(),
+            date: formDate,
+            amount: sourceAmountCents,
+            type: 'expense', // Transfers are always expense from origin
+            currency: fromCurrency,
+            accountId: formAccountId,
+            categoryId: null, // Transfers don't have category
+            amountInputMode: 'inputCurrency',
+            amountUsd: null,
+            exchangeRate: fromCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
+            time: formTime || null,
+          },
           toAccountId: transferToAccountId,
           toAmount: toAmountCents,
           toCurrency: toCurrencyTransfer,
@@ -278,7 +297,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
       }
       
       // Normal confirmation
-      await confirmMovement(current.id, {
+      const result = await confirmPendingAsReportable(current.id, {
         name: formName.trim(),
         date: formDate,
         amount: amountCents,
@@ -286,10 +305,18 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
         currency: formCurrency,
         accountId: formAccountId || null,
         categoryId: formCategoryId || null,
+        amountInputMode: 'canonicalClp',
         amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
         exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
         time: formTime || null,
+        emergency: formType === 'expense' ? formEmergency : false,
+        loan: formType === 'income' ? formLoan : false,
       })
+      if (!result.success) {
+        setError(result.error || 'Error al confirmar')
+        setLoading(false)
+        return
+      }
       goNext(true)
     } catch {
       setError('Error al confirmar')
@@ -304,7 +331,12 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     if (!current) return
     setLoading(true)
     try {
-      await deleteReviewMovement(current.id)
+      const result = await deletePendingMovement(current.id)
+      if (!result.success) {
+        setError(result.error || 'Error al eliminar')
+        setLoading(false)
+        return
+      }
       setShowDeleteConfirm(false)
       goNext(false)
     } catch {
@@ -318,7 +350,12 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
     if (!current || !receivableText.trim()) return
     setLoading(true)
     try {
-      await markAsReceivable(current.id, receivableText.trim())
+      const result = await markAsReceivable(current.id, receivableText.trim())
+      if (!result.success) {
+        setError(result.error || 'Error al marcar como por cobrar')
+        setLoading(false)
+        return
+      }
       setShowReceivable(false)
       setReceivableText('')
       goNext(true)
@@ -368,7 +405,7 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
       }
       setShowSplit(false)
       router.refresh()
-      window.location.reload()
+      goNext(false)
     } catch (err) {
       setError(`Error al dividir: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -510,9 +547,13 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                   if (t === 'transfer') {
                     setIsTransferMode(true)
                     setFormType('expense') // Transfers start as expense
+                    setFormEmergency(false)
+                    setFormLoan(false)
                   } else {
                     setIsTransferMode(false)
                     setFormType(t)
+                    if (t !== 'expense') setFormEmergency(false)
+                    if (t !== 'income') setFormLoan(false)
                   }
                 }} style={{
                   flex: 1, padding: '6px 0', borderRadius: 6, border: 'none',
@@ -537,8 +578,9 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
             {/* Row: Monto | Moneda */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px', gap: 6 }}>
               <div>
-                <label style={labelStyle}>Monto</label>
+                <label style={labelStyle}>{formCurrency === 'USD' ? 'Monto CLP equivalente' : 'Monto'}</label>
                 <input value={formAmount} onChange={e => setFormAmount(e.target.value)}
+                  aria-label={formCurrency === 'USD' ? 'Monto CLP equivalente' : 'Monto'}
                   inputMode="decimal" style={inputStyle} />
               </div>
               <div>
@@ -556,11 +598,13 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
                 <div>
                   <label style={labelStyle}>Monto USD</label>
                   <input value={formAmountUsd} onChange={e => setFormAmountUsd(e.target.value)}
+                    aria-label="Monto USD"
                     inputMode="decimal" style={inputStyle} />
                 </div>
                 <div>
-                  <label style={labelStyle}>Tipo cambio</label>
+                  <label style={labelStyle}>Tipo cambio CLP/USD</label>
                   <input value={formExchangeRate} onChange={e => setFormExchangeRate(e.target.value)}
+                    aria-label="Tipo cambio CLP/USD"
                     inputMode="decimal" style={inputStyle} />
                 </div>
               </div>
@@ -690,6 +734,54 @@ export function ReviewClient({ movements, accounts, categories }: Props) {
               <div style={{ fontSize: 11, color: '#9ca3af', padding: '4px 8px', backgroundColor: '#111', borderRadius: 6 }}>
                 Original: {current!.originalName}
               </div>
+            )}
+
+            {!isTransferMode && formType === 'expense' && (
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
+                backgroundColor: formEmergency ? '#2a1a1a' : 'transparent',
+                border: formEmergency ? '1px solid #dc2626' : '1px solid #2a2a2a',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={formEmergency}
+                  onChange={e => setFormEmergency(e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: '#dc2626', cursor: 'pointer' }}
+                />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: formEmergency ? '#f87171' : '#e5e5e5' }}>
+                    🚨 Gasto de emergencia
+                  </div>
+                  <div style={{ fontSize: 10, color: '#a1a1aa' }}>
+                    Queda fuera de reportes y se puede saldar con abonos.
+                  </div>
+                </div>
+              </label>
+            )}
+
+            {!isTransferMode && formType === 'income' && (
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
+                backgroundColor: formLoan ? '#241a35' : 'transparent',
+                border: formLoan ? '1px solid #8b5cf6' : '1px solid #2a2a2a',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={formLoan}
+                  onChange={e => setFormLoan(e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: '#8b5cf6', cursor: 'pointer' }}
+                />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: formLoan ? '#c4b5fd' : '#e5e5e5' }}>
+                    🤝 Préstamo
+                  </div>
+                  <div style={{ fontSize: 10, color: '#a1a1aa' }}>
+                    Queda fuera de reportes y se puede saldar con gastos vinculados.
+                  </div>
+                </div>
+              </label>
             )}
           </div>
         </div>

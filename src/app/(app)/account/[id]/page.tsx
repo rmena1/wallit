@@ -135,6 +135,7 @@ export default async function AccountDetailPage({ params }: Props) {
     balanceHistory = [...investmentSnapshots].reverse().map((s) => ({ date: s.date, balance: s.value, currency: account.currency }))
   } else {
     // Get movements from last 180 days sorted by date asc for balance history
+    // eslint-disable-next-line react-hooks/purity -- server-rendered data query intentionally uses current date
     const cutoffDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const allMovements = await db.select({ date: movements.date, amount: movements.amount, type: movements.type, amountUsd: movements.amountUsd }).from(movements).where(and(eq(movements.accountId, id), eq(movements.userId, session.id), gte(movements.date, cutoffDate))).orderBy(asc(movements.date), asc(movements.createdAt))
     let running = account.initialBalance

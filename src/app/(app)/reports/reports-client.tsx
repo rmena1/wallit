@@ -602,6 +602,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
   const balanceChart = useMemo(() =>
     data ? buildBalanceChart(data.balanceDailyData, startDate, endDate, data.openingBalance) : [],
     [data, startDate, endDate])
+  const reportCurrency = data?.balanceCurrency ?? 'CLP'
   const categorySheetTotal = useMemo(() => {
     const loadedTotal = categoryMovements.reduce((sum, movement) => sum + movement.amount, 0)
     return loadedTotal || selectedCategory?.total || 0
@@ -817,7 +818,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                   padding: '14px 8px', border: '1px solid #2a2a2a', textAlign: 'center',
                 }}>
                   <div style={{ fontSize: 11, color: '#a1a1aa', marginBottom: 4 }}>{c.label}</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: c.color }}>{formatCurrency(Math.abs(c.value), 'CLP')}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: c.color }}>{formatCurrency(Math.abs(c.value), reportCurrency)}</div>
                 </div>
               ))}
             </div>
@@ -828,7 +829,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                 <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: 0 }}>📉 Gastos</h2>
                 {expenseChart.trendTotal !== null && (
                   <span style={{ fontSize: 12, color: '#f59e0b' }}>
-                    Tendencia lineal: {formatCurrency(expenseChart.trendTotal, 'CLP')}
+                    Tendencia lineal: {formatCurrency(expenseChart.trendTotal, reportCurrency)}
                   </span>
                 )}
               </div>
@@ -852,7 +853,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                           interval={Math.max(0, Math.floor(expenseChart.data.length / 6) - 1)} />
                         <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45} domain={[0, 'auto']}
                           tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                        <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#ef4444" currency="CLP" />} />
+                        <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#ef4444" currency={reportCurrency} />} />
                         <Line type="monotone" dataKey="actual" stroke="#ef4444" strokeWidth={2} dot={false} connectNulls={false} />
                         <Line type="linear" dataKey="trend" stroke="#eab308" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />
                       </LineChart>
@@ -878,7 +879,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} width={45}
                         tickFormatter={(v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                      <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#22c55e" currency="CLP" />} />
+                      <Tooltip content={(props: TooltipContentProps<number, string>) => <ChartTooltip {...props} color="#22c55e" currency={reportCurrency} />} />
                       <Line type="monotone" dataKey="income" stroke="#22c55e" strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
@@ -946,7 +947,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                             <span style={{ fontSize: 11, color: '#9ca3af', flexShrink: 0 }}>({cat.count})</span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                            <span style={{ fontSize: 14, fontWeight: 600, color: '#f87171' }}>{formatCurrency(cat.total, 'CLP')}</span>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: '#f87171' }}>{formatCurrency(cat.total, reportCurrency)}</span>
                             <span style={{ fontSize: 16, color: '#71717a' }}>›</span>
                           </div>
                         </div>
@@ -1061,7 +1062,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: 11, color: '#71717a', marginBottom: 4 }}>Total</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: '#f87171' }}>{formatCurrency(categorySheetTotal, 'CLP')}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#f87171' }}>{formatCurrency(categorySheetTotal, reportCurrency)}</div>
               </div>
             </div>
 
@@ -1135,7 +1136,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                         </div>
                       </div>
                       <div style={{ fontSize: 15, fontWeight: 700, color: '#f87171', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                        -{formatCurrency(movement.amount, 'CLP')}
+                        -{formatCurrency(movement.amount, reportCurrency)}
                       </div>
                     </div>
                   ))}

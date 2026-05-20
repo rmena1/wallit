@@ -1,7 +1,7 @@
-import { test, expect } from '@playwright/test'
-import { registerAndLogin, screenshot, TEST_PASSWORD } from './helpers'
+import { test, expect, type Page } from '@playwright/test'
+import { registerAndLogin, screenshot } from './helpers'
 
-async function createTwoAccounts(page: any) {
+async function createTwoAccounts(page: Page) {
   await page.goto('/settings')
   await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: 5000 })
 
@@ -32,7 +32,7 @@ async function createTwoAccounts(page: any) {
   await page.waitForLoadState('networkidle')
 }
 
-async function createUsdAndClpAccounts(page: any) {
+async function createUsdAndClpAccounts(page: Page) {
   await page.goto('/settings')
   await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: 5000 })
 

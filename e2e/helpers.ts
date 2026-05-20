@@ -62,6 +62,7 @@ export async function registerAndLogin(page: Page) {
     waitForHome(page),
     page.getByRole('button', { name: 'Crear cuenta' }).click(),
   ])
+  return email
 }
 
 type CreateAccountOptions = {
@@ -79,7 +80,7 @@ export async function createAccount(page: Page, opts: CreateAccountOptions = {})
 
   await openSettings(page)
 
-  const accountDetails = page.getByText(new RegExp(`···${escapeRegExp(lastFourDigits)}`)).first()
+  const accountDetails = page.getByTestId('settings-account-row').filter({ hasText: new RegExp(`···${escapeRegExp(lastFourDigits)}`) }).first()
   if (await accountDetails.isVisible().catch(() => false)) {
     return
   }
@@ -103,7 +104,42 @@ export async function createAccount(page: Page, opts: CreateAccountOptions = {})
 
   await page.reload()
   await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: DEFAULT_TIMEOUT })
-  await expect(page.getByText(new RegExp(`···${escapeRegExp(lastFourDigits)}`)).first()).toBeVisible({ timeout: DEFAULT_TIMEOUT })
+  await expectAccountVisibleInSettings(page, lastFourDigits)
+}
+
+export async function expectAccountVisibleInSettings(page: Page, lastFourDigits: string) {
+  const accountRow = () => page
+    .getByTestId('settings-account-row')
+    .filter({ hasText: new RegExp(`···${escapeRegExp(lastFourDigits)}`) })
+    .first()
+
+  if (await accountRow().isVisible().catch(() => false)) {
+    return accountRow()
+  }
+
+  // Account creation is a server action followed by router.refresh(); in E2E the
+  // client can briefly render the stale settings payload. A reload gives the
+  // server-rendered list a deterministic chance to catch up without relying on
+  // hidden select-option text or sleeps.
+  await page.reload()
+  await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: DEFAULT_TIMEOUT })
+  await expect(accountRow()).toBeVisible({ timeout: DEFAULT_TIMEOUT })
+  return accountRow()
+}
+
+export async function expectCategoryVisibleInSettings(page: Page, name: string) {
+  const categoryText = () => page.getByText(name, { exact: true }).first()
+
+  if (await categoryText().isVisible().catch(() => false)) {
+    return categoryText()
+  }
+
+  // Same server-action/router.refresh timing as accounts: reload once to avoid
+  // asserting against a stale settings payload.
+  await page.reload()
+  await expect(page.getByText('Categorías')).toBeVisible({ timeout: DEFAULT_TIMEOUT })
+  await expect(categoryText()).toBeVisible({ timeout: DEFAULT_TIMEOUT })
+  return categoryText()
 }
 
 export async function ensureAccount(page: Page) {

@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useMemo, memo, useCallback, useEffect, useRef } from 'react'
+import { useState, memo, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { logout } from '@/lib/actions/auth'
-import { deleteMovement, getMovementsPaginated } from '@/lib/actions/movements'
-import { markAsReceived, markAsReceivedWithExisting } from '@/lib/actions/review'
+import { getMovementsPaginated } from '@/lib/actions/movements'
+import { settleReceivableWithNewMovement, settleReceivableWithExistingMovement } from '@/lib/actions/review'
 import { formatDateDisplay, formatCurrency, formatMovementDisplayAmount } from '@/lib/utils'
 import type { AccountWithBalanceSerialized as AccountWithBalance, NetLiquidityData } from '@/lib/actions/balances'
 
@@ -72,16 +73,6 @@ interface HomePageProps {
   unsettledEmergencyCount: number
   unsettledLoanCount: number
 }
-
-function TrashIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-    </svg>
-  )
-}
-
 // Memoized movement card component to prevent unnecessary re-renders
 interface MovementCardProps {
   movement: MovementWithCategory
@@ -96,33 +87,32 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
 
   return (
     <div
-      onClick={() => onNavigate(m.id)}
       style={{
         backgroundColor: isTransfer ? '#1a1a2a' : m.receivable && !m.received ? '#2a2000' : m.received ? '#1a1a1a' : '#1a1a1a',
         borderRadius: 12,
         padding: '12px 14px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        display: 'flex', alignItems: 'center', gap: 10,
         border: isTransfer ? '1px solid #3b4d8a' : m.receivable && !m.received ? '1px solid #854d0e' : '1px solid #2a2a2a',
         opacity: isMarking ? 0.4 : m.received ? 0.5 : 1,
         transition: 'opacity 0.2s ease',
-        textDecoration: m.received ? 'line-through' : 'none',
-        cursor: 'pointer',
       }}
     >
+      {m.receivable && !m.received && !isTransfer && (
+        <button
+          type="button"
+          aria-label={`Marcar como cobrado ${m.name}`}
+          onClick={() => onOpenPaymentDialog(m.id)}
+          disabled={isMarking}
+          style={{
+            width: 24, height: 24, borderRadius: 6,
+            border: '2px solid #fbbf24', backgroundColor: 'transparent',
+            cursor: isMarking ? 'not-allowed' : 'pointer', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          title="Marcar como cobrado"
+        />
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-        {m.receivable && !m.received && !isTransfer && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onOpenPaymentDialog(m.id) }}
-            disabled={isMarking}
-            style={{
-              width: 24, height: 24, borderRadius: 6,
-              border: '2px solid #fbbf24', backgroundColor: 'transparent',
-              cursor: 'pointer', flexShrink: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-            title="Marcar como cobrado"
-          />
-        )}
         {m.received && !isTransfer && (
           <div style={{
             width: 24, height: 24, borderRadius: 6,
@@ -132,6 +122,27 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
             fontSize: 14, color: '#4ade80',
           }}>✓</div>
         )}
+        <button
+          type="button"
+          aria-label={`Editar movimiento ${m.name}`}
+          onClick={() => onNavigate(m.id)}
+          style={{
+            width: '100%',
+            minWidth: 0,
+            font: 'inherit',
+            textAlign: 'left',
+            color: 'inherit',
+            backgroundColor: 'transparent',
+            border: 'none',
+            padding: 0,
+            cursor: 'pointer',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 8,
+            textDecoration: m.received ? 'line-through' : 'none',
+          }}
+        >
         <div style={{
           width: 36, height: 36, borderRadius: 10,
           backgroundColor: isTransfer ? '#1e3a5f' : m.categoryEmoji ? '#27272a' : (m.type === 'income' ? '#052e16' : '#450a0a'),
@@ -162,7 +173,6 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
             )}
           </div>
         </div>
-      </div>
       <div style={{ flexShrink: 0, marginLeft: 8 }}>
         <span style={{
           fontSize: 15, fontWeight: 600,
@@ -176,6 +186,8 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
             USD
           </div>
         )}
+      </div>
+        </button>
       </div>
     </div>
   )
@@ -199,7 +211,6 @@ const PAGE_SIZE = 20
 
 export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes, unsettledEmergencyCount, unsettledLoanCount }: HomePageProps) {
   const router = useRouter()
-  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [receivableFilter, setReceivableFilter] = useState(false)
   const [markingReceived, setMarkingReceived] = useState<string | null>(null)
   const [paymentDialogId, setPaymentDialogId] = useState<string | null>(null)
@@ -300,11 +311,12 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
     setPaymentDialogId(null)
     setMarkingReceived(id)
     try {
-      if (paymentMode === 'existing' && selectedExistingIncomeId) {
-        await markAsReceivedWithExisting(id, selectedExistingIncomeId)
-      } else {
-        const accountId = selectedAccountId === 'cash' ? undefined : selectedAccountId
-        await markAsReceived(id, accountId)
+      const result = paymentMode === 'existing' && selectedExistingIncomeId
+        ? await settleReceivableWithExistingMovement(id, selectedExistingIncomeId)
+        : await settleReceivableWithNewMovement(id, selectedAccountId === 'cash' ? undefined : selectedAccountId)
+      if (!result.success) {
+        alert(result.error || 'Error al marcar como cobrado')
+        return
       }
       // Update local state: mark as received or remove if receivables filter is on
       setDisplayedMovements(prev => {
@@ -322,17 +334,6 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
   }
 
   const canConfirmPayment = paymentMode === 'new' || (paymentMode === 'existing' && selectedExistingIncomeId !== null)
-
-  async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar este movimiento?')) return
-    setDeletingId(id)
-    try {
-      await deleteMovement(id)
-    } finally {
-      setDeletingId(null)
-    }
-  }
-
   return (
     <>
       {/* Header */}
@@ -361,22 +362,22 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
               </span>
             )}
             {unsettledEmergencyCount > 0 && (
-              <a href="/emergency" style={{
+              <Link href="/emergency" style={{
                 fontSize: 12, color: '#f87171', backgroundColor: '#2a1a1a',
                 padding: '2px 8px', borderRadius: 6, fontWeight: 700, marginLeft: 4,
                 textDecoration: 'none', border: '1px solid #dc262640',
               }}>
                 🚨{unsettledEmergencyCount}
-              </a>
+              </Link>
             )}
             {unsettledLoanCount > 0 && (
-              <a href="/loans" style={{
+              <Link href="/loans" style={{
                 fontSize: 12, color: '#93c5fd', backgroundColor: '#172554',
                 padding: '2px 8px', borderRadius: 6, fontWeight: 700, marginLeft: 4,
                 textDecoration: 'none', border: '1px solid #3b82f640',
               }}>
                 🏦 Préstamos {unsettledLoanCount}
-              </a>
+              </Link>
             )}
           </div>
           <div style={{ position: 'relative' }}>

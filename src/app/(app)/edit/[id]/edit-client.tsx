@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { updateMovement, deleteMovement } from '@/lib/actions/movements'
+import { reclassifyReportableMovement, deleteReportableMovement } from '@/lib/actions/movements'
 import { markAsReceivable, unmarkReceivable, splitMovement } from '@/lib/actions/review'
-import { convertToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
+import { transformToTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { hasEmergencyPayments } from '@/lib/actions/emergency'
 import { hasLoanPaybackExpenses } from '@/lib/actions/loans'
 import { formatMovementDisplayAmount, parseMoney } from '@/lib/utils'
@@ -97,18 +97,28 @@ export function EditClient({ movement, accounts, categories }: Props) {
     getCurrentExchangeRate().then(setExchangeRate).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    if (formCurrency !== 'USD' || !exchangeRate || formAmountUsd || formExchangeRate) return
+    const clpCents = parseMoney(formAmount)
+    if (clpCents <= 0) return
+    const usdCents = Math.round(clpCents * 100 / exchangeRate)
+    setFormAmountUsd(centsToDisplay(usdCents))
+    setFormExchangeRate((exchangeRate / 100).toFixed(2))
+  }, [exchangeRate, formAmount, formAmountUsd, formCurrency, formExchangeRate])
+
   // Get currencies for transfer calculation
   const fromAccount = accounts.find(a => a.id === formAccountId)
   const toAccountForTransfer = accounts.find(a => a.id === transferToAccountId)
   const fromCurrency = fromAccount?.currency || 'CLP'
   const toCurrencyTransfer = toAccountForTransfer?.currency || 'CLP'
   const currenciesDifferTransfer = fromCurrency !== toCurrencyTransfer
+  const canEditEmergencyWorkflow = !movement.receivable
 
   // Auto-calculate transfer toAmount when formAmount or accounts change
   useEffect(() => {
     if (!isTransferMode || !transferToAccountId || !formAmount) return
     
-    const fromCents = parseMoney(formAmount)
+    const fromCents = fromCurrency === 'USD' ? parseMoney(formAmountUsd) : parseMoney(formAmount)
     if (fromCents <= 0) return
     
     if (currenciesDifferTransfer && exchangeRate) {
@@ -124,7 +134,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
     } else if (!currenciesDifferTransfer) {
       setTransferToAmount(formAmount)
     }
-  }, [isTransferMode, formAmount, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
+  }, [isTransferMode, formAmount, formAmountUsd, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
 
   async function handleToggleEmergency(checked: boolean) {
     if (!checked && movement.emergency) {
@@ -181,24 +191,28 @@ export function EditClient({ movement, accounts, categories }: Props) {
           setLoading(false)
           return
         }
+        const sourceAmountCents = fromCurrency === 'USD' ? parseMoney(formAmountUsd) : amountCents
+        if (sourceAmountCents <= 0) {
+          setError('Monto origen inválido')
+          setLoading(false)
+          return
+        }
         
-        // First update the movement
-        await updateMovement(movement.id, {
-          name: formName.trim(),
-          date: formDate,
-          amount: amountCents,
-          type: 'expense', // Transfers are always expense from origin
-          currency: formCurrency,
-          accountId: formAccountId,
-          categoryId: null, // Transfers don't have category
-          amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
-          exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
-          time: formTime || null,
-        })
-        
-        // Then convert to transfer
-        const result = await convertToTransfer({
+        const result = await transformToTransfer({
           movementId: movement.id,
+          source: {
+            name: formName.trim(),
+            date: formDate,
+            amount: sourceAmountCents,
+            type: 'expense', // Transfers are always expense from origin
+            currency: fromCurrency,
+            accountId: formAccountId,
+            categoryId: null, // Transfers don't have category
+            amountInputMode: 'inputCurrency',
+            amountUsd: null,
+            exchangeRate: fromCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
+            time: formTime || null,
+          },
           toAccountId: transferToAccountId,
           toAmount: toAmountCents,
           toCurrency: toCurrencyTransfer,
@@ -225,7 +239,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
         }
       }
 
-      await updateMovement(movement.id, {
+      const result = await reclassifyReportableMovement(movement.id, {
         name: formName.trim(),
         date: formDate,
         amount: amountCents,
@@ -233,12 +247,18 @@ export function EditClient({ movement, accounts, categories }: Props) {
         currency: formCurrency,
         accountId: formAccountId || null,
         categoryId: formCategoryId || null,
+        amountInputMode: 'canonicalClp',
         amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
         exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
         time: formTime || null,
-        emergency: formType === 'expense' ? formEmergency : false,
+        emergency: formType === 'expense' && canEditEmergencyWorkflow ? formEmergency : false,
         loan: formType === 'income' ? formLoan : false,
       })
+      if (!result.success) {
+        setError(result.error || 'Error al guardar')
+        setLoading(false)
+        return
+      }
       router.push('/')
     } catch {
       setError('Error al guardar')
@@ -250,7 +270,12 @@ export function EditClient({ movement, accounts, categories }: Props) {
   async function handleDelete() {
     setLoading(true)
     try {
-      await deleteMovement(movement.id)
+      const result = await deleteReportableMovement(movement.id)
+      if (!result.success) {
+        setError(result.error || 'Error al eliminar')
+        setLoading(false)
+        return
+      }
       setShowDeleteConfirm(false)
       router.push('/')
     } catch {
@@ -264,7 +289,12 @@ export function EditClient({ movement, accounts, categories }: Props) {
     if (!receivableText.trim()) return
     setLoading(true)
     try {
-      await markAsReceivable(movement.id, receivableText.trim())
+      const result = await markAsReceivable(movement.id, receivableText.trim())
+      if (!result.success) {
+        setError(result.error || 'Error al marcar como por cobrar')
+        setLoading(false)
+        return
+      }
       setShowReceivable(false)
       router.push('/')
     } catch {
@@ -472,8 +502,9 @@ export function EditClient({ movement, accounts, categories }: Props) {
             {/* Amount + Currency */}
             <div style={{ display: 'flex', gap: 12 }}>
               <div style={{ flex: 2 }}>
-                <label style={labelStyle}>{formCurrency === 'USD' ? 'Monto pesos' : 'Monto'}</label>
+                <label style={labelStyle}>{formCurrency === 'USD' ? 'Monto CLP equivalente' : 'Monto'}</label>
                 <input value={formAmount} onChange={e => setFormAmount(e.target.value)}
+                  aria-label={formCurrency === 'USD' ? 'Monto CLP equivalente' : 'Monto'}
                   inputMode="decimal" style={inputStyle} />
               </div>
               <div style={{ flex: 1 }}>
@@ -491,11 +522,13 @@ export function EditClient({ movement, accounts, categories }: Props) {
                 <div style={{ flex: 1 }}>
                   <label style={labelStyle}>Monto USD</label>
                   <input value={formAmountUsd} onChange={e => setFormAmountUsd(e.target.value)}
+                    aria-label="Monto USD"
                     inputMode="decimal" style={inputStyle} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>Tipo de cambio</label>
+                  <label style={labelStyle}>Tipo de cambio (CLP/USD)</label>
                   <input value={formExchangeRate} onChange={e => setFormExchangeRate(e.target.value)}
+                    aria-label="Tipo de cambio CLP/USD"
                     inputMode="decimal" style={inputStyle} />
                 </div>
               </div>
@@ -550,7 +583,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
             )}
 
             {/* Emergency expense checkbox (only for expenses, not transfers) */}
-            {!isTransferMode && formType === 'expense' && (
+            {!isTransferMode && formType === 'expense' && canEditEmergencyWorkflow && (
               <label style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
@@ -633,7 +666,12 @@ export function EditClient({ movement, accounts, categories }: Props) {
             <button onClick={async () => {
               setLoading(true)
               try {
-                await unmarkReceivable(movement.id)
+                const result = await unmarkReceivable(movement.id)
+                if (!result.success) {
+                  setError(result.error || 'Error al desmarcar')
+                  setLoading(false)
+                  return
+                }
                 router.push('/')
               } catch { setError('Error al desmarcar') }
               finally { setLoading(false) }

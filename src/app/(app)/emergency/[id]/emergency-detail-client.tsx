@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { settleEmergencyDirect, settleEmergencyPartial, type EmergencyPaymentDetail } from '@/lib/actions/emergency'
 import { formatCurrency, formatDateDisplay, parseMoney, today } from '@/lib/utils'
@@ -52,6 +52,7 @@ const labelStyle: React.CSSProperties = { fontSize: 13, color: '#a1a1aa', margin
 
 export function EmergencyDetailClient({ emergency, accounts }: Props) {
   const router = useRouter()
+  const [currentEmergency, setCurrentEmergency] = useState(emergency)
   const [showModal, setShowModal] = useState(false)
   const [loading, setLoading] = useState(false)
   const [settlingDirect, setSettlingDirect] = useState(false)
@@ -59,11 +60,15 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
 
   const [fromAccountId, setFromAccountId] = useState(accounts[0]?.id || '')
   const [toAccountId, setToAccountId] = useState(emergency.accountId || accounts[0]?.id || '')
-  const [payAmount, setPayAmount] = useState((emergency.remaining / 100).toString())
+  const [payAmount, setPayAmount] = useState((currentEmergency.remaining / 100).toString())
   const [payDate, setPayDate] = useState(today())
 
+  useEffect(() => {
+    setCurrentEmergency(emergency)
+  }, [emergency])
+
   const sameAccount = fromAccountId === toAccountId
-  const progress = emergency.amount > 0 ? Math.min(100, (emergency.totalPaid / emergency.amount) * 100) : 0
+  const progress = currentEmergency.amount > 0 ? Math.min(100, (currentEmergency.totalPaid / currentEmergency.amount) * 100) : 0
 
   async function handleSettle() {
     setLoading(true)
@@ -71,14 +76,36 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
     try {
       const amountCents = parseMoney(payAmount)
       if (amountCents <= 0) { setError('Monto inválido'); setLoading(false); return }
+      if (amountCents > currentEmergency.remaining) { setError('El abono no puede ser mayor al saldo restante'); setLoading(false); return }
 
-      const result = await settleEmergencyPartial(emergency.id, fromAccountId, toAccountId, amountCents, payDate)
+      const result = await settleEmergencyPartial(currentEmergency.id, fromAccountId, toAccountId, amountCents, payDate)
       if (!result.success) {
         setError(result.error || 'Error al abonar')
         setLoading(false)
         return
       }
       setShowModal(false)
+      setCurrentEmergency(prev => ({
+        ...prev,
+        totalPaid: result.totalPaid ?? prev.totalPaid + amountCents,
+        remaining: result.remaining ?? Math.max(0, prev.remaining - amountCents),
+        emergencySettled: result.settled ?? prev.emergencySettled,
+        payments: [
+          ...prev.payments,
+          {
+            id: `optimistic-${Date.now()}`,
+            amount: amountCents,
+            date: payDate,
+            fromAccountId,
+            toAccountId,
+            fromAccountName: accounts.find(a => a.id === fromAccountId)?.bankName ?? null,
+            fromAccountEmoji: accounts.find(a => a.id === fromAccountId)?.emoji ?? null,
+            toAccountName: accounts.find(a => a.id === toAccountId)?.bankName ?? null,
+            toAccountEmoji: accounts.find(a => a.id === toAccountId)?.emoji ?? null,
+            transferId: null,
+          },
+        ],
+      }))
       router.refresh()
     } catch {
       setError('Error al procesar el abono')
@@ -93,11 +120,12 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
 
     setSettlingDirect(true)
     try {
-      const result = await settleEmergencyDirect(emergency.id)
+      const result = await settleEmergencyDirect(currentEmergency.id)
       if (!result.success) {
         window.alert(result.error || 'Error al marcar como saldado')
         return
       }
+      setCurrentEmergency(prev => ({ ...prev, emergencySettled: true, remaining: 0 }))
       router.refresh()
     } catch {
       window.alert('Error al marcar como saldado')
@@ -135,30 +163,30 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
           border: '1px solid #dc262640', marginBottom: 16,
         }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: '#e5e5e5', marginBottom: 4 }}>
-            {emergency.name}
+            {currentEmergency.name}
           </div>
           <div style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 12 }}>
-            {formatDateDisplay(emergency.date)}
-            {emergency.accountBankName && <span> · {emergency.accountEmoji || '🏦'} {emergency.accountBankName}</span>}
+            {formatDateDisplay(currentEmergency.date)}
+            {currentEmergency.accountBankName && <span> · {currentEmergency.accountEmoji || '🏦'} {currentEmergency.accountBankName}</span>}
           </div>
 
           <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#a1a1aa', marginBottom: 2 }}>Total</div>
               <div style={{ fontSize: 20, fontWeight: 700, color: '#f87171' }}>
-                {formatCurrency(emergency.amount, emergency.currency)}
+                {formatCurrency(currentEmergency.amount, currentEmergency.currency)}
               </div>
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#a1a1aa', marginBottom: 2 }}>Pagado</div>
               <div style={{ fontSize: 20, fontWeight: 700, color: '#4ade80' }}>
-                {formatCurrency(emergency.totalPaid, emergency.currency)}
+                {formatCurrency(currentEmergency.totalPaid, currentEmergency.currency)}
               </div>
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#a1a1aa', marginBottom: 2 }}>Restante</div>
               <div style={{ fontSize: 20, fontWeight: 700, color: '#fbbf24' }}>
-                {formatCurrency(emergency.remaining, emergency.currency)}
+                {formatCurrency(currentEmergency.remaining, currentEmergency.currency)}
               </div>
             </div>
           </div>
@@ -176,9 +204,9 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
             {progress.toFixed(0)}% saldado
           </div>
 
-          {!emergency.emergencySettled && (
+          {!currentEmergency.emergencySettled && (
             <>
-              <button onClick={() => { setShowModal(true); setPayAmount((emergency.remaining / 100).toString()); setPayDate(today()); setError(null) }} style={{
+              <button onClick={() => { setShowModal(true); setPayAmount((currentEmergency.remaining / 100).toString()); setPayDate(today()); setError(null) }} style={{
                 width: '100%', height: 48, borderRadius: 12, border: 'none',
                 background: 'linear-gradient(135deg, #f59e0b, #d97706)',
                 color: '#fff', fontSize: 15, fontWeight: 600,
@@ -209,7 +237,7 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
             </>
           )}
 
-          {emergency.emergencySettled && (
+          {currentEmergency.emergencySettled && (
             <div style={{
               padding: '12px 16px', borderRadius: 12,
               backgroundColor: '#052e16', border: '1px solid #16a34a',
@@ -224,9 +252,9 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
         {/* Payments list */}
         <div>
           <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: '0 0 10px' }}>
-            Abonos ({emergency.payments.length})
+            Abonos ({currentEmergency.payments.length})
           </h2>
-          {emergency.payments.length === 0 ? (
+          {currentEmergency.payments.length === 0 ? (
             <div style={{
               backgroundColor: '#1a1a1a', borderRadius: 12, padding: '24px 16px',
               textAlign: 'center', color: '#a1a1aa', fontSize: 13,
@@ -236,7 +264,7 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {emergency.payments.map(p => (
+              {currentEmergency.payments.map(p => (
                 <div key={p.id} style={{
                   backgroundColor: '#1a1a1a', borderRadius: 12, padding: '12px 14px',
                   border: '1px solid #2a2a2a',
@@ -257,7 +285,7 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
                     </div>
                   </div>
                   <div style={{ fontSize: 15, fontWeight: 600, color: '#4ade80' }}>
-                    {formatCurrency(p.amount, emergency.currency)}
+                    {formatCurrency(p.amount, currentEmergency.currency)}
                   </div>
                 </div>
               ))}
@@ -321,7 +349,7 @@ export function EmergencyDetailClient({ emergency, accounts }: Props) {
               )}
 
               <div>
-                <label style={labelStyle}>Monto</label>
+                <label style={labelStyle}>Monto ({currentEmergency.currency})</label>
                 <input
                   type="text"
                   inputMode="decimal"

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createAccount, updateAccount, deleteAccount, reorderAccounts } from '@/lib/actions/accounts'
 import { createCategory, updateCategory, deleteCategory } from '@/lib/actions/categories'
 import { formatCurrency } from '@/lib/utils'
@@ -83,6 +84,7 @@ function getAccountIcon(account: Account): string {
 }
 
 export function SettingsPage({ accounts, accountBalances, categories }: SettingsPageProps) {
+  const router = useRouter()
   const [orderedAccounts, setOrderedAccounts] = useState(accounts)
   const [accountLoading, setAccountLoading] = useState(false)
   const [accountError, setAccountError] = useState<string | null>(null)
@@ -95,6 +97,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
   const [editingAccountIsInvestment, setEditingAccountIsInvestment] = useState<Record<string, boolean>>({})
   const [editingAccountType, setEditingAccountType] = useState<Record<string, string>>({})
   const [showAddAccount, setShowAddAccount] = useState(accounts.length === 0)
+  const [localCategories, setLocalCategories] = useState(categories)
   const [categoryLoading, setCategoryLoading] = useState(false)
   const [categoryError, setCategoryError] = useState<string | null>(null)
   const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null)
@@ -103,6 +106,10 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
   useEffect(() => {
     setOrderedAccounts(accounts)
   }, [accounts])
+
+  useEffect(() => {
+    setLocalCategories(categories)
+  }, [categories])
 
   async function handleAccountSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -115,10 +122,14 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
       if (!result.success) {
         setAccountError(result.error || 'Error al crear cuenta')
       } else {
+        if (result.account) {
+          setOrderedAccounts(prev => [...prev, result.account!].sort((a, b) => a.sortOrder - b.sortOrder))
+        }
         form.reset()
         setNewAccountIsInvestment(false)
         setNewAccountType('')
         setShowAddAccount(false)
+        router.refresh()
       }
     } catch {
       setAccountError('Ocurrió un error')
@@ -140,6 +151,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
         setAccountError(result.error || 'Error al actualizar cuenta')
       } else {
         setEditingAccountId(null)
+        router.refresh()
         if (updatedId) {
           setEditingAccountIsInvestment((prev) => {
             const next = { ...prev }
@@ -164,7 +176,13 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
     if (!confirm('¿Eliminar esta cuenta? Los movimientos asociados perderán la referencia.')) return
     setDeletingAccountId(id)
     try {
-      await deleteAccount(id)
+      const result = await deleteAccount(id)
+      if (!result.success) {
+        setAccountError(result.error || 'Error al eliminar cuenta')
+      } else {
+        setOrderedAccounts(prev => prev.filter(account => account.id !== id))
+        router.refresh()
+      }
     } finally {
       setDeletingAccountId(null)
     }
@@ -212,7 +230,11 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
       if (!result.success) {
         setCategoryError(result.error || 'Error al crear categoría')
       } else {
+        if (result.category) {
+          setLocalCategories(prev => [...prev, result.category!].sort((a, b) => a.name.localeCompare(b.name)))
+        }
         form.reset()
+        router.refresh()
       }
     } catch {
       setCategoryError('Ocurrió un error')
@@ -225,7 +247,13 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
     if (!confirm('¿Eliminar esta categoría?')) return
     setDeletingCategoryId(id)
     try {
-      await deleteCategory(id)
+      const result = await deleteCategory(id)
+      if (!result.success) {
+        setCategoryError(result.error || 'Error al eliminar categoría')
+      } else {
+        setLocalCategories(prev => prev.filter(category => category.id !== id))
+        router.refresh()
+      }
     } finally {
       setDeletingCategoryId(null)
     }
@@ -241,7 +269,11 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
       if (!result.success) {
         setCategoryError(result.error || 'Error al actualizar categoría')
       } else {
+        if (result.category) {
+          setLocalCategories(prev => prev.map(category => category.id === result.category!.id ? result.category! : category).sort((a, b) => a.name.localeCompare(b.name)))
+        }
         setEditingCategoryId(null)
+        router.refresh()
       }
     } catch {
       setCategoryError('Ocurrió un error')
@@ -430,7 +462,7 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
           )}
 
           {/* Account List */}
-          {accounts.length === 0 ? (
+          {orderedAccounts.length === 0 ? (
             <div style={{ textAlign: 'center', color: '#9ca3af', padding: '16px 0', fontSize: 13 }}>
               Sin cuentas aún
             </div>
@@ -712,13 +744,13 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
             </div>
           </form>
 
-          {categories.length === 0 ? (
+          {localCategories.length === 0 ? (
             <div style={{ textAlign: 'center', color: '#9ca3af', padding: '16px 0', fontSize: 13 }}>
               Sin categorías aún
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {categories.map((cat) => {
+              {localCategories.map((cat) => {
                 if (editingCategoryId === cat.id) {
                   return (
                     <form key={cat.id} onSubmit={handleCategoryUpdate} style={{
