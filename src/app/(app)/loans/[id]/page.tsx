@@ -1,4 +1,4 @@
-import { getSession } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { redirect, notFound } from 'next/navigation'
 import { getLoanDetail } from '@/lib/actions/loans'
 import { db, movements, accounts } from '@/lib/db'
@@ -6,8 +6,7 @@ import { eq, and, isNull, desc } from 'drizzle-orm'
 import { LoanDetailClient } from './loan-detail-client'
 
 export default async function LoanDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const session = await getSession()
-  if (!session) redirect('/login')
+  const { user: session, space } = await getCurrentSpace()
 
   const { id } = await params
   const loan = await getLoanDetail(id)
@@ -26,9 +25,9 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
       accountEmoji: accounts.emoji,
     })
     .from(movements)
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.type, 'expense'),
       eq(movements.needsReview, false),
       eq(movements.receivable, false),

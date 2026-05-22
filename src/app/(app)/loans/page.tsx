@@ -1,11 +1,10 @@
-import { getSession } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { redirect } from 'next/navigation'
 import { getUnsettledLoans } from '@/lib/actions/loans'
 import { LoansListClient } from './loans-list-client'
 
 export default async function LoansPage() {
-  const session = await getSession()
-  if (!session) redirect('/login')
+  const { user: session, space } = await getCurrentSpace()
 
   const loans = await getUnsettledLoans()
 

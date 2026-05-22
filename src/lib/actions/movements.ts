@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { db, movements, categories, accounts } from '@/lib/db'
 import { eq, and, desc, gte, isNull, lte, sql, type SQL } from 'drizzle-orm'
-import { requireAuth } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { createMovementSchema } from '@/lib/validations'
 import { movementLedger, type AmountInputMode, type Currency, type MovementType } from '@/lib/domain/movement-ledger'
 import { reportableMovementSqlFilters } from '@/lib/domain/reporting'
@@ -32,7 +32,7 @@ function revalidateMovementPaths() {
 
 /** Record a confirmed reportable movement from the manual add flow. */
 export async function recordReportableMovement(formData: FormData): Promise<MovementActionResult> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const rawData = {
     name: formData.get('name'),
@@ -47,7 +47,7 @@ export async function recordReportableMovement(formData: FormData): Promise<Move
     return { success: false, error: firstError?.message || 'Invalid input' }
   }
 
-  const result = await movementLedger.recordReportableMovement(session.id, {
+  const result = await movementLedger.recordReportableMovement(space.id, session.id, {
     ...parsed.data,
     amountInputMode: 'inputCurrency',
     type: parsed.data.type as MovementType,
@@ -79,8 +79,8 @@ export async function reclassifyReportableMovement(id: string, data: {
   emergency?: boolean
   loan?: boolean
 }): Promise<MovementActionResult> {
-  const session = await requireAuth()
-  const result = await movementLedger.reclassifyReportableMovement(session.id, id, {
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.reclassifyReportableMovement(space.id, id, {
     ...data,
     amountInputMode: data.amountInputMode ?? 'canonicalClp',
   })
@@ -89,8 +89,8 @@ export async function reclassifyReportableMovement(id: string, data: {
 }
 
 export async function deleteReportableMovement(id: string): Promise<MovementActionResult> {
-  const session = await requireAuth()
-  const result = await movementLedger.deleteReportableMovement(session.id, id)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.deleteReportableMovement(space.id, id)
   if (result.success) revalidateMovementPaths()
   return result
 }
@@ -99,11 +99,11 @@ export async function deleteReportableMovement(id: string): Promise<MovementActi
  * Get a single movement by ID (with category/account info)
  */
 export async function getMovementById(id: string) {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
   const results = await db
     .select({
       id: movements.id,
-      userId: movements.userId,
+      spaceId: movements.spaceId,
       categoryId: movements.categoryId,
       accountId: movements.accountId,
       name: movements.name,
@@ -131,9 +131,9 @@ export async function getMovementById(id: string) {
       accountLastFour: accounts.lastFourDigits,
     })
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
-    .where(and(eq(movements.id, id), eq(movements.userId, session.id)))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
+    .where(and(eq(movements.id, id), eq(movements.spaceId, space.id)))
   return results[0] || null
 }
 
@@ -141,12 +141,12 @@ export async function getMovementById(id: string) {
  * Get all movements for the current user (with category info)
  */
 export async function getMovements() {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   return db
     .select({
       id: movements.id,
-      userId: movements.userId,
+      spaceId: movements.spaceId,
       categoryId: movements.categoryId,
       accountId: movements.accountId,
       name: movements.name,
@@ -167,9 +167,9 @@ export async function getMovements() {
       accountLastFour: accounts.lastFourDigits,
     })
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
-    .where(eq(movements.userId, session.id))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
+    .where(eq(movements.spaceId, space.id))
     .orderBy(desc(movements.date), desc(movements.createdAt))
 }
 
@@ -182,9 +182,9 @@ export async function getReportCategoryMovements(
   categoryId: string | null,
   accountId?: string,
 ): Promise<ReportCategoryMovement[]> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
   const [selectedAccount] = accountId
-    ? await db.select({ id: accounts.id, currency: accounts.currency }).from(accounts).where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id))).limit(1)
+    ? await db.select({ id: accounts.id, currency: accounts.currency }).from(accounts).where(and(eq(accounts.id, accountId), eq(accounts.spaceId, space.id))).limit(1)
     : []
 
   if (accountId && !selectedAccount) return []
@@ -194,7 +194,7 @@ export async function getReportCategoryMovements(
     : sql<number>`${movements.amount}`
 
   const conditions: SQL[] = [
-    ...reportableMovementSqlFilters(session.id),
+    ...reportableMovementSqlFilters(space.id),
     eq(movements.type, 'expense'),
     gte(movements.date, startDate),
     lte(movements.date, endDate),
@@ -219,11 +219,11 @@ export async function getMovementsPaginated(
   limit: number,
   filter: 'all' | 'receivables' = 'all'
 ) {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const baseSelect = {
     id: movements.id,
-    userId: movements.userId,
+    spaceId: movements.spaceId,
     categoryId: movements.categoryId,
     accountId: movements.accountId,
     name: movements.name,
@@ -250,14 +250,14 @@ export async function getMovementsPaginated(
   }
 
   const whereCondition = filter === 'receivables'
-    ? and(eq(movements.userId, session.id), eq(movements.receivable, true), eq(movements.received, false))
-    : eq(movements.userId, session.id)
+    ? and(eq(movements.spaceId, space.id), eq(movements.receivable, true), eq(movements.received, false))
+    : eq(movements.spaceId, space.id)
 
   const results = await db
     .select(baseSelect)
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(whereCondition)
     .orderBy(desc(movements.date), desc(movements.createdAt))
     .offset(offset)

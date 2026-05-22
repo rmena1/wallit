@@ -1,4 +1,4 @@
-import { pgTable, text, integer, bigint, boolean, timestamp, index } from 'drizzle-orm/pg-core'
+import { pgTable, text, integer, bigint, boolean, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core'
 
 // ============================================================================
 // USERS
@@ -25,17 +25,49 @@ export const sessions = pgTable('sessions', {
 ])
 
 // ============================================================================
+// SPACES
+// ============================================================================
+export const spaces = pgTable('spaces', {
+  id: text('id').primaryKey(), // nanoid
+  name: text('name').notNull(),
+  normalizedName: text('normalized_name').notNull(),
+  emoji: text('emoji').notNull(),
+  isPersonal: boolean('is_personal').notNull().default(false),
+  createdByUserId: text('created_by_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  archivedAt: timestamp('archived_at'),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  index('idx_spaces_created_by').on(table.createdByUserId),
+  index('idx_spaces_normalized_name').on(table.normalizedName),
+  index('idx_spaces_archived').on(table.archivedAt),
+])
+
+export const spaceMemberships = pgTable('space_memberships', {
+  id: text('id').primaryKey(), // nanoid
+  spaceId: text('space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  role: text('role').$type<'owner' | 'member'>().notNull(),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  index('idx_space_memberships_space').on(table.spaceId),
+  index('idx_space_memberships_user').on(table.userId),
+  uniqueIndex('idx_space_memberships_space_user').on(table.spaceId, table.userId),
+])
+
+// ============================================================================
 // CATEGORIES
 // ============================================================================
 export const categories = pgTable('categories', {
   id: text('id').primaryKey(), // nanoid
-  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  spaceId: text('space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   emoji: text('emoji').notNull(),
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
-  index('idx_categories_user').on(table.userId),
+  index('idx_categories_space').on(table.spaceId),
 ])
 
 // ============================================================================
@@ -43,7 +75,8 @@ export const categories = pgTable('categories', {
 // ============================================================================
 export const accounts = pgTable('accounts', {
   id: text('id').primaryKey(), // nanoid
-  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  spaceId: text('space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   bankName: text('bank_name').notNull(),
   accountType: text('account_type').notNull(),
   lastFourDigits: text('last_four_digits').notNull(),
@@ -59,7 +92,8 @@ export const accounts = pgTable('accounts', {
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
-  index('idx_accounts_user').on(table.userId),
+  index('idx_accounts_space').on(table.spaceId),
+  index('idx_accounts_space_sort').on(table.spaceId, table.sortOrder),
 ])
 
 // ============================================================================
@@ -68,13 +102,14 @@ export const accounts = pgTable('accounts', {
 export const investmentSnapshots = pgTable('investment_snapshots', {
   id: text('id').primaryKey(), // nanoid
   accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
-  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  spaceId: text('space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   value: integer('value').notNull(), // cents
   date: text('date').notNull(), // YYYY-MM-DD
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
   index('idx_snapshots_account').on(table.accountId),
-  index('idx_snapshots_user').on(table.userId),
+  index('idx_snapshots_space').on(table.spaceId),
 ])
 
 // ============================================================================
@@ -82,7 +117,8 @@ export const investmentSnapshots = pgTable('investment_snapshots', {
 // ============================================================================
 export const movements = pgTable('movements', {
   id: text('id').primaryKey(), // nanoid
-  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  spaceId: text('space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   categoryId: text('category_id').references(() => categories.id, { onDelete: 'set null' }),
   accountId: text('account_id').references(() => accounts.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
@@ -111,11 +147,11 @@ export const movements = pgTable('movements', {
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
-  index('idx_movements_user').on(table.userId),
-  index('idx_movements_date').on(table.userId, table.date),
+  index('idx_movements_space').on(table.spaceId),
+  index('idx_movements_date').on(table.spaceId, table.date),
   index('idx_movements_category').on(table.categoryId),
   index('idx_movements_account').on(table.accountId),
-  index('idx_movements_review').on(table.userId, table.needsReview),
+  index('idx_movements_review').on(table.spaceId, table.needsReview),
   index('idx_movements_transfer').on(table.transferId),
 ])
 
@@ -136,6 +172,7 @@ export const exchangeRates = pgTable('exchange_rates', {
 // ============================================================================
 export const emergencyPayments = pgTable('emergency_payments', {
   id: text('id').primaryKey(),
+  spaceId: text('space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
   emergencyId: text('emergency_id').notNull().references(() => movements.id, { onDelete: 'cascade' }),
   fromAccountId: text('from_account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
   toAccountId: text('to_account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
@@ -145,6 +182,8 @@ export const emergencyPayments = pgTable('emergency_payments', {
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
 }, (table) => [
   index('idx_emergency_payments_emergency').on(table.emergencyId),
+  index('idx_emergency_payments_space').on(table.spaceId),
+  index('idx_emergency_payments_space_emergency').on(table.spaceId, table.emergencyId),
 ])
 
 // ============================================================================
@@ -155,6 +194,12 @@ export type NewUser = typeof users.$inferInsert
 
 export type Session = typeof sessions.$inferSelect
 export type NewSession = typeof sessions.$inferInsert
+
+export type Space = typeof spaces.$inferSelect
+export type NewSpace = typeof spaces.$inferInsert
+
+export type SpaceMembership = typeof spaceMemberships.$inferSelect
+export type NewSpaceMembership = typeof spaceMemberships.$inferInsert
 
 export type Category = typeof categories.$inferSelect
 export type NewCategory = typeof categories.$inferInsert

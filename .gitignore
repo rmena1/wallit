@@ -43,5 +43,9 @@ next-env.d.ts
 /data/*.db-*
 
 # drizzle
-/drizzle/meta
+# Keep Drizzle's migration metadata checked in so `drizzle-kit migrate` can find custom SQL migrations.
+/drizzle/meta/*
+!/drizzle/meta/
+!/drizzle/meta/_journal.json
+!/drizzle/meta/*_snapshot.json
 projects/

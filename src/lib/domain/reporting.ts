@@ -1,9 +1,9 @@
 import { sql } from 'drizzle-orm'
 import { movements } from '@/lib/db'
 
-export function reportableMovementSqlFilters(userId: string) {
+export function reportableMovementSqlFilters(spaceId: string) {
   return [
-    sql`${movements.userId} = ${userId}`,
+    sql`${movements.spaceId} = ${spaceId}`,
     sql`${movements.needsReview} = false`,
     sql`(${movements.receivable} = false OR ${movements.receivable} IS NULL)`,
     sql`${movements.receivableId} IS NULL`,

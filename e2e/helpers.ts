@@ -102,8 +102,6 @@ export async function createAccount(page: Page, opts: CreateAccountOptions = {})
     return await bankSelect.isVisible().catch(() => false)
   }, { timeout: DEFAULT_TIMEOUT }).toBe(false)
 
-  await page.reload()
-  await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: DEFAULT_TIMEOUT })
   await expectAccountVisibleInSettings(page, lastFourDigits)
 }
 
@@ -113,14 +111,15 @@ export async function expectAccountVisibleInSettings(page: Page, lastFourDigits:
     .filter({ hasText: new RegExp(`···${escapeRegExp(lastFourDigits)}`) })
     .first()
 
-  if (await accountRow().isVisible().catch(() => false)) {
+  const appeared = await expect(accountRow()).toBeVisible({ timeout: DEFAULT_TIMEOUT }).then(() => true).catch(() => false)
+  if (appeared) {
     return accountRow()
   }
 
   // Account creation is a server action followed by router.refresh(); in E2E the
-  // client can briefly render the stale settings payload. A reload gives the
-  // server-rendered list a deterministic chance to catch up without relying on
-  // hidden select-option text or sleeps.
+  // client can briefly render the stale settings payload. Wait first so we do
+  // not reload while the action is still in flight, then reload once as a final
+  // deterministic server-rendered check.
   await page.reload()
   await expect(page.getByText('Cuentas Bancarias')).toBeVisible({ timeout: DEFAULT_TIMEOUT })
   await expect(accountRow()).toBeVisible({ timeout: DEFAULT_TIMEOUT })

@@ -1,8 +1,8 @@
 'use server'
 
 import { db, movements, categories, accounts } from '@/lib/db'
-import { eq, sql } from 'drizzle-orm'
-import { requireAuth } from '@/lib/auth'
+import { and, eq, sql } from 'drizzle-orm'
+import { getCurrentSpace } from '@/lib/spaces'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { reportableMovementSqlFilters } from '@/lib/domain/reporting'
 
@@ -26,13 +26,13 @@ export interface ReportData {
 }
 
 function buildReportMovementFilters(
-  userId: string,
+  spaceId: string,
   options: {
     accountId?: string
     categoryId?: string
   } = {},
 ) {
-  const filters = reportableMovementSqlFilters(userId)
+  const filters = reportableMovementSqlFilters(spaceId)
 
   if (options.accountId) filters.push(sql`${movements.accountId} = ${options.accountId}`)
   if (options.categoryId) filters.push(sql`${movements.categoryId} = ${options.categoryId}`)
@@ -46,7 +46,7 @@ export async function getReportData(
   categoryId?: string,
   accountId?: string,
 ): Promise<ReportData> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const userAccounts = await db.select({
     id: accounts.id,
@@ -55,7 +55,7 @@ export async function getReportData(
     emoji: accounts.emoji,
     currency: accounts.currency,
     initialBalance: accounts.initialBalance,
-  }).from(accounts).where(eq(accounts.userId, session.id))
+  }).from(accounts).where(eq(accounts.spaceId, space.id))
 
   const selectedAccount = accountId
     ? userAccounts.find(account => account.id === accountId) ?? null
@@ -66,18 +66,18 @@ export async function getReportData(
   }
 
   const reportFilters = [
-    ...buildReportMovementFilters(session.id, { accountId, categoryId }),
+    ...buildReportMovementFilters(space.id, { accountId, categoryId }),
     sql`${movements.date} >= ${startDate}`,
     sql`${movements.date} <= ${endDate}`,
   ]
 
   const balanceFilters = [
-    ...buildReportMovementFilters(session.id, { accountId }),
+    ...buildReportMovementFilters(space.id, { accountId }),
     sql`${movements.date} >= ${startDate}`,
     sql`${movements.date} <= ${endDate}`,
   ]
   const balanceBeforeFilters = [
-    ...buildReportMovementFilters(session.id, { accountId }),
+    ...buildReportMovementFilters(space.id, { accountId }),
     sql`${movements.date} < ${startDate}`,
   ]
 
@@ -125,13 +125,13 @@ export async function getReportData(
       total: sql<number>`SUM(${reportAmount})`,
       count: sql<number>`COUNT(*)`,
     }).from(movements)
-      .leftJoin(categories, eq(movements.categoryId, categories.id))
+      .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
       .where(sql`${where} AND ${movements.type} = 'expense'`)
       .groupBy(movements.categoryId, categories.name, categories.emoji)
       .orderBy(sql`SUM(${reportAmount}) DESC`),
 
     db.select({ id: categories.id, name: categories.name, emoji: categories.emoji })
-      .from(categories).where(eq(categories.userId, session.id)),
+      .from(categories).where(eq(categories.spaceId, space.id)),
   ])
 
   const t = totals[0] || { totalIncome: 0, totalExpense: 0, count: 0 }

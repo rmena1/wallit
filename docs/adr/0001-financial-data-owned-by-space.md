@@ -1,0 +1,3 @@
+# Financial data is owned by Space, not User
+
+Wallit is moving from a single-user personal finance model to a multi-Space model where a User can use a personal Space and shared Spaces such as a household. Financial data is scoped by `spaceId`, while `createdByUserId` records who created a financial record when useful; `userId` remains only for authentication, sessions, and memberships. We are intentionally replacing legacy user-owned financial data fields instead of keeping both ownership models, because Space membership should be the single authorization boundary and keeping parallel `userId` ownership would make shared Spaces ambiguous and error-prone.

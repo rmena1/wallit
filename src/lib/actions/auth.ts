@@ -7,6 +7,7 @@ import { hashPassword, verifyPassword, createSession, destroySession } from '@/l
 import { registerSchema, loginSchema } from '@/lib/validations'
 import { generateId } from '@/lib/utils'
 import { isRateLimited } from '@/lib/rate-limit'
+import { getOrCreatePersonalSpace } from '@/lib/spaces'
 
 export type AuthActionResult = {
   success: boolean
@@ -63,8 +64,10 @@ export async function register(formData: FormData): Promise<AuthActionResult> {
     email: email.toLowerCase(),
     passwordHash,
   })
+
+  const personalSpace = await getOrCreatePersonalSpace(userId)
   
-  // Create default categories for new user
+  // Create default categories for new user's Personal Space
   const defaultCategories = [
     { emoji: '🍔', name: 'Food' },
     { emoji: '🚗', name: 'Transport' },
@@ -81,7 +84,8 @@ export async function register(formData: FormData): Promise<AuthActionResult> {
   for (const cat of defaultCategories) {
     await db.insert(categories).values({
       id: generateId(),
-      userId,
+      spaceId: personalSpace.id,
+      createdByUserId: userId,
       name: cat.name,
       emoji: cat.emoji,
     })

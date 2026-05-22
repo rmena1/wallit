@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { db, movements, accounts, emergencyPayments } from '@/lib/db'
 import { eq, and, sql } from 'drizzle-orm'
-import { requireAuth } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { movementLedger } from '@/lib/domain/movement-ledger'
 
 export interface UnsettledEmergency {
@@ -27,7 +27,7 @@ function displayAmount(amount: number, amountUsd: number | null, currency: 'CLP'
  * Get all unsettled emergency expenses for the current user
  */
 export async function getUnsettledEmergencies(): Promise<UnsettledEmergency[]> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const results = await db
     .select({
@@ -40,12 +40,12 @@ export async function getUnsettledEmergencies(): Promise<UnsettledEmergency[]> {
       accountId: movements.accountId,
       accountBankName: accounts.bankName,
       accountEmoji: accounts.emoji,
-      totalPaid: sql<number>`COALESCE((SELECT SUM(amount) FROM emergency_payments WHERE emergency_id = ${movements.id}), 0)`,
+      totalPaid: sql<number>`COALESCE((SELECT SUM(amount) FROM emergency_payments WHERE emergency_id = ${movements.id} AND space_id = ${space.id}), 0)`,
     })
     .from(movements)
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.emergency, true),
       eq(movements.emergencySettled, false),
     ))
@@ -68,13 +68,13 @@ export async function getUnsettledEmergencies(): Promise<UnsettledEmergency[]> {
  * Get count of unsettled emergencies (for dashboard badge)
  */
 export async function getUnsettledEmergencyCount(): Promise<number> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const result = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(movements)
     .where(and(
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.emergency, true),
       eq(movements.emergencySettled, false),
     ))
@@ -99,13 +99,13 @@ export interface EmergencyPaymentDetail {
  * Get all payments for a specific emergency expense
  */
 export async function getEmergencyPayments(emergencyId: string): Promise<EmergencyPaymentDetail[]> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   // Verify the emergency belongs to this user
   const [emergency] = await db
     .select({ id: movements.id })
     .from(movements)
-    .where(and(eq(movements.id, emergencyId), eq(movements.userId, session.id)))
+    .where(and(eq(movements.id, emergencyId), eq(movements.spaceId, space.id)))
     .limit(1)
 
   if (!emergency) return []
@@ -120,13 +120,13 @@ export async function getEmergencyPayments(emergencyId: string): Promise<Emergen
       transferId: emergencyPayments.transferId,
     })
     .from(emergencyPayments)
-    .where(eq(emergencyPayments.emergencyId, emergencyId))
+    .where(and(eq(emergencyPayments.emergencyId, emergencyId), eq(emergencyPayments.spaceId, space.id)))
 
-  // Fetch account names separately
+  // Fetch Space-scoped account names separately
   const accountIds = [...new Set(results.flatMap(r => [r.fromAccountId, r.toAccountId]))]
   const accs = accountIds.length > 0
     ? await db.select({ id: accounts.id, bankName: accounts.bankName, emoji: accounts.emoji })
-        .from(accounts).where(sql`${accounts.id} IN (${sql.join(accountIds.map(id => sql`${id}`), sql`,`)})`)
+        .from(accounts).where(and(eq(accounts.spaceId, space.id), sql`${accounts.id} IN (${sql.join(accountIds.map(id => sql`${id}`), sql`,`)})`))
     : []
 
   const accMap = new Map(accs.map(a => [a.id, a]))
@@ -144,14 +144,14 @@ export async function getEmergencyPayments(emergencyId: string): Promise<Emergen
  * Check if an emergency expense has any payments
  */
 export async function hasEmergencyPayments(emergencyId: string): Promise<boolean> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const [emergency] = await db
     .select({ id: movements.id })
     .from(movements)
     .where(and(
       eq(movements.id, emergencyId),
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.emergency, true),
     ))
     .limit(1)
@@ -161,7 +161,7 @@ export async function hasEmergencyPayments(emergencyId: string): Promise<boolean
   const result = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(emergencyPayments)
-    .where(eq(emergencyPayments.emergencyId, emergencyId))
+    .where(and(eq(emergencyPayments.emergencyId, emergencyId), eq(emergencyPayments.spaceId, space.id)))
 
   return (result[0]?.count ?? 0) > 0
 }
@@ -184,8 +184,8 @@ export async function settleEmergencyPartial(
   amount: number,
   date: string,
 ): Promise<SettleResult> {
-  const session = await requireAuth()
-  const result = await movementLedger.settleEmergencyPartially(session.id, emergencyId, fromAccountId, toAccountId, amount, date)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.settleEmergencyPartially(space.id, session.id, emergencyId, fromAccountId, toAccountId, amount, date)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/emergency')
@@ -201,8 +201,8 @@ export async function settleEmergencyPartial(
 export async function settleEmergencyDirect(
   emergencyId: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const session = await requireAuth()
-  const result = await movementLedger.settleEmergencyDirectly(session.id, emergencyId)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.settleEmergencyDirectly(space.id, emergencyId)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/emergency')
@@ -216,7 +216,7 @@ export async function settleEmergencyDirect(
  * Get a single emergency expense with full details
  */
 export async function getEmergencyDetail(emergencyId: string) {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const [emergency] = await db
     .select({
@@ -232,10 +232,10 @@ export async function getEmergencyDetail(emergencyId: string) {
       emergencySettled: movements.emergencySettled,
     })
     .from(movements)
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(
       eq(movements.id, emergencyId),
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.emergency, true),
     ))
     .limit(1)

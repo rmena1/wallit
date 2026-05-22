@@ -1,4 +1,4 @@
-import { getSession } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { redirect, notFound } from 'next/navigation'
 import { getMovementById } from '@/lib/actions/movements'
 import { getTransferByMovementId } from '@/lib/actions/transfers'
@@ -7,8 +7,7 @@ import { EditClient } from './edit-client'
 import { EditTransferClient } from './edit-transfer-client'
 
 export default async function EditPage({ params }: { params: Promise<{ id: string }> }) {
-  const session = await getSession()
-  if (!session) redirect('/login')
+  const { user: session, space } = await getCurrentSpace()
 
   const { id } = await params
   const [movement, { accounts, categories }] = await Promise.all([

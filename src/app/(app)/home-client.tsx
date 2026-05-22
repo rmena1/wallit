@@ -11,7 +11,7 @@ import type { AccountWithBalanceSerialized as AccountWithBalance, NetLiquidityDa
 
 interface MovementWithCategory {
   id: string
-  userId: string
+  spaceId: string
   categoryId: string | null
   accountId: string | null
   name: string
@@ -65,6 +65,7 @@ interface HomePageProps {
   totalIncome: number
   totalExpense: number
   movements: MovementWithCategory[]
+  currentSpaceId: string
   pendingReviewCount: number
   usdClpRate: number | null
   netLiquidity: NetLiquidityData
@@ -209,7 +210,7 @@ function getAccountIconFromType(accountType: string): string {
 
 const PAGE_SIZE = 20
 
-export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes, unsettledEmergencyCount, unsettledLoanCount }: HomePageProps) {
+export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, currentSpaceId, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes, unsettledEmergencyCount, unsettledLoanCount }: HomePageProps) {
   const router = useRouter()
   const [receivableFilter, setReceivableFilter] = useState(false)
   const [markingReceived, setMarkingReceived] = useState<string | null>(null)
@@ -227,6 +228,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [offset, setOffset] = useState(initialMovements.length)
   const loadMoreRef = useRef<HTMLDivElement>(null)
+  const previousSpaceIdRef = useRef(currentSpaceId)
   
   // Track if this is the initial mount to skip unnecessary refetch
   const isInitialMount = useRef(true)
@@ -256,6 +258,18 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
     }
     fetchFiltered()
   }, [receivableFilter])
+
+  // Reset client-side pagination only when the active Space changes. Server actions can
+  // refresh the route with new props; blindly resetting on every movements prop change
+  // would undo local optimistic UI such as removing settled receivables from the filter.
+  useEffect(() => {
+    if (previousSpaceIdRef.current === currentSpaceId) return
+    previousSpaceIdRef.current = currentSpaceId
+    setDisplayedMovements(initialMovements)
+    setHasMore(initialMovements.length >= PAGE_SIZE)
+    setOffset(initialMovements.length)
+    setReceivableFilter(false)
+  }, [currentSpaceId, initialMovements])
 
   // Load more movements when scrolling to bottom
   const loadMore = useCallback(async () => {

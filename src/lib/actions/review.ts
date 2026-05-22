@@ -4,19 +4,19 @@ import { revalidatePath } from 'next/cache'
 import { db, movements, categories, accounts } from '@/lib/db'
 import { movementLedger, type AmountInputMode } from '@/lib/domain/movement-ledger'
 import { eq, and, desc, sql } from 'drizzle-orm'
-import { requireAuth } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 
 export async function getPendingReviewCount() {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
   const result = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(movements)
-    .where(and(eq(movements.userId, session.id), eq(movements.needsReview, true)))
+    .where(and(eq(movements.spaceId, space.id), eq(movements.needsReview, true)))
   return Number(result[0]?.count ?? 0)
 }
 
 export async function getPendingReviewMovements() {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
   return db
     .select({
       id: movements.id,
@@ -38,9 +38,9 @@ export async function getPendingReviewMovements() {
       accountLastFour: accounts.lastFourDigits,
     })
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
-    .where(and(eq(movements.userId, session.id), eq(movements.needsReview, true)))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
+    .where(and(eq(movements.spaceId, space.id), eq(movements.needsReview, true)))
     .orderBy(desc(movements.date), desc(movements.createdAt))
 }
 
@@ -59,8 +59,8 @@ export async function confirmPendingAsReportable(id: string, data: {
   emergency?: boolean
   loan?: boolean
 }) {
-  const session = await requireAuth()
-  const result = await movementLedger.confirmPendingAsReportable(session.id, id, {
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.confirmPendingAsReportable(space.id, id, {
     ...data,
     amountInputMode: data.amountInputMode ?? 'canonicalClp',
   })
@@ -75,8 +75,8 @@ export async function confirmPendingAsReportable(id: string, data: {
 }
 
 export async function deletePendingMovement(id: string) {
-  const session = await requireAuth()
-  const result = await movementLedger.deletePendingMovement(session.id, id)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.deletePendingMovement(space.id, id)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/review')
@@ -85,8 +85,8 @@ export async function deletePendingMovement(id: string) {
 }
 
 export async function markAsReceivable(id: string, reminderText: string) {
-  const session = await requireAuth()
-  const result = await movementLedger.markAsReceivable(session.id, id, reminderText)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.markAsReceivable(space.id, id, reminderText)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/review')
@@ -97,8 +97,8 @@ export async function markAsReceivable(id: string, reminderText: string) {
 }
 
 export async function unmarkReceivable(id: string) {
-  const session = await requireAuth()
-  const result = await movementLedger.unmarkReceivable(session.id, id)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.unmarkReceivable(space.id, id)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/receivables')
@@ -108,8 +108,8 @@ export async function unmarkReceivable(id: string) {
 }
 
 export async function splitMovement(originalId: string, splits: { name: string; amount: number }[]) {
-  const session = await requireAuth()
-  const result = await movementLedger.splitMovement(session.id, originalId, splits)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.splitMovement(space.id, session.id, originalId, splits)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/review')
@@ -119,8 +119,8 @@ export async function splitMovement(originalId: string, splits: { name: string; 
 }
 
 export async function settleReceivableWithNewMovement(id: string, paymentAccountId?: string) {
-  const session = await requireAuth()
-  const result = await movementLedger.settleReceivableWithNewMovement(session.id, id, paymentAccountId)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.settleReceivableWithNewMovement(space.id, session.id, id, paymentAccountId)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/receivables')
@@ -130,8 +130,8 @@ export async function settleReceivableWithNewMovement(id: string, paymentAccount
 }
 
 export async function settleReceivableWithExistingMovement(receivableId: string, existingIncomeId: string) {
-  const session = await requireAuth()
-  const result = await movementLedger.settleReceivableWithExistingMovement(session.id, receivableId, existingIncomeId)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.settleReceivableWithExistingMovement(space.id, receivableId, existingIncomeId)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/receivables')
@@ -141,17 +141,17 @@ export async function settleReceivableWithExistingMovement(receivableId: string,
 }
 
 export async function getAccountsAndCategories() {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
   const [userAccounts, userCategories] = await Promise.all([
     db
       .select()
       .from(accounts)
-      .where(eq(accounts.userId, session.id))
+      .where(eq(accounts.spaceId, space.id))
       .orderBy(accounts.bankName),
     db
       .select()
       .from(categories)
-      .where(eq(categories.userId, session.id))
+      .where(eq(categories.spaceId, space.id))
       .orderBy(categories.name),
   ])
   return { accounts: userAccounts, categories: userCategories }

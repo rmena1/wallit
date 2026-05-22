@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
-import { requireAuth } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { db, accounts, movements, investmentSnapshots } from '@/lib/db'
 import { calculateInvestmentPerformance } from '@/lib/investment-performance'
 import { generateId } from '@/lib/utils'
@@ -24,7 +24,7 @@ export interface InvestmentSummary {
  * Update current value for an investment account and create a snapshot.
  */
 export async function updateInvestmentValue(accountId: string, value: number): Promise<InvestmentActionResult> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   if (!accountId) {
     return { success: false, error: 'Account ID is required' }
@@ -43,7 +43,7 @@ export async function updateInvestmentValue(accountId: string, value: number): P
       createdAt: accounts.createdAt,
     })
     .from(accounts)
-    .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+    .where(and(eq(accounts.id, accountId), eq(accounts.spaceId, space.id)))
     .limit(1)
 
   if (!account) {
@@ -61,7 +61,7 @@ export async function updateInvestmentValue(accountId: string, value: number): P
   const [existingSnapshot] = await db
     .select({ id: investmentSnapshots.id })
     .from(investmentSnapshots)
-    .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.userId, session.id)))
+    .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.spaceId, space.id)))
     .limit(1)
 
   await db.transaction(async (tx) => {
@@ -69,7 +69,8 @@ export async function updateInvestmentValue(accountId: string, value: number): P
       await tx.insert(investmentSnapshots).values({
         id: generateId(),
         accountId,
-        userId: session.id,
+        spaceId: space.id,
+        createdByUserId: session.id,
         value: account.currentValue ?? account.initialBalance,
         date: account.createdAt.toISOString().slice(0, 10),
         createdAt: account.createdAt,
@@ -82,12 +83,13 @@ export async function updateInvestmentValue(accountId: string, value: number): P
         currentValueUpdatedAt: now,
         updatedAt: now,
       })
-      .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+      .where(and(eq(accounts.id, accountId), eq(accounts.spaceId, space.id)))
 
     await tx.insert(investmentSnapshots).values({
       id: generateId(),
       accountId,
-      userId: session.id,
+      spaceId: space.id,
+        createdByUserId: session.id,
       value: normalizedValue,
       date: snapshotDate,
     })
@@ -106,7 +108,7 @@ export async function updateInvestmentValue(accountId: string, value: number): P
  * no snapshots remain.
  */
 export async function deleteInvestmentSnapshot(accountId: string, snapshotId: string): Promise<InvestmentActionResult> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   if (!accountId) {
     return { success: false, error: 'Account ID is required' }
@@ -124,7 +126,7 @@ export async function deleteInvestmentSnapshot(accountId: string, snapshotId: st
       createdAt: accounts.createdAt,
     })
     .from(accounts)
-    .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+    .where(and(eq(accounts.id, accountId), eq(accounts.spaceId, space.id)))
     .limit(1)
 
   if (!account) {
@@ -142,7 +144,7 @@ export async function deleteInvestmentSnapshot(accountId: string, snapshotId: st
       and(
         eq(investmentSnapshots.id, snapshotId),
         eq(investmentSnapshots.accountId, accountId),
-        eq(investmentSnapshots.userId, session.id)
+        eq(investmentSnapshots.spaceId, space.id)
       )
     )
     .limit(1)
@@ -158,7 +160,7 @@ export async function deleteInvestmentSnapshot(accountId: string, snapshotId: st
       and(
         eq(investmentSnapshots.id, snapshotId),
         eq(investmentSnapshots.accountId, accountId),
-        eq(investmentSnapshots.userId, session.id)
+        eq(investmentSnapshots.spaceId, space.id)
       )
     )
 
@@ -168,7 +170,7 @@ export async function deleteInvestmentSnapshot(accountId: string, snapshotId: st
         createdAt: investmentSnapshots.createdAt,
       })
       .from(investmentSnapshots)
-      .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.userId, session.id)))
+      .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.spaceId, space.id)))
       .orderBy(desc(investmentSnapshots.date), desc(investmentSnapshots.createdAt))
       .limit(1)
 
@@ -178,7 +180,7 @@ export async function deleteInvestmentSnapshot(accountId: string, snapshotId: st
         currentValueUpdatedAt: latestRemainingSnapshot?.createdAt ?? account.createdAt,
         updatedAt: now,
       })
-      .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+      .where(and(eq(accounts.id, accountId), eq(accounts.spaceId, space.id)))
   })
 
   revalidatePath('/')
@@ -192,7 +194,7 @@ export async function deleteInvestmentSnapshot(accountId: string, snapshotId: st
  * Get all snapshots for an investment account ordered by date descending.
  */
 export async function getInvestmentSnapshots(accountId: string) {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   return db
     .select({
@@ -202,7 +204,7 @@ export async function getInvestmentSnapshots(accountId: string) {
       createdAt: investmentSnapshots.createdAt,
     })
     .from(investmentSnapshots)
-    .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.userId, session.id)))
+    .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.spaceId, space.id)))
     .orderBy(desc(investmentSnapshots.date), desc(investmentSnapshots.createdAt))
 }
 
@@ -210,7 +212,7 @@ export async function getInvestmentSnapshots(accountId: string) {
  * Get summary metrics for an investment account.
  */
 export async function getInvestmentSummary(accountId: string): Promise<InvestmentSummary | null> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const [account] = await db
     .select({
@@ -223,7 +225,7 @@ export async function getInvestmentSummary(accountId: string): Promise<Investmen
       createdAt: accounts.createdAt,
     })
     .from(accounts)
-    .where(and(eq(accounts.id, accountId), eq(accounts.userId, session.id)))
+    .where(and(eq(accounts.id, accountId), eq(accounts.spaceId, space.id)))
     .limit(1)
 
   if (!account || !account.isInvestment) {
@@ -241,14 +243,14 @@ export async function getInvestmentSummary(accountId: string): Promise<Investmen
         transferOut: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
       })
       .from(movements)
-      .where(and(eq(movements.accountId, accountId), eq(movements.userId, session.id))),
+      .where(and(eq(movements.accountId, accountId), eq(movements.spaceId, space.id))),
     db
       .select({
         value: investmentSnapshots.value,
         createdAt: investmentSnapshots.createdAt,
       })
       .from(investmentSnapshots)
-      .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.userId, session.id)))
+      .where(and(eq(investmentSnapshots.accountId, accountId), eq(investmentSnapshots.spaceId, space.id)))
       .orderBy(asc(investmentSnapshots.date), asc(investmentSnapshots.createdAt))
       .limit(1),
   ])

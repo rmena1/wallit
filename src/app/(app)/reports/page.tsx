@@ -1,4 +1,4 @@
-import { getSession } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { redirect } from 'next/navigation'
 import { getReportData } from '@/lib/actions/reports'
 import { today as todayInTimezone } from '@/lib/utils'
@@ -53,8 +53,7 @@ function getDefaultRange(): [string, string] {
 }
 
 export default async function Reports() {
-  const session = await getSession()
-  if (!session) redirect('/login')
+  const { user: session, space } = await getCurrentSpace()
 
   const [startDate, endDate] = getDefaultRange()
   const initialData = await getReportData(startDate, endDate)

@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { db, accounts, movements, categories, investmentSnapshots, type Account } from '@/lib/db'
 import { eq, and, desc, isNotNull, sql } from 'drizzle-orm'
-import { requireAuth } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { generateId } from '@/lib/utils'
 
 export type AccountActionResult = {
@@ -16,7 +16,7 @@ export type AccountActionResult = {
  * Create a new account
  */
 export async function createAccount(formData: FormData): Promise<AccountActionResult> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const bankName = (formData.get('bankName') as string)?.trim()
   const accountType = (formData.get('accountType') as string)?.trim()
@@ -74,13 +74,14 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
   const [maxOrder] = await db
     .select({ value: sql<number>`COALESCE(MAX(${accounts.sortOrder}), -1)` })
     .from(accounts)
-    .where(eq(accounts.userId, session.id))
+    .where(eq(accounts.spaceId, space.id))
 
   const sortOrder = Number(maxOrder?.value ?? -1) + 1
 
   const newAccount = {
       id: accountId,
-      userId: session.id,
+      spaceId: space.id,
+      createdByUserId: session.id,
       bankName,
       accountType,
       lastFourDigits: normalizedLastFourDigits,
@@ -104,7 +105,8 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
       await tx.insert(investmentSnapshots).values({
         id: generateId(),
         accountId,
-        userId: session.id,
+        spaceId: space.id,
+      createdByUserId: session.id,
         value: initialBalance,
         date: now.toISOString().slice(0, 10),
         createdAt: now,
@@ -121,7 +123,7 @@ export async function createAccount(formData: FormData): Promise<AccountActionRe
  * Update an existing account
  */
 export async function updateAccount(formData: FormData): Promise<AccountActionResult> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const id = (formData.get('id') as string)?.trim()
   const bankName = (formData.get('bankName') as string)?.trim()
@@ -166,7 +168,7 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
       isInvestment: accounts.isInvestment,
     })
     .from(accounts)
-    .where(and(eq(accounts.id, id), eq(accounts.userId, session.id)))
+    .where(and(eq(accounts.id, id), eq(accounts.spaceId, space.id)))
     .limit(1)
 
   if (!existingAccount) {
@@ -221,7 +223,7 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
       .where(
         and(
           eq(accounts.id, id),
-          eq(accounts.userId, session.id)
+          eq(accounts.spaceId, space.id)
         )
       )
 
@@ -230,7 +232,8 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
       await tx.insert(investmentSnapshots).values({
         id: generateId(),
         accountId: id,
-        userId: session.id,
+        spaceId: space.id,
+      createdByUserId: session.id,
         value: currentValue ?? initialBalance,
         date: existingAccount.createdAt.toISOString().slice(0, 10),
         createdAt: existingAccount.createdAt,
@@ -248,14 +251,18 @@ export async function updateAccount(formData: FormData): Promise<AccountActionRe
  * Delete an account
  */
 export async function deleteAccount(id: string): Promise<AccountActionResult> {
-  const session = await requireAuth()
+  const { space } = await getCurrentSpace()
 
-  await db.delete(accounts).where(
+  const [deletedAccount] = await db.delete(accounts).where(
     and(
       eq(accounts.id, id),
-      eq(accounts.userId, session.id)
+      eq(accounts.spaceId, space.id)
     )
-  )
+  ).returning({ id: accounts.id })
+
+  if (!deletedAccount) {
+    return { success: false, error: 'Account not found' }
+  }
 
   revalidatePath('/')
   revalidatePath('/settings')
@@ -266,7 +273,7 @@ export async function deleteAccount(id: string): Promise<AccountActionResult> {
  * Persist the user's preferred account display order.
  */
 export async function reorderAccounts(accountIds: string[]): Promise<AccountActionResult> {
-  const session = await requireAuth()
+  const { space } = await getCurrentSpace()
 
   const uniqueIds = Array.from(new Set(accountIds.filter(Boolean)))
   if (uniqueIds.length !== accountIds.length || uniqueIds.length === 0) {
@@ -276,7 +283,7 @@ export async function reorderAccounts(accountIds: string[]): Promise<AccountActi
   const existingAccounts = await db
     .select({ id: accounts.id })
     .from(accounts)
-    .where(eq(accounts.userId, session.id))
+    .where(eq(accounts.spaceId, space.id))
 
   const existingIds = new Set(existingAccounts.map((account) => account.id))
   if (uniqueIds.length !== existingIds.size || uniqueIds.some((id) => !existingIds.has(id))) {
@@ -289,7 +296,7 @@ export async function reorderAccounts(accountIds: string[]): Promise<AccountActi
       await tx
         .update(accounts)
         .set({ sortOrder: index, updatedAt: now })
-        .where(and(eq(accounts.id, id), eq(accounts.userId, session.id)))
+        .where(and(eq(accounts.id, id), eq(accounts.spaceId, space.id)))
     }
   })
 
@@ -302,12 +309,12 @@ export async function reorderAccounts(accountIds: string[]): Promise<AccountActi
  * Get all accounts for the current user
  */
 export async function getAccounts() {
-  const session = await requireAuth()
+  const { space } = await getCurrentSpace()
 
   return db
     .select()
     .from(accounts)
-    .where(eq(accounts.userId, session.id))
+    .where(eq(accounts.spaceId, space.id))
     .orderBy(sql`${accounts.sortOrder} ASC, ${accounts.bankName} ASC, ${accounts.createdAt} ASC`)
 }
 
@@ -315,10 +322,10 @@ export async function getAccounts() {
  * Get paginated movements for an account (used by "load more" on account detail)
  */
 export async function getAccountMovements(accountId: string, offset: number, limit: number = 50, transfersOnly: boolean = false) {
-  const session = await requireAuth()
+  const { space } = await getCurrentSpace()
   const whereCondition = transfersOnly
-    ? and(eq(movements.accountId, accountId), eq(movements.userId, session.id), isNotNull(movements.transferId))
-    : and(eq(movements.accountId, accountId), eq(movements.userId, session.id))
+    ? and(eq(movements.accountId, accountId), eq(movements.spaceId, space.id), isNotNull(movements.transferId))
+    : and(eq(movements.accountId, accountId), eq(movements.spaceId, space.id))
 
   return db
     .select({
@@ -339,7 +346,7 @@ export async function getAccountMovements(accountId: string, offset: number, lim
       categoryEmoji: categories.emoji,
     })
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
     .where(whereCondition)
     .orderBy(desc(movements.date), desc(movements.createdAt))
     .limit(limit)

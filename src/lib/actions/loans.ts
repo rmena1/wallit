@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { db, movements, accounts } from '@/lib/db'
 import { eq, and, sql, desc } from 'drizzle-orm'
-import { requireAuth } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { movementLedger } from '@/lib/domain/movement-ledger'
 
 export interface UnsettledLoan {
@@ -27,7 +27,7 @@ function displayAmount(amount: number, amountUsd: number | null, currency: 'CLP'
  * Get all unsettled loans for the current user
  */
 export async function getUnsettledLoans(): Promise<UnsettledLoan[]> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const results = await db
     .select({
@@ -49,14 +49,14 @@ export async function getUnsettledLoans(): Promise<UnsettledLoan[]> {
         )
         FROM movements paybacks
         WHERE paybacks.loan_id = ${movements.id}
-          AND paybacks.user_id = ${session.id}
+          AND paybacks.space_id = ${space.id}
           AND paybacks.type = 'expense'
       ), 0)`,
     })
     .from(movements)
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.type, 'income'),
       eq(movements.loan, true),
       eq(movements.loanSettled, false),
@@ -80,13 +80,13 @@ export async function getUnsettledLoans(): Promise<UnsettledLoan[]> {
  * Get count of unsettled loans (for dashboard badge)
  */
 export async function getUnsettledLoanCount(): Promise<number> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const result = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(movements)
     .where(and(
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.type, 'income'),
       eq(movements.loan, true),
       eq(movements.loanSettled, false),
@@ -110,13 +110,13 @@ export interface LoanPaybackExpense {
  * Check if a loan has any linked payback expenses
  */
 export async function hasLoanPaybackExpenses(loanId: string): Promise<boolean> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const result = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(movements)
     .where(and(
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.type, 'expense'),
       eq(movements.loanId, loanId),
     ))
@@ -128,7 +128,7 @@ export async function hasLoanPaybackExpenses(loanId: string): Promise<boolean> {
  * Get a single loan with linked payback expenses
  */
 export async function getLoanDetail(loanId: string) {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const [loan] = await db
     .select({
@@ -144,10 +144,10 @@ export async function getLoanDetail(loanId: string) {
       loanSettled: movements.loanSettled,
     })
     .from(movements)
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(
       eq(movements.id, loanId),
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.type, 'income'),
       eq(movements.loan, true),
     ))
@@ -168,9 +168,9 @@ export async function getLoanDetail(loanId: string) {
       accountEmoji: accounts.emoji,
     })
     .from(movements)
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(
-      eq(movements.userId, session.id),
+      eq(movements.spaceId, space.id),
       eq(movements.type, 'expense'),
       eq(movements.loanId, loanId),
     ))
@@ -215,10 +215,10 @@ export async function settleLoan(
   expenseMovementId: string | 'cash',
   date: string,
 ): Promise<SettleLoanResult> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
   const result = expenseMovementId === 'cash'
-    ? await movementLedger.settleLoanWithCash(session.id, loanId)
-    : await movementLedger.settleLoanWithExistingMovement(session.id, loanId, expenseMovementId, date)
+    ? await movementLedger.settleLoanWithCash(space.id, loanId)
+    : await movementLedger.settleLoanWithExistingMovement(space.id, loanId, expenseMovementId, date)
 
   if (result.success) {
     revalidatePath('/')

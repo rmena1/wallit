@@ -1,4 +1,4 @@
-import { getSession } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { redirect, notFound } from 'next/navigation'
 import { db, accounts, movements, categories } from '@/lib/db'
 import { eq, and, desc, asc, sql, isNotNull, gte } from 'drizzle-orm'
@@ -55,10 +55,7 @@ interface Props {
 }
 
 export default async function AccountDetailPage({ params }: Props) {
-  const session = await getSession()
-  if (!session) {
-    redirect('/login')
-  }
+  const { space } = await getCurrentSpace()
 
   const { id } = await params
 
@@ -77,7 +74,7 @@ export default async function AccountDetailPage({ params }: Props) {
       emoji: accounts.emoji,
     })
     .from(accounts)
-    .where(and(eq(accounts.id, id), eq(accounts.userId, session.id)))
+    .where(and(eq(accounts.id, id), eq(accounts.spaceId, space.id)))
     .limit(1)
 
   if (!account) {
@@ -85,8 +82,8 @@ export default async function AccountDetailPage({ params }: Props) {
   }
 
   const movementsWhere = account.isInvestment
-    ? and(eq(movements.accountId, id), eq(movements.userId, session.id), isNotNull(movements.transferId))
-    : and(eq(movements.accountId, id), eq(movements.userId, session.id))
+    ? and(eq(movements.accountId, id), eq(movements.spaceId, space.id), isNotNull(movements.transferId))
+    : and(eq(movements.accountId, id), eq(movements.spaceId, space.id))
 
   const [accountMovements, countResult, accountBalances, investmentSummary, investmentSnapshots] = await Promise.all([
     db
@@ -108,7 +105,7 @@ export default async function AccountDetailPage({ params }: Props) {
         categoryEmoji: categories.emoji,
       })
       .from(movements)
-      .leftJoin(categories, eq(movements.categoryId, categories.id))
+      .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
       .where(movementsWhere)
       .orderBy(desc(movements.date), desc(movements.createdAt))
       .limit(MOVEMENTS_PAGE_SIZE),
@@ -137,7 +134,7 @@ export default async function AccountDetailPage({ params }: Props) {
     // Get movements from last 180 days sorted by date asc for balance history
     // eslint-disable-next-line react-hooks/purity -- server-rendered data query intentionally uses current date
     const cutoffDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    const allMovements = await db.select({ date: movements.date, amount: movements.amount, type: movements.type, amountUsd: movements.amountUsd }).from(movements).where(and(eq(movements.accountId, id), eq(movements.userId, session.id), gte(movements.date, cutoffDate))).orderBy(asc(movements.date), asc(movements.createdAt))
+    const allMovements = await db.select({ date: movements.date, amount: movements.amount, type: movements.type, amountUsd: movements.amountUsd }).from(movements).where(and(eq(movements.accountId, id), eq(movements.spaceId, space.id), gte(movements.date, cutoffDate))).orderBy(asc(movements.date), asc(movements.createdAt))
     let running = account.initialBalance
     const byDate = new Map<string, number>()
     for (const m of allMovements) {

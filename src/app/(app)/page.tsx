@@ -1,4 +1,4 @@
-import { getSession } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { redirect } from 'next/navigation'
 import { db, movements, categories, accounts } from '@/lib/db'
 import { eq, desc, sql, and, gte } from 'drizzle-orm'
@@ -10,11 +10,7 @@ import { reportableMovementSqlFilters } from '@/lib/domain/reporting'
 import { HomePage } from './home-client'
 
 export default async function Home() {
-  const session = await getSession()
-
-  if (!session) {
-    redirect('/login')
-  }
+  const { user: session, space } = await getCurrentSpace()
 
   // First fetch account balances (needed to determine if we need USD rate)
   const accountBalances = await getAccountBalances()
@@ -22,7 +18,7 @@ export default async function Home() {
   // Only fetch USD rate if user has at least one USD account (avoids unnecessary API calls)
   const hasUsdAccount = accountBalances.some(a => a.currency === 'USD')
 
-  const reportableMovementWhere = sql.join(reportableMovementSqlFilters(session.id), sql` AND `)
+  const reportableMovementWhere = sql.join(reportableMovementSqlFilters(space.id), sql` AND `)
 
   // Run remaining data fetches in parallel for faster page load
   const [
@@ -41,7 +37,7 @@ export default async function Home() {
     db
       .select({
         id: movements.id,
-        userId: movements.userId,
+        spaceId: movements.spaceId,
         categoryId: movements.categoryId,
         accountId: movements.accountId,
         name: movements.name,
@@ -67,9 +63,9 @@ export default async function Home() {
         transferPairId: movements.transferPairId,
       })
       .from(movements)
-      .leftJoin(categories, eq(movements.categoryId, categories.id))
-      .leftJoin(accounts, eq(movements.accountId, accounts.id))
-      .where(eq(movements.userId, session.id))
+      .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+      .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
+      .where(eq(movements.spaceId, space.id))
       .orderBy(desc(movements.date), desc(movements.createdAt))
       .limit(20),
 
@@ -86,7 +82,7 @@ export default async function Home() {
     db
       .select({ count: sql<number>`COUNT(*)` })
       .from(movements)
-      .where(and(eq(movements.userId, session.id), eq(movements.needsReview, true))),
+      .where(and(eq(movements.spaceId, space.id), eq(movements.needsReview, true))),
 
     // Unsettled emergency count
     getUnsettledEmergencyCount().catch(() => 0),
@@ -110,10 +106,10 @@ export default async function Home() {
         categoryEmoji: categories.emoji,
       })
       .from(movements)
-      .leftJoin(categories, eq(movements.categoryId, categories.id))
-      .leftJoin(accounts, eq(movements.accountId, accounts.id))
+      .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+      .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
       .where(and(
-        ...reportableMovementSqlFilters(session.id),
+        ...reportableMovementSqlFilters(space.id),
         eq(movements.type, 'income'),
         gte(movements.date, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)),
       ))
@@ -151,6 +147,7 @@ export default async function Home() {
       totalIncome={totals.totalIncome}
       totalExpense={totals.totalExpense}
       movements={serializedMovements}
+      currentSpaceId={space.id}
       pendingReviewCount={pendingReviewCount}
       usdClpRate={usdClpRate}
       netLiquidity={netLiquidity}

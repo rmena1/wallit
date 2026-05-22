@@ -4,15 +4,20 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createAccount, updateAccount, deleteAccount, reorderAccounts } from '@/lib/actions/accounts'
 import { createCategory, updateCategory, deleteCategory } from '@/lib/actions/categories'
+import { addSpaceMember, archiveSpace, createSpace, leaveSpace, removeSpaceMember, updateSpace } from '@/lib/actions/spaces'
 import { formatCurrency } from '@/lib/utils'
 import { BANK_NAMES, ACCOUNT_TYPES } from '@/lib/constants'
 import type { Category, Account } from '@/lib/db'
 import type { AccountWithBalance } from '@/lib/actions/balances'
+import type { AvailableSpace } from '@/lib/spaces'
 
 interface SettingsPageProps {
   accounts: Account[]
   accountBalances: AccountWithBalance[]
   categories: Category[]
+  spaces: AvailableSpace[]
+  currentSpace: AvailableSpace
+  members: { userId: string; email: string; role: 'owner' | 'member' }[]
 }
 
 const inputStyle: React.CSSProperties = {
@@ -83,7 +88,7 @@ function getAccountIcon(account: Account): string {
   }
 }
 
-export function SettingsPage({ accounts, accountBalances, categories }: SettingsPageProps) {
+export function SettingsPage({ accounts, accountBalances, categories, currentSpace, members }: SettingsPageProps) {
   const router = useRouter()
   const [orderedAccounts, setOrderedAccounts] = useState(accounts)
   const [accountLoading, setAccountLoading] = useState(false)
@@ -102,6 +107,8 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
   const [categoryError, setCategoryError] = useState<string | null>(null)
   const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null)
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null)
+  const [spaceError, setSpaceError] = useState<string | null>(null)
+  const [spaceLoading, setSpaceLoading] = useState(false)
 
   useEffect(() => {
     setOrderedAccounts(accounts)
@@ -282,6 +289,45 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
     }
   }
 
+  async function runSpaceAction(action: () => Promise<unknown>) {
+    setSpaceLoading(true)
+    setSpaceError(null)
+    try {
+      const result = await action()
+      if (result && typeof result === 'object' && 'success' in result && result.success === false) {
+        setSpaceError('error' in result && typeof result.error === 'string' ? result.error : 'Ocurrió un error')
+        return
+      }
+      router.refresh()
+    } catch (error) {
+      setSpaceError(error instanceof Error ? error.message : 'Ocurrió un error')
+    } finally {
+      setSpaceLoading(false)
+    }
+  }
+
+  async function handleCreateSpace(formData: FormData) {
+    await runSpaceAction(() => createSpace({
+      name: String(formData.get('name') ?? ''),
+      emoji: String(formData.get('emoji') ?? ''),
+    }))
+  }
+
+  async function handleUpdateSpace(formData: FormData) {
+    await runSpaceAction(() => updateSpace({
+      spaceId: currentSpace.id,
+      name: String(formData.get('name') ?? ''),
+      emoji: String(formData.get('emoji') ?? ''),
+    }))
+  }
+
+  async function handleAddMember(formData: FormData) {
+    await runSpaceAction(() => addSpaceMember({
+      spaceId: currentSpace.id,
+      email: String(formData.get('email') ?? ''),
+    }))
+  }
+
   return (
     <>
       {/* Header */}
@@ -299,6 +345,84 @@ export function SettingsPage({ accounts, accountBalances, categories }: Settings
       </header>
 
       <main style={{ maxWidth: 540, margin: '0 auto', padding: '16px 16px 96px' }}>
+        {/* Spaces Section */}
+        <div style={{
+          backgroundColor: '#101827', borderRadius: 16,
+          padding: 16, marginBottom: 20,
+          border: '1px solid #1f3a5f',
+        }}>
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: '#e5e5e5', margin: '0 0 6px' }}>
+            {currentSpace.emoji} Spaces
+          </h2>
+          <p style={{ fontSize: 13, color: '#a1a1aa', margin: '0 0 14px' }}>
+            Space activo: <strong style={{ color: '#f5f5f5' }}>{currentSpace.emoji} {currentSpace.name}</strong> · {currentSpace.role === 'owner' ? 'Owner' : 'Member'}
+          </p>
+
+          {spaceError && (
+            <div style={{ backgroundColor: '#450a0a', border: '1px solid #7f1d1d', borderRadius: 10, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#fca5a5' }}>
+              {spaceError}
+            </div>
+          )}
+
+          <form action={handleCreateSpace} style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, marginBottom: 14 }}>
+            <input name="emoji" aria-label="Emoji del Space" placeholder="🏠" maxLength={4} style={inputStyle} />
+            <input name="name" aria-label="Nombre del Space" placeholder="Nuevo Space" required style={inputStyle} />
+            <button disabled={spaceLoading} style={{ gridColumn: '1 / -1', height: 40, borderRadius: 10, border: 'none', backgroundColor: '#2563eb', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
+              Crear Space
+            </button>
+          </form>
+
+          {!currentSpace.isPersonal && currentSpace.role === 'owner' && (
+            <>
+              <form action={handleUpdateSpace} style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, marginBottom: 14 }}>
+                <input name="emoji" aria-label="Editar emoji del Space" defaultValue={currentSpace.emoji} maxLength={4} style={inputStyle} />
+                <input name="name" aria-label="Editar nombre del Space" defaultValue={currentSpace.name} required style={inputStyle} />
+                <button disabled={spaceLoading} style={{ gridColumn: '1 / -1', height: 40, borderRadius: 10, border: '1px solid #334155', backgroundColor: '#0f172a', color: '#bfdbfe', fontWeight: 700, cursor: 'pointer' }}>
+                  Guardar nombre y emoji
+                </button>
+              </form>
+              <form action={handleAddMember} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, marginBottom: 14 }}>
+                <input name="email" type="email" aria-label="Email del miembro" placeholder="usuario@wallit.app" required style={inputStyle} />
+                <button disabled={spaceLoading} style={{ minWidth: 92, borderRadius: 10, border: 'none', backgroundColor: '#22c55e', color: '#052e16', fontWeight: 800, cursor: 'pointer' }}>
+                  Agregar
+                </button>
+              </form>
+            </>
+          )}
+
+          {currentSpace.isPersonal && (
+            <p style={{ fontSize: 13, color: '#a1a1aa', margin: '0 0 12px' }}>El Space Personal no se puede compartir, abandonar ni archivar.</p>
+          )}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {members.map((member) => (
+              <div key={member.userId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: 10, borderRadius: 10, backgroundColor: '#0b1220', border: '1px solid #1e293b' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: '#e5e5e5', fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{member.email}</div>
+                  <div style={{ color: '#94a3b8', fontSize: 12 }}>{member.role === 'owner' ? 'Owner' : 'Member'}</div>
+                </div>
+                {!currentSpace.isPersonal && currentSpace.role === 'owner' && member.role === 'member' && (
+                  <button disabled={spaceLoading} onClick={() => runSpaceAction(() => removeSpaceMember({ spaceId: currentSpace.id, userId: member.userId }))} style={{ border: '1px solid #7f1d1d', backgroundColor: 'transparent', color: '#fca5a5', borderRadius: 8, padding: '7px 10px', cursor: 'pointer' }}>
+                    Remover
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {!currentSpace.isPersonal && currentSpace.role === 'member' && (
+            <button disabled={spaceLoading} onClick={() => runSpaceAction(() => leaveSpace(currentSpace.id))} style={{ width: '100%', marginTop: 12, height: 40, borderRadius: 10, border: '1px solid #a16207', backgroundColor: 'transparent', color: '#fde68a', fontWeight: 700, cursor: 'pointer' }}>
+              Salir del Space
+            </button>
+          )}
+
+          {!currentSpace.isPersonal && currentSpace.role === 'owner' && (
+            <button disabled={spaceLoading} onClick={() => runSpaceAction(() => archiveSpace(currentSpace.id))} style={{ width: '100%', marginTop: 12, height: 40, borderRadius: 10, border: '1px solid #7f1d1d', backgroundColor: '#1f0a0a', color: '#fca5a5', fontWeight: 700, cursor: 'pointer' }}>
+              Archivar Space
+            </button>
+          )}
+        </div>
+
         {/* Accounts Section */}
         <div style={{
           backgroundColor: '#1a1a2e', borderRadius: 16,

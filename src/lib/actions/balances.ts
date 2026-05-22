@@ -2,7 +2,7 @@
 
 import { db, accounts, movements, investmentSnapshots } from '@/lib/db'
 import { eq, and, sql } from 'drizzle-orm'
-import { requireAuth } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { calculateInvestmentPerformance } from '@/lib/investment-performance'
 
 export interface AccountWithBalance {
@@ -34,7 +34,7 @@ export type AccountWithBalanceSerialized = Omit<AccountWithBalance, 'currentValu
  * Balance = initialBalance + sum(income) - sum(expense)
  */
 export async function getAccountBalances(): Promise<AccountWithBalance[]> {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
   const amountForAccountCurrency = sql<number>`CASE WHEN ${accounts.currency} = 'USD' THEN COALESCE(${movements.amountUsd}, 0) ELSE ${movements.amount} END`
 
   const results = await db
@@ -57,7 +57,7 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
         SELECT ${investmentSnapshots.value}
         FROM ${investmentSnapshots}
         WHERE ${investmentSnapshots.accountId} = ${accounts.id}
-          AND ${investmentSnapshots.userId} = ${session.id}
+          AND ${investmentSnapshots.spaceId} = ${space.id}
         ORDER BY ${investmentSnapshots.date} ASC, ${investmentSnapshots.createdAt} ASC
         LIMIT 1
       )`,
@@ -65,7 +65,7 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
         SELECT ${investmentSnapshots.createdAt}
         FROM ${investmentSnapshots}
         WHERE ${investmentSnapshots.accountId} = ${accounts.id}
-          AND ${investmentSnapshots.userId} = ${session.id}
+          AND ${investmentSnapshots.spaceId} = ${space.id}
         ORDER BY ${investmentSnapshots.date} ASC, ${investmentSnapshots.createdAt} ASC
         LIMIT 1
       )`,
@@ -75,8 +75,8 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       transferOutSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
     })
     .from(accounts)
-    .leftJoin(movements, and(eq(accounts.id, movements.accountId), eq(movements.userId, session.id)))
-    .where(eq(accounts.userId, session.id))
+    .leftJoin(movements, and(eq(accounts.id, movements.accountId), eq(movements.spaceId, space.id)))
+    .where(eq(accounts.spaceId, space.id))
     .groupBy(accounts.id)
     .orderBy(sql`${accounts.sortOrder} ASC, ${accounts.bankName} ASC, ${accounts.createdAt} ASC`)
 
@@ -172,13 +172,13 @@ export async function getNetLiquidity(usdToClpRate?: number, precomputedBalances
     }
   }
 
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
   const [receivableResults, unsettledLoanResults] = await Promise.all([
     db
       .select({ total: sql<number>`COALESCE(SUM(${movements.amount}), 0)` })
       .from(movements)
       .where(and(
-        eq(movements.userId, session.id),
+        eq(movements.spaceId, space.id),
         eq(movements.receivable, true),
         eq(movements.received, false)
       )),
@@ -186,7 +186,7 @@ export async function getNetLiquidity(usdToClpRate?: number, precomputedBalances
       .select({ total: sql<number>`COALESCE(SUM(${movements.amount}), 0)` })
       .from(movements)
       .where(and(
-        eq(movements.userId, session.id),
+        eq(movements.spaceId, space.id),
         eq(movements.type, 'income'),
         eq(movements.loan, true),
         eq(movements.loanSettled, false)

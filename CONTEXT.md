@@ -24,11 +24,61 @@ _Avoid_: Real income, real expense
 A confirmed **Movement** that represents real income or expense for financial reporting.
 _Avoid_: Normal movement, categorized movement
 
+**Space**:
+A financial context that groups bank accounts, movements, categories, reports, debts, and follow-up workflows. A person can use a personal **Space** and shared **Spaces** such as a household. A **Space** has a name and emoji.
+_Avoid_: Account, Workspace
+
+**Membership**:
+The relationship that gives a **User** access to a **Space**. A **Membership** has a role: **Owner** or **Member**.
+_Avoid_: Shared account
+
+**Owner**:
+A **Space** member who can administer the **Space**, including inviting/removing members, editing the **Space** name, and deleting or archiving the **Space**.
+_Avoid_: Admin, Superuser
+
+**Member**:
+A **Space** member who can use the **Space** day-to-day: create and edit bank accounts, categories, movements, reports, debts, and follow-up workflows, but cannot administer membership or delete/archive the **Space**.
+_Avoid_: Viewer
+
 ## Relationships
 
+- A **User** can belong to one or more **Spaces** through **Memberships**.
+- Each **User** has one default personal **Space** created automatically.
+- The default personal **Space** is named `Personal` and uses the `👤` emoji.
+- A **User** cannot have access to two active **Spaces** with the same name.
+- **Space** names are compared after trimming whitespace and ignoring case.
+- Creating a **Space** with a name already available to that **User** is not allowed.
+- Adding a **User** to a **Space** is not allowed if that **User** already has access to another active **Space** with the same name; the **Owner** must rename the **Space** first.
+- A default personal **Space** cannot be shared with other **Users**.
+- Existing financial data is migrated into each **User**'s default personal **Space**.
+- A **Space** can have one or more **Users** as members.
+- A **Space** has exactly one **Owner**.
+- An **Owner** can add an existing **User** to a **Space** by email; membership is created immediately, without an invitation flow.
+- A newly available **Space** appears for the added **User** after the app is refreshed or reloaded; Wallit does not need realtime membership notifications in the MVP.
+- A **Member** can leave a **Space**.
+- An **Owner** cannot leave a **Space**; the **Owner** can only archive the **Space**.
+- Archiving a **Space** hides it from normal use for all members without deleting its financial history.
+- Archived **Spaces** are not exposed in the MVP UI.
+- Ownership is not transferable.
+- An **Owner** can remove another **Member** from a **Space**.
+- Bank accounts, categories, movements, reports, debts, and follow-up workflows belong to a **Space**.
+- Debts and follow-up workflows belong to the **Space** as a whole and do not have an assigned responsible **User** in the MVP.
+- Bank accounts, categories, movements, and Spaces record which **User** created them with `createdByUserId`, without changing edit permissions inside the **Space**.
+- Financial data is scoped by `spaceId`, not by `userId`; the Space migration should replace financial-data ownership fields with `spaceId` and `createdByUserId` rather than keeping legacy user-owned fields.
+- Authentication data still belongs to the **User**: users, sessions, and memberships keep user identity fields. The `userId` removal applies to financial data ownership, not authentication.
+- The selected **Space** scopes the app: dashboard, bank accounts, categories, movements, pending review, review, transfers, reports, receivables, emergency expenses, loans, and settings for financial data all operate inside the selected **Space**.
+- The MVP does not include consolidated reporting or comparisons across multiple **Spaces**.
+- Automatic imports must resolve a **Space** explicitly before creating movements; if they cannot, they should avoid guessing and use a defined fallback such as the default personal **Space** or a personal inbox.
+- The active **Space** is selected with a cookie. If the cookie is missing, invalid, archived, or points to a **Space** the **User** cannot access, Wallit falls back to the **User**'s default personal **Space**.
+- When Wallit falls back because the previously selected **Space** is no longer available, the app may show a small notification explaining that the **User** was moved back to the personal **Space**.
+- When the active **Space** changes, Wallit keeps the current route when that route is meaningful for the new **Space**; detail routes for data unavailable in the new **Space** redirect back to home.
+- The only global concepts are the **User** and the list of **Spaces** available to that **User**.
+- Categories are shared within a **Space**, not owned privately by individual users inside that **Space**.
+- When a **User** creates a new **Space**, Wallit copies the categories from that **User**'s default personal **Space** into the new **Space**. The copied categories become independent categories in the new **Space**.
 - A **Movement** belongs to exactly one account and always affects that account's balance.
 - A **Transfer** is composed of exactly two linked **Movements**.
 - A **Transfer** has one outgoing **Movement** and one incoming **Movement**.
+- A **Transfer** can only move money between bank accounts inside the same **Space**.
 - A **Pending Review Movement** is a **Movement** and affects account balance before confirmation.
 - A **Pending Review Movement** is excluded from category-based reporting until it becomes confirmed.
 - A **Pending Review Movement** becomes a **Reportable Movement** after confirmation, unless it is transformed into an operational workflow during review.

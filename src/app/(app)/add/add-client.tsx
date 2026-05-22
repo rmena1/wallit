@@ -741,7 +741,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
         open={showCreateCategory}
         onClose={() => setShowCreateCategory(false)}
         onCreated={(id, name, emoji) => {
-          setLocalCategories(prev => [...prev, { id, name, emoji, userId: '', createdAt: new Date(), updatedAt: new Date() }])
+          setLocalCategories(prev => [...prev, { id, name, emoji, spaceId: '', createdByUserId: null, createdAt: new Date(), updatedAt: new Date() }])
           setSelectedCategoryId(id)
         }}
       />

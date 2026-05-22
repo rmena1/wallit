@@ -86,8 +86,11 @@ test.describe('Investment Accounts', () => {
 
     // 4. Click on the investment account card to go to detail
     const accountCard = page.locator('[data-testid^="account-card-"]').filter({ hasText: 'BCI' })
-    await expect(accountCard).toBeVisible({ timeout: 3000 })
-    await accountCard.click()
+    await expect(accountCard).toBeVisible({ timeout: 5000 })
+    await Promise.all([
+      page.waitForURL('**/account/**', { timeout: 15_000 }),
+      accountCard.click(),
+    ])
     await page.waitForLoadState('networkidle')
     
     // Verify investment summary section is visible
@@ -211,7 +214,10 @@ test.describe('Investment Accounts', () => {
 
     const accountCard = page.locator(`[data-testid="account-card-${accountId}"]`)
     await expect(accountCard).toBeVisible({ timeout: 5000 })
-    await accountCard.click()
+    await Promise.all([
+      page.waitForURL('**/account/**', { timeout: 15_000 }),
+      accountCard.click(),
+    ])
     await page.waitForLoadState('networkidle')
 
     await expect(page.getByText('Historial de Valores')).toBeVisible({ timeout: 5000 })

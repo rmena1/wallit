@@ -18,6 +18,11 @@ function formatDate(date: Date) {
   return `${year}-${month}-${day}`
 }
 
+function todayInAppTimezone() {
+  const date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' })
+  return new Date(`${date}T12:00:00`)
+}
+
 function addDays(date: Date, amount: number) {
   const next = new Date(date)
   next.setDate(next.getDate() + amount)
@@ -185,7 +190,7 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     await registerAndLogin(page)
     await ensureAccount(page)
 
-    const now = new Date()
+    const now = todayInAppTimezone()
     const today = formatDate(now)
     const year = now.getFullYear()
     const month = now.getMonth() + 1
@@ -201,11 +206,12 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
       totalActualAmount += 10_000
     }
 
-    const trendTotal = Math.round((totalActualAmount / day) * totalDaysInMonth)
     const averageDailyExpense = totalActualAmount / day
+    const projectedExpenseTotal = averageDailyExpense * totalDaysInMonth
+    const displayedTrendTotal = Math.round(projectedExpenseTotal)
 
     await openReports(page)
-    await expect(page.getByText(`Tendencia lineal: ${formatClpFromPesos(trendTotal)}`)).toBeVisible({
+    await expect(page.getByText(`Tendencia lineal: ${formatClpFromPesos(displayedTrendTotal)}`)).toBeVisible({
       timeout: REPORT_TIMEOUT,
     })
 
@@ -237,14 +243,14 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
 
     expect(expenseChart.map(point => point.actual)).toEqual(expectedActualSeries)
     expect(expenseChart[day - 1]?.trend ?? 0).toBeCloseTo(totalActualAmount, 6)
-    expect(expenseChart[totalDaysInMonth - 1]?.trend ?? 0).toBeCloseTo(trendTotal, 6)
+    expect(expenseChart[totalDaysInMonth - 1]?.trend ?? 0).toBeCloseTo(projectedExpenseTotal, 6)
   })
 
   test('preset controls apply current periods, arrows shift the active preset, and the calendar highlights the visible range', async ({ page }) => {
     await registerAndLogin(page)
     await ensureAccount(page)
 
-    const today = new Date()
+    const today = todayInAppTimezone()
     const todayDate = formatDate(today)
     const currentMonthStart = formatDate(startOfMonth(today))
     const currentMonthEnd = formatDate(endOfMonth(today))
@@ -347,7 +353,7 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     await registerAndLogin(page)
     await ensureAccount(page)
 
-    const now = new Date()
+    const now = todayInAppTimezone()
     const today = formatDate(now)
     const year = now.getFullYear()
     const yearStart = getMonthDate(year, 1, 1)
@@ -403,7 +409,7 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
       initialBalance: '50000',
     })
 
-    const today = new Date()
+    const today = todayInAppTimezone()
     const monthStart = formatDate(startOfMonth(today))
     const previousDay = formatDate(addDays(startOfMonth(today), -1))
 
@@ -462,7 +468,7 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     await ensureCategory(page, '🍔', 'Comida')
     await ensureCategory(page, '🚗', 'Transporte')
 
-    const now = new Date()
+    const now = todayInAppTimezone()
     const today = formatDate(now)
     const year = now.getFullYear()
     const month = now.getMonth() + 1
@@ -561,7 +567,7 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     await ensureCategory(page, '🎮', 'Entretenimiento')
     await ensureCategory(page, '🍔', 'Comida')
 
-    const today = formatDate(new Date())
+    const today = formatDate(todayInAppTimezone())
 
     await createMovement(page, {
       name: 'Netflix',

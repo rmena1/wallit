@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { db, movements, accounts } from '@/lib/db'
 import { eq, and } from 'drizzle-orm'
-import { requireAuth } from '@/lib/auth'
+import { getCurrentSpace } from '@/lib/spaces'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { movementLedger, type AmountInputMode } from '@/lib/domain/movement-ledger'
 
@@ -32,8 +32,8 @@ function revalidateTransferPaths() {
 }
 
 export async function recordTransfer(params: CreateTransferParams): Promise<TransferActionResult> {
-  const session = await requireAuth()
-  const result = await movementLedger.recordTransfer(session.id, params)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.recordTransfer(space.id, session.id, params)
   if (result.success) revalidateTransferPaths()
   return result
 }
@@ -42,12 +42,12 @@ export async function recordTransfer(params: CreateTransferParams): Promise<Tran
  * Get transfer details by movement ID (returns both movements)
  */
 export async function getTransferByMovementId(movementId: string) {
-  const session = await requireAuth()
+  const { user: session, space } = await getCurrentSpace()
 
   const [movement] = await db
     .select()
     .from(movements)
-    .where(and(eq(movements.id, movementId), eq(movements.userId, session.id)))
+    .where(and(eq(movements.id, movementId), eq(movements.spaceId, space.id)))
     .limit(1)
 
   if (!movement || !movement.transferId) return null
@@ -71,8 +71,8 @@ export async function getTransferByMovementId(movementId: string) {
       accountEmoji: accounts.emoji,
     })
     .from(movements)
-    .leftJoin(accounts, eq(movements.accountId, accounts.id))
-    .where(and(eq(movements.transferId, movement.transferId), eq(movements.userId, session.id)))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
+    .where(and(eq(movements.transferId, movement.transferId), eq(movements.spaceId, space.id)))
 
   if (transferMovements.length !== 2) return null
   const expenseMovement = transferMovements.find(m => m.type === 'expense')
@@ -94,15 +94,15 @@ export async function updateTransfer(
     note?: string
   }
 ): Promise<TransferActionResult> {
-  const session = await requireAuth()
-  const result = await movementLedger.updateTransfer(session.id, transferId, params)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.updateTransfer(space.id, transferId, params)
   if (result.success) revalidateTransferPaths()
   return result
 }
 
 export async function deleteTransfer(transferId: string): Promise<TransferActionResult> {
-  const session = await requireAuth()
-  const result = await movementLedger.deleteTransfer(session.id, transferId)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.deleteTransfer(space.id, transferId)
   if (result.success) revalidateTransferPaths()
   return result
 }
@@ -133,8 +133,8 @@ interface TransformToTransferParams {
 }
 
 export async function transformToTransfer(params: TransformToTransferParams): Promise<TransferActionResult> {
-  const session = await requireAuth()
-  const result = await movementLedger.transformToTransfer(session.id, {
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.transformToTransfer(space.id, session.id, {
     ...params,
     source: {
       ...params.source,
@@ -146,8 +146,8 @@ export async function transformToTransfer(params: TransformToTransferParams): Pr
 }
 
 export async function confirmPendingAsTransfer(params: TransformToTransferParams): Promise<TransferActionResult> {
-  const session = await requireAuth()
-  const result = await movementLedger.confirmPendingAsTransfer(session.id, {
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.confirmPendingAsTransfer(space.id, session.id, {
     ...params,
     source: {
       ...params.source,
