@@ -1,9 +1,9 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, or, sql } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
-import { db, accounts, movements, investmentSnapshots } from '@/lib/db'
+import { db, accounts, movements, investmentSnapshots, transfers } from '@/lib/db'
 import { calculateInvestmentPerformance } from '@/lib/investment-performance'
 import { generateId } from '@/lib/utils'
 
@@ -239,10 +239,11 @@ export async function getInvestmentSummary(accountId: string): Promise<Investmen
   const [[totals], [openingSnapshot]] = await Promise.all([
     db
       .select({
-        transferIn: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'income' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
-        transferOut: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
+        transferIn: sql<number>`COALESCE(SUM(CASE WHEN ${transfers.id} IS NOT NULL AND ${movements.type} = 'income' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
+        transferOut: sql<number>`COALESCE(SUM(CASE WHEN ${transfers.id} IS NOT NULL AND ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
       })
       .from(movements)
+      .leftJoin(transfers, or(eq(transfers.sourceMovementId, movements.id), eq(transfers.destinationMovementId, movements.id)))
       .where(and(eq(movements.accountId, accountId), eq(movements.spaceId, space.id))),
     db
       .select({

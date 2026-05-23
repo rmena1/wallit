@@ -134,9 +134,6 @@ export const movements = pgTable('movements', {
   receivableId: text('receivable_id'), // links income payment to original receivable expense
   time: text('time'), // HH:MM format, nullable
   originalName: text('original_name'), // original name from bank email
-  // Transfer fields: link two movements as a transfer pair
-  transferId: text('transfer_id'), // shared ID between both movements of a transfer (nanoid)
-  transferPairId: text('transfer_pair_id'), // ID of the paired movement
   // Emergency expense fields
   emergency: boolean('emergency').notNull().default(false),
   emergencySettled: boolean('emergency_settled').notNull().default(false),
@@ -152,7 +149,25 @@ export const movements = pgTable('movements', {
   index('idx_movements_category').on(table.categoryId),
   index('idx_movements_account').on(table.accountId),
   index('idx_movements_review').on(table.spaceId, table.needsReview),
-  index('idx_movements_transfer').on(table.transferId),
+])
+
+// ============================================================================
+// TRANSFERS
+// ============================================================================
+export const transfers = pgTable('transfers', {
+  id: text('id').primaryKey(), // nanoid
+  sourceSpaceId: text('source_space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  destinationSpaceId: text('destination_space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  sourceMovementId: text('source_movement_id').notNull().references(() => movements.id, { onDelete: 'cascade' }),
+  destinationMovementId: text('destination_movement_id').notNull().references(() => movements.id, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  index('idx_transfers_source_space').on(table.sourceSpaceId),
+  index('idx_transfers_destination_space').on(table.destinationSpaceId),
+  uniqueIndex('idx_transfers_source_movement').on(table.sourceMovementId),
+  uniqueIndex('idx_transfers_destination_movement').on(table.destinationMovementId),
 ])
 
 // ============================================================================
@@ -184,6 +199,7 @@ export const emergencyPayments = pgTable('emergency_payments', {
   index('idx_emergency_payments_emergency').on(table.emergencyId),
   index('idx_emergency_payments_space').on(table.spaceId),
   index('idx_emergency_payments_space_emergency').on(table.spaceId, table.emergencyId),
+  index('idx_emergency_payments_transfer').on(table.transferId),
 ])
 
 // ============================================================================
@@ -212,6 +228,9 @@ export type NewInvestmentSnapshot = typeof investmentSnapshots.$inferInsert
 
 export type Movement = typeof movements.$inferSelect
 export type NewMovement = typeof movements.$inferInsert
+
+export type Transfer = typeof transfers.$inferSelect
+export type NewTransfer = typeof transfers.$inferInsert
 
 export type ExchangeRate = typeof exchangeRates.$inferSelect
 export type NewExchangeRate = typeof exchangeRates.$inferInsert

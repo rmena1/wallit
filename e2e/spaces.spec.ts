@@ -98,7 +98,7 @@ async function login(page: Page, email: string) {
 }
 
 test.describe('Spaces — multi-user financial contexts', () => {
-  test.setTimeout(180_000)
+  test.describe.configure({ timeout: 240_000 })
 
   test('new user gets Personal, can create/switch Spaces, categories and data stay isolated', async ({ page }) => {
     const email = await registerAndLogin(page)

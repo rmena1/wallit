@@ -295,14 +295,12 @@ test.describe('Investment Accounts', () => {
       type: 'expense',
       date: '2026-03-01',
       createdAt: new Date('2026-03-01T12:00:00.000Z'),
-      transferId: 'investment-transfer-out',
     })
     await seedTransferMovement(userId, accountId, {
       amount: 2000000,
       type: 'income',
       date: '2026-03-15',
       createdAt: new Date('2026-03-15T12:00:00.000Z'),
-      transferId: 'investment-transfer-in',
     })
 
     await page.goto('/')

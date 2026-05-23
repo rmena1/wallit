@@ -1,6 +1,14 @@
 import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount } from './helpers'
-import { getFirstAccountId, getUserId, seedConfirmedWorkflowMovement, seedUsdToClpRate } from './db-helper'
+import {
+  createRegularAccount,
+  getEmergencyPaymentTransferInfo,
+  getFirstAccountId,
+  getUserId,
+  seedConfirmedWorkflowMovement,
+  seedUsdToClpRate,
+  transferAndEmergencyPaymentStillLinked,
+} from './db-helper'
 
 async function addExpenseMovement(page: Page, name: string, amount: string) {
   await page.goto('/add')
@@ -29,6 +37,8 @@ async function addExpenseMovement(page: Page, name: string, amount: string) {
 }
 
 test.describe('Emergency Expenses', () => {
+  test.setTimeout(90_000)
+
   let email: string
 
   test.beforeEach(async ({ page }) => {
@@ -182,6 +192,54 @@ test.describe('Emergency Expenses', () => {
     await expect(page.locator('main')).not.toContainText('-$')
     await expect(page.getByText('Abonos (0)')).toBeVisible()
     await page.screenshot({ path: 'e2e-results/screenshots/emergency-overpay-rejected.png' })
+  })
+
+  test('blocks normal edit and delete of transfer linked to emergency partial payment', async ({ page }) => {
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const emergencyAccountId = await getFirstAccountId(userId)
+    if (!emergencyAccountId) throw new Error('Emergency account not found')
+    const paymentAccountId = await createRegularAccount(userId, { bankName: 'Emergency Pay Source', lastFourDigits: '9090', initialBalance: 50_000_000 })
+
+    const emergencyId = await seedConfirmedWorkflowMovement(userId, emergencyAccountId, {
+      name: 'Emergency linked transfer guard',
+      clpAmount: 20_000_000,
+      type: 'expense',
+      emergency: true,
+    })
+
+    await page.goto('/emergency')
+    await expect(page.getByText('Emergency linked transfer guard')).toBeVisible({ timeout: 5_000 })
+    await page.getByText('Emergency linked transfer guard').click()
+    await expect(page.getByText('Restante')).toBeVisible({ timeout: 5_000 })
+
+    await page.getByRole('button', { name: /Abonar/i }).click()
+    await expect(page.getByText('Abonar a emergencia')).toBeVisible()
+    await page.locator('select').nth(0).selectOption(paymentAccountId)
+    await page.locator('select').nth(1).selectOption(emergencyAccountId)
+    const amountInput = page.locator('input[inputmode="decimal"]').first()
+    await amountInput.clear()
+    await amountInput.fill('100000')
+    await page.getByRole('button', { name: /Confirmar abono/i }).click()
+    await expect(page.getByText('Abonos (1)')).toBeVisible({ timeout: 5_000 })
+
+    const transferInfo = await getEmergencyPaymentTransferInfo(emergencyId)
+    if (!transferInfo) throw new Error('Emergency payment transfer not found')
+
+    await page.goto(`/edit/${transferInfo.sourceMovementId}`)
+    await expect(page.getByText('Editar Transferencia')).toBeVisible({ timeout: 5_000 })
+    const transferAmountInput = page.locator('input[inputmode="decimal"]').first()
+    await transferAmountInput.clear()
+    await transferAmountInput.fill('75000')
+    await page.getByRole('button', { name: /Guardar cambios/i }).click()
+    await expect(page.getByText(/vinculada a un abono de emergencia.*no se puede editar/i)).toBeVisible({ timeout: 5_000 })
+
+    await page.getByRole('button', { name: /Eliminar transferencia/i }).click()
+    await expect(page.getByText('¿Eliminar esta transferencia?')).toBeVisible({ timeout: 5_000 })
+    await page.getByRole('button', { name: 'Eliminar', exact: true }).click()
+    await expect(page.getByText(/vinculada a un abono de emergencia.*no se puede eliminar/i)).toBeVisible({ timeout: 5_000 })
+    expect(await transferAndEmergencyPaymentStillLinked(transferInfo.transferId)).toBe(true)
+    await page.screenshot({ path: 'e2e-results/screenshots/emergency-linked-transfer-blocked.png' })
   })
 
   test('USD emergency keeps total paid and remaining in USD after partial payment', async ({ page }) => {

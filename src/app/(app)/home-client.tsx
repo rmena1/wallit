@@ -34,7 +34,7 @@ interface MovementWithCategory {
   time: string | null
   originalName: string | null
   transferId: string | null
-  transferPairId: string | null
+  transferOtherSpaceName: string | null
 }
 
 interface UserAccount {
@@ -168,6 +168,9 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
             {formatDateDisplay(m.date)}{m.time && ` · ${m.time}`}
             {!isTransfer && m.categoryName && (
               <span> · {m.categoryName}</span>
+            )}
+            {isTransfer && m.transferOtherSpaceName && (
+              <span style={{ color: '#60a5fa' }}> · {m.type === 'expense' ? 'a' : 'desde'} {m.transferOtherSpaceName}</span>
             )}
             {m.accountBankName && (
               <span style={{ color: isTransfer ? '#60a5fa' : m.accountColor || undefined }}> · {m.accountEmoji || ''} {m.accountBankName} ···{m.accountLastFour}</span>

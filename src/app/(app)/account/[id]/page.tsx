@@ -1,7 +1,7 @@
 import { getCurrentSpace } from '@/lib/spaces'
-import { redirect, notFound } from 'next/navigation'
-import { db, accounts, movements, categories } from '@/lib/db'
-import { eq, and, desc, asc, sql, isNotNull, gte } from 'drizzle-orm'
+import { notFound } from 'next/navigation'
+import { db, accounts, movements, categories, transfers } from '@/lib/db'
+import { eq, and, desc, asc, sql, gte } from 'drizzle-orm'
 import dynamic from 'next/dynamic'
 import { getAccountBalances } from '@/lib/actions/balances'
 import { getInvestmentSummary, getInvestmentSnapshots } from '@/lib/actions/investments'
@@ -81,8 +81,14 @@ export default async function AccountDetailPage({ params }: Props) {
     notFound()
   }
 
+  const transferExists = sql`EXISTS (
+    SELECT 1 FROM ${transfers}
+    WHERE ${transfers.sourceMovementId} = ${movements.id}
+       OR ${transfers.destinationMovementId} = ${movements.id}
+  )`
+
   const movementsWhere = account.isInvestment
-    ? and(eq(movements.accountId, id), eq(movements.spaceId, space.id), isNotNull(movements.transferId))
+    ? and(eq(movements.accountId, id), eq(movements.spaceId, space.id), transferExists)
     : and(eq(movements.accountId, id), eq(movements.spaceId, space.id))
 
   const [accountMovements, countResult, accountBalances, investmentSummary, investmentSnapshots] = await Promise.all([
@@ -99,8 +105,13 @@ export default async function AccountDetailPage({ params }: Props) {
         originalName: movements.originalName,
         receivable: movements.receivable,
         received: movements.received,
-        transferId: movements.transferId,
-        transferPairId: movements.transferPairId,
+        transferId: sql<string | null>`(
+          SELECT ${transfers.id}
+          FROM ${transfers}
+          WHERE ${transfers.sourceMovementId} = ${movements.id}
+             OR ${transfers.destinationMovementId} = ${movements.id}
+          LIMIT 1
+        )`,
         categoryName: categories.name,
         categoryEmoji: categories.emoji,
       })
@@ -123,6 +134,15 @@ export default async function AccountDetailPage({ params }: Props) {
 
   const balanceData = accountBalances.find((a) => a.id === id)
   const balance = balanceData?.balance ?? (account.currentValue ?? account.initialBalance)
+  const effectiveInvestmentSummary = account.isInvestment && balanceData
+    ? {
+        totalDeposited: balanceData.totalDeposited,
+        gainLoss: balanceData.gainLoss,
+        gainLossPercent: balanceData.gainLossPercent,
+        currentValue: balanceData.currentValue ?? account.currentValue ?? account.initialBalance,
+        currentValueUpdatedAt: account.currentValueUpdatedAt,
+      }
+    : investmentSummary
   const totalCount = countResult[0]?.count ?? 0
   const hasMore = totalCount > MOVEMENTS_PAGE_SIZE
 
@@ -132,7 +152,6 @@ export default async function AccountDetailPage({ params }: Props) {
     balanceHistory = [...investmentSnapshots].reverse().map((s) => ({ date: s.date, balance: s.value, currency: account.currency }))
   } else {
     // Get movements from last 180 days sorted by date asc for balance history
-    // eslint-disable-next-line react-hooks/purity -- server-rendered data query intentionally uses current date
     const cutoffDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const allMovements = await db.select({ date: movements.date, amount: movements.amount, type: movements.type, amountUsd: movements.amountUsd }).from(movements).where(and(eq(movements.accountId, id), eq(movements.spaceId, space.id), gte(movements.date, cutoffDate))).orderBy(asc(movements.date), asc(movements.createdAt))
     let running = account.initialBalance
@@ -153,7 +172,7 @@ export default async function AccountDetailPage({ params }: Props) {
       movements={accountMovements}
       totalCount={totalCount}
       hasMore={hasMore}
-      investmentSummary={investmentSummary}
+      investmentSummary={effectiveInvestmentSummary}
       investmentSnapshots={investmentSnapshots}
     />
   )

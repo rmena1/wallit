@@ -1,6 +1,6 @@
 import { getCurrentSpace } from '@/lib/spaces'
 import { redirect } from 'next/navigation'
-import { db, movements, categories, accounts } from '@/lib/db'
+import { db, movements, categories, accounts, transfers } from '@/lib/db'
 import { eq, desc, sql, and, gte } from 'drizzle-orm'
 import { getAccountBalances, getNetLiquidity, type AccountWithBalanceSerialized, type NetLiquidityData } from '@/lib/actions/balances'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
@@ -59,8 +59,34 @@ export default async function Home() {
         receivableId: movements.receivableId,
         time: movements.time,
         originalName: movements.originalName,
-        transferId: movements.transferId,
-        transferPairId: movements.transferPairId,
+        transferId: sql<string | null>`(
+          SELECT ${transfers.id}
+          FROM ${transfers}
+          WHERE (${transfers.sourceMovementId} = ${movements.id}
+             OR ${transfers.destinationMovementId} = ${movements.id})
+          LIMIT 1
+        )`,
+        transferOtherSpaceName: sql<string | null>`(
+          SELECT CASE
+            WHEN ${transfers.sourceMovementId} = ${movements.id} THEN destination_space.name
+            ELSE source_space.name
+          END
+          FROM ${transfers}
+          INNER JOIN spaces source_space ON source_space.id = ${transfers.sourceSpaceId}
+          INNER JOIN spaces destination_space ON destination_space.id = ${transfers.destinationSpaceId}
+          WHERE (${transfers.sourceMovementId} = ${movements.id}
+             OR ${transfers.destinationMovementId} = ${movements.id})
+            AND EXISTS (
+              SELECT 1
+              FROM space_memberships other_membership
+              WHERE other_membership.user_id = ${session.id}
+                AND other_membership.space_id = CASE
+                  WHEN ${transfers.sourceMovementId} = ${movements.id} THEN ${transfers.destinationSpaceId}
+                  ELSE ${transfers.sourceSpaceId}
+                END
+            )
+          LIMIT 1
+        )`,
       })
       .from(movements)
       .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))

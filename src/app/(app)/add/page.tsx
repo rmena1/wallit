@@ -1,11 +1,11 @@
 import { getCurrentSpace } from '@/lib/spaces'
 import { redirect } from 'next/navigation'
 import { db, accounts, categories } from '@/lib/db'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { AddMovementPage } from './add-client'
 
 export default async function AddPage() {
-  const { user: session, space } = await getCurrentSpace()
+  const { user: session, space, spaces: availableSpaces } = await getCurrentSpace()
 
   const userAccounts = await db
     .select()
@@ -19,6 +19,12 @@ export default async function AddPage() {
     .where(eq(categories.spaceId, space.id))
     .orderBy(categories.name)
 
+  const transferAccounts = await db
+    .select()
+    .from(accounts)
+    .where(sql`${accounts.spaceId} IN (${sql.join(availableSpaces.map((s) => sql`${s.id}`), sql`, `)})`)
+    .orderBy(accounts.bankName)
+
   // If no accounts, redirect to settings
   if (userAccounts.length === 0) {
     redirect('/settings')
@@ -27,6 +33,9 @@ export default async function AddPage() {
   return (
     <AddMovementPage
       accounts={userAccounts}
+      transferAccounts={transferAccounts}
+      transferSpaces={availableSpaces.map((s) => ({ id: s.id, name: s.name, emoji: s.emoji, isCurrent: s.id === space.id, hasAccounts: transferAccounts.some((a) => a.spaceId === s.id) }))}
+      currentSpaceId={space.id}
       categories={userCategories}
     />
   )

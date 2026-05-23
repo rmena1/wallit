@@ -16,8 +16,7 @@ interface TransferMovement {
   currency: 'CLP' | 'USD'
   amountUsd: number | null
   exchangeRate: number | null
-  transferId: string | null
-  transferPairId: string | null
+  spaceId: string
   accountBankName: string | null
   accountLastFour: string | null
   accountCurrency: 'CLP' | 'USD' | null
@@ -26,6 +25,9 @@ interface TransferMovement {
 
 interface TransferData {
   transferId: string
+  sourceSpaceId: string
+  destinationSpaceId: string
+  canEdit: boolean
   fromMovement: TransferMovement
   toMovement: TransferMovement
 }
@@ -33,6 +35,8 @@ interface TransferData {
 interface Props {
   transfer: TransferData
   accounts: Account[]
+  transferAccounts: Account[]
+  transferSpaces: { id: string; name: string; emoji: string; isCurrent: boolean; hasAccounts: boolean }[]
 }
 
 const inputStyle: React.CSSProperties = {
@@ -43,18 +47,36 @@ const inputStyle: React.CSSProperties = {
 }
 
 const labelStyle: React.CSSProperties = { fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }
+const selectStyle: React.CSSProperties = {
+  ...inputStyle,
+  appearance: 'none' as const,
+  backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2371717a' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+  backgroundPosition: 'right 12px center',
+  backgroundRepeat: 'no-repeat',
+  backgroundSize: '16px',
+}
 
 function centsToDisplay(cents: number): string {
   return (cents / 100).toString()
 }
 
-export function EditTransferClient({ transfer, accounts }: Props) {
+function extractTransferNote(name: string): string {
+  return name.includes(' · ') ? name.split(' · ').slice(1).join(' · ') : ''
+}
+
+export function EditTransferClient({ transfer, accounts, transferAccounts, transferSpaces }: Props) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const fromAccount = accounts.find(a => a.id === transfer.fromMovement.accountId)
-  const toAccount = accounts.find(a => a.id === transfer.toMovement.accountId)
+  const [formFromAccountId, setFormFromAccountId] = useState(transfer.fromMovement.accountId ?? '')
+  const [formDestinationSpaceId, setFormDestinationSpaceId] = useState(transfer.destinationSpaceId)
+  const [formToAccountId, setFormToAccountId] = useState(transfer.toMovement.accountId ?? '')
+  const sourceAccounts = transferAccounts.filter(a => a.spaceId === transfer.sourceSpaceId)
+  const destinationAccounts = transferAccounts.filter(a => a.spaceId === formDestinationSpaceId)
+  const selectedDestinationSpace = transferSpaces.find(s => s.id === formDestinationSpaceId)
+  const fromAccount = sourceAccounts.find(a => a.id === formFromAccountId) || accounts.find(a => a.id === transfer.fromMovement.accountId)
+  const toAccount = destinationAccounts.find(a => a.id === formToAccountId) || transferAccounts.find(a => a.id === transfer.toMovement.accountId)
 
   const fromCurrency = fromAccount?.currency || transfer.fromMovement.accountCurrency || transfer.fromMovement.currency
   const toCurrency = toAccount?.currency || transfer.toMovement.accountCurrency || transfer.toMovement.currency
@@ -62,7 +84,7 @@ export function EditTransferClient({ transfer, accounts }: Props) {
 
   // Form state
   const [formDate, setFormDate] = useState(transfer.fromMovement.date)
-  const [formNote, setFormNote] = useState(transfer.fromMovement.name.replace(/^Transferencia (a|desde) .*$/, '').trim() || '')
+  const [formNote, setFormNote] = useState(extractTransferNote(transfer.fromMovement.name))
   const [formFromAmount, setFormFromAmount] = useState(
     fromCurrency === 'USD' && transfer.fromMovement.amountUsd
       ? centsToDisplay(transfer.fromMovement.amountUsd)
@@ -76,6 +98,10 @@ export function EditTransferClient({ transfer, accounts }: Props) {
   const [exchangeRate, setExchangeRate] = useState<number | null>(null)
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
+  useEffect(() => {
+    if (formDestinationSpaceId !== transfer.destinationSpaceId) setFormToAccountId('')
+  }, [formDestinationSpaceId, transfer.destinationSpaceId])
 
   // Get exchange rate
   useEffect(() => {
@@ -117,8 +143,21 @@ export function EditTransferClient({ transfer, accounts }: Props) {
         setLoading(false)
         return
       }
+      if (!formFromAccountId || !formToAccountId) {
+        setError(selectedDestinationSpace?.hasAccounts === false ? 'El Space destino no tiene cuentas disponibles' : 'Selecciona las cuentas de la transferencia')
+        setLoading(false)
+        return
+      }
+      if (formFromAccountId === formToAccountId && transfer.sourceSpaceId === formDestinationSpaceId) {
+        setError('Las cuentas deben ser diferentes')
+        setLoading(false)
+        return
+      }
 
       const result = await updateTransfer(transfer.transferId, {
+        fromAccountId: formFromAccountId,
+        toAccountId: formToAccountId,
+        destinationSpaceId: formDestinationSpaceId,
         fromAmount: fromCents,
         toAmount: toCents,
         fromCurrency,
@@ -191,6 +230,11 @@ export function EditTransferClient({ transfer, accounts }: Props) {
             {error}
           </div>
         )}
+        {!transfer.canEdit && (
+          <div style={{ backgroundColor: '#422006', border: '1px solid #854d0e', borderRadius: 12, padding: '12px 16px', marginBottom: 16, fontSize: 14, color: '#facc15' }}>
+            Necesitas acceso a ambos Spaces para editar o eliminar esta transferencia.
+          </div>
+        )}
 
         {/* Transfer Info Card */}
         <div style={{
@@ -208,6 +252,36 @@ export function EditTransferClient({ transfer, accounts }: Props) {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <label style={labelStyle}>Cuenta origen</label>
+              <select aria-label="Cuenta origen" value={formFromAccountId} onChange={e => setFormFromAccountId(e.target.value)} style={selectStyle} disabled={!transfer.canEdit}>
+                {sourceAccounts.map(a => (
+                  <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} ···{a.lastFourDigits} ({a.currency})</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Space destino</label>
+              <select aria-label="Space destino" value={formDestinationSpaceId} onChange={e => setFormDestinationSpaceId(e.target.value)} style={selectStyle} disabled={!transfer.canEdit}>
+                {transferSpaces.map(space => (
+                  <option key={space.id} value={space.id} disabled={!space.hasAccounts}>
+                    {space.emoji} {space.name}{space.isCurrent ? ' (actual)' : ''}{!space.hasAccounts ? ' — sin cuentas' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Cuenta destino</label>
+              <select aria-label="Cuenta destino" value={formToAccountId} onChange={e => setFormToAccountId(e.target.value)} style={selectStyle} disabled={!transfer.canEdit}>
+                <option value="">{destinationAccounts.length === 0 ? 'Space sin cuentas disponibles' : 'Seleccionar cuenta destino'}</option>
+                {destinationAccounts.filter(a => formDestinationSpaceId !== transfer.sourceSpaceId || a.id !== formFromAccountId).map(a => (
+                  <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} ···{a.lastFourDigits} ({a.currency})</option>
+                ))}
+              </select>
+            </div>
+
             {/* Amounts */}
             <div style={{ display: 'flex', gap: 12 }}>
               <div style={{ flex: 1 }}>
@@ -265,7 +339,7 @@ export function EditTransferClient({ transfer, accounts }: Props) {
 
         {/* Save button */}
         <div style={{ marginTop: 20 }}>
-          <button onClick={handleSave} disabled={loading} style={{
+          <button onClick={handleSave} disabled={loading || !transfer.canEdit} style={{
             width: '100%', height: 48, borderRadius: 12, border: 'none',
             background: loading ? '#27272a' : 'linear-gradient(135deg, #3b82f6, #2563eb)',
             color: '#fff', fontSize: 15, fontWeight: 600,
@@ -278,7 +352,7 @@ export function EditTransferClient({ transfer, accounts }: Props) {
 
         {/* Delete button */}
         <div style={{ marginTop: 12 }}>
-          <button onClick={() => setShowDeleteConfirm(true)} disabled={loading} style={{
+          <button onClick={() => setShowDeleteConfirm(true)} disabled={loading || !transfer.canEdit} style={{
             width: '100%', height: 42, borderRadius: 12, border: '1px solid #7f1d1d',
             backgroundColor: '#1a1a1a', color: '#f87171',
             fontSize: 14, fontWeight: 600, cursor: 'pointer',

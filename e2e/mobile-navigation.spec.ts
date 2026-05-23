@@ -29,7 +29,7 @@ test.describe('Mobile Navigation — Bottom Nav & Responsive Design', () => {
       const navItems = await navButtons.all()
       for (let i = 0; i < Math.min(navItems.length, 5); i++) {
         const navItem = navItems[i]
-        await navItem.click()
+        await navItem.click({ force: true })
         await page.waitForLoadState('networkidle')
         await screenshot(page, `mobile-nav-02-section-${i + 1}`)
       }

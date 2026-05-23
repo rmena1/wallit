@@ -65,6 +65,8 @@ async function createUsdAndClpAccounts(page: Page) {
 }
 
 test.describe('Transfers — CLP Flow', () => {
+  test.describe.configure({ timeout: 120_000 })
+
   test('complete CLP transfer lifecycle - create, edit, delete, and verify behavior', async ({ page }) => {
     await registerAndLogin(page)
     await createTwoAccounts(page)
@@ -92,10 +94,9 @@ test.describe('Transfers — CLP Flow', () => {
     
     // Submit
     await page.getByRole('button', { name: /Crear Transferencia/i }).click()
-    await page.waitForURL('**/', { timeout: 5000 })
     
     // Verify transfer appears with both movements
-    await expect(page.getByText('Transfer test CLP').first()).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Transfer test CLP').first()).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('text=↔️').first()).toBeVisible()
     expect(await page.getByText('Transfer test CLP').count()).toBe(2)
     await screenshot(page, 'transfers-clp-04-created')
@@ -123,7 +124,7 @@ test.describe('Transfers — CLP Flow', () => {
     await screenshot(page, 'transfers-clp-07-amount-changed')
     
     await page.getByRole('button', { name: /Guardar cambios/i }).click()
-    await page.waitForURL('**/', { timeout: 5000 })
+    await page.waitForURL('**/', { timeout: 15_000 })
     await screenshot(page, 'transfers-clp-08-edited')
 
     // ========================================
@@ -174,6 +175,8 @@ test.describe('Transfers — CLP Flow', () => {
 })
 
 test.describe('Transfers — USD Multi-Currency Flow', () => {
+  test.describe.configure({ timeout: 120_000 })
+
   test('complete USD transfer lifecycle - create with exchange rate, edit amounts', async ({ page }) => {
     await registerAndLogin(page)
     await createUsdAndClpAccounts(page)

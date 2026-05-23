@@ -33,6 +33,9 @@ interface MovementData {
 interface Props {
   movement: MovementData
   accounts: Account[]
+  transferAccounts: Account[]
+  transferSpaces: { id: string; name: string; emoji: string; isCurrent: boolean; hasAccounts: boolean }[]
+  currentSpaceId: string
   categories: Category[]
 }
 
@@ -58,7 +61,7 @@ function centsToDisplay(cents: number): string {
   return (cents / 100).toString()
 }
 
-export function EditClient({ movement, accounts, categories }: Props) {
+export function EditClient({ movement, accounts, transferAccounts, transferSpaces, currentSpaceId, categories }: Props) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -87,6 +90,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
   
   // Transfer mode state
   const [isTransferMode, setIsTransferMode] = useState(false)
+  const [transferDestinationSpaceId, setTransferDestinationSpaceId] = useState(currentSpaceId)
   const [transferToAccountId, setTransferToAccountId] = useState('')
   const [transferToAmount, setTransferToAmount] = useState('')
   const [transferNote, setTransferNote] = useState('')
@@ -108,11 +112,17 @@ export function EditClient({ movement, accounts, categories }: Props) {
 
   // Get currencies for transfer calculation
   const fromAccount = accounts.find(a => a.id === formAccountId)
-  const toAccountForTransfer = accounts.find(a => a.id === transferToAccountId)
+  const transferDestinationAccounts = transferAccounts.filter(a => a.spaceId === transferDestinationSpaceId)
+  const selectedTransferDestinationSpace = transferSpaces.find(s => s.id === transferDestinationSpaceId)
+  const toAccountForTransfer = transferDestinationAccounts.find(a => a.id === transferToAccountId)
   const fromCurrency = fromAccount?.currency || 'CLP'
   const toCurrencyTransfer = toAccountForTransfer?.currency || 'CLP'
   const currenciesDifferTransfer = fromCurrency !== toCurrencyTransfer
   const canEditEmergencyWorkflow = !movement.receivable
+
+  useEffect(() => {
+    setTransferToAccountId('')
+  }, [transferDestinationSpaceId])
 
   // Auto-calculate transfer toAmount when formAmount or accounts change
   useEffect(() => {
@@ -132,7 +142,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
       }
       setTransferToAmount((toCents / 100).toString())
     } else if (!currenciesDifferTransfer) {
-      setTransferToAmount(formAmount)
+      setTransferToAmount(fromCurrency === 'USD' ? formAmountUsd : formAmount)
     }
   }, [isTransferMode, formAmount, formAmountUsd, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
 
@@ -176,11 +186,11 @@ export function EditClient({ movement, accounts, categories }: Props) {
           return
         }
         if (!transferToAccountId) {
-          setError('Selecciona una cuenta destino')
+          setError(selectedTransferDestinationSpace?.hasAccounts === false ? 'El Space destino no tiene cuentas disponibles' : 'Selecciona una cuenta destino')
           setLoading(false)
           return
         }
-        if (formAccountId === transferToAccountId) {
+        if (formAccountId === transferToAccountId && transferDestinationSpaceId === currentSpaceId) {
           setError('Las cuentas deben ser diferentes')
           setLoading(false)
           return
@@ -214,6 +224,7 @@ export function EditClient({ movement, accounts, categories }: Props) {
             time: formTime || null,
           },
           toAccountId: transferToAccountId,
+          destinationSpaceId: transferDestinationSpaceId,
           toAmount: toAmountCents,
           toCurrency: toCurrencyTransfer,
           note: transferNote.trim() || undefined,
@@ -435,6 +446,18 @@ export function EditClient({ movement, accounts, categories }: Props) {
                   </select>
                 </div>
                 
+                {/* Transfer: Destination Space */}
+                <div>
+                  <label style={labelStyle}>Space destino</label>
+                  <select value={transferDestinationSpaceId} onChange={e => setTransferDestinationSpaceId(e.target.value)} style={selectStyle}>
+                    {transferSpaces.map(space => (
+                      <option key={space.id} value={space.id} disabled={!space.hasAccounts}>
+                        {space.emoji} {space.name}{space.isCurrent ? ' (actual)' : ''}{!space.hasAccounts ? ' — sin cuentas' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 {/* Transfer: To Account */}
                 <div>
                   <label style={labelStyle}>Hacia cuenta (destino)</label>
@@ -442,8 +465,8 @@ export function EditClient({ movement, accounts, categories }: Props) {
                     ...selectStyle,
                     ...(transferToAccountId === '' ? { border: '1px solid #f59e0b40', backgroundColor: '#1a1812' } : {})
                   }}>
-                    <option value="">Seleccionar cuenta destino</option>
-                    {accounts.filter(a => a.id !== formAccountId).map(a => (
+                    <option value="">{transferDestinationAccounts.length === 0 ? 'Space sin cuentas disponibles' : 'Seleccionar cuenta destino'}</option>
+                    {transferDestinationAccounts.filter(a => transferDestinationSpaceId !== currentSpaceId || a.id !== formAccountId).map(a => (
                       <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} ···{a.lastFourDigits} ({a.currency})</option>
                     ))}
                   </select>

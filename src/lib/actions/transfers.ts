@@ -1,8 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, movements, accounts } from '@/lib/db'
-import { eq, and } from 'drizzle-orm'
+import { db, movements, accounts, spaces, transfers, spaceMemberships } from '@/lib/db'
+import { eq, and, isNull, or } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { movementLedger, type AmountInputMode } from '@/lib/domain/movement-ledger'
@@ -16,6 +16,7 @@ export type TransferActionResult = {
 interface CreateTransferParams {
   fromAccountId: string
   toAccountId: string
+  destinationSpaceId?: string
   fromAmount: number
   toAmount: number
   fromCurrency: 'CLP' | 'USD'
@@ -45,16 +46,39 @@ export async function getTransferByMovementId(movementId: string) {
   const { user: session, space } = await getCurrentSpace()
 
   const [movement] = await db
-    .select()
+    .select({ id: movements.id })
     .from(movements)
     .where(and(eq(movements.id, movementId), eq(movements.spaceId, space.id)))
     .limit(1)
 
-  if (!movement || !movement.transferId) return null
+  if (!movement) return null
+
+  const [transfer] = await db
+    .select()
+    .from(transfers)
+    .where(or(eq(transfers.sourceMovementId, movementId), eq(transfers.destinationMovementId, movementId)))
+    .limit(1)
+
+  if (!transfer || (transfer.sourceSpaceId !== space.id && transfer.destinationSpaceId !== space.id)) return null
+
+  const memberships = await db
+    .select({ spaceId: spaceMemberships.spaceId })
+    .from(spaceMemberships)
+    .innerJoin(spaces, eq(spaceMemberships.spaceId, spaces.id))
+    .where(and(eq(spaceMemberships.userId, session.id), isNull(spaces.archivedAt)))
+  const memberSpaceIds = new Set(memberships.map((m) => m.spaceId))
+  const canEdit = memberSpaceIds.has(transfer.sourceSpaceId) && memberSpaceIds.has(transfer.destinationSpaceId)
+
+  // Do not load or return the other side of a transfer unless the user still
+  // has access to both Spaces. The timeline may show the accessible movement,
+  // but the full edit shape contains private movement/account details from both
+  // sides and is only safe for users who can operate the full transfer.
+  if (!canEdit) return null
 
   const transferMovements = await db
     .select({
       id: movements.id,
+      spaceId: movements.spaceId,
       accountId: movements.accountId,
       name: movements.name,
       date: movements.date,
@@ -63,46 +87,43 @@ export async function getTransferByMovementId(movementId: string) {
       currency: movements.currency,
       amountUsd: movements.amountUsd,
       exchangeRate: movements.exchangeRate,
-      transferId: movements.transferId,
-      transferPairId: movements.transferPairId,
       accountBankName: accounts.bankName,
       accountLastFour: accounts.lastFourDigits,
       accountCurrency: accounts.currency,
       accountEmoji: accounts.emoji,
     })
     .from(movements)
-    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
-    .where(and(eq(movements.transferId, movement.transferId), eq(movements.spaceId, space.id)))
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, movements.spaceId)))
+    .where(or(eq(movements.id, transfer.sourceMovementId), eq(movements.id, transfer.destinationMovementId)))
 
   if (transferMovements.length !== 2) return null
-  const expenseMovement = transferMovements.find(m => m.type === 'expense')
-  const incomeMovement = transferMovements.find(m => m.type === 'income')
+  const expenseMovement = transferMovements.find(m => m.id === transfer.sourceMovementId && m.type === 'expense')
+  const incomeMovement = transferMovements.find(m => m.id === transfer.destinationMovementId && m.type === 'income')
   if (!expenseMovement || !incomeMovement) return null
-  if (expenseMovement.transferPairId !== incomeMovement.id || incomeMovement.transferPairId !== expenseMovement.id) return null
 
-  return { transferId: movement.transferId, fromMovement: expenseMovement, toMovement: incomeMovement }
+  return {
+    transferId: transfer.id,
+    sourceSpaceId: transfer.sourceSpaceId,
+    destinationSpaceId: transfer.destinationSpaceId,
+    canEdit,
+    fromMovement: expenseMovement,
+    toMovement: incomeMovement,
+  }
 }
 
 export async function updateTransfer(
   transferId: string,
-  params: {
-    fromAmount: number
-    toAmount: number
-    fromCurrency: 'CLP' | 'USD'
-    toCurrency: 'CLP' | 'USD'
-    date: string
-    note?: string
-  }
+  params: CreateTransferParams
 ): Promise<TransferActionResult> {
   const { user: session, space } = await getCurrentSpace()
-  const result = await movementLedger.updateTransfer(space.id, transferId, params)
+  const result = await movementLedger.updateTransfer(space.id, session.id, transferId, params)
   if (result.success) revalidateTransferPaths()
   return result
 }
 
 export async function deleteTransfer(transferId: string): Promise<TransferActionResult> {
   const { user: session, space } = await getCurrentSpace()
-  const result = await movementLedger.deleteTransfer(space.id, transferId)
+  const result = await movementLedger.deleteTransfer(space.id, session.id, transferId)
   if (result.success) revalidateTransferPaths()
   return result
 }
@@ -127,6 +148,7 @@ interface TransformToTransferParams {
     time?: string | null
   }
   toAccountId: string
+  destinationSpaceId?: string
   toAmount: number
   toCurrency: 'CLP' | 'USD'
   note?: string

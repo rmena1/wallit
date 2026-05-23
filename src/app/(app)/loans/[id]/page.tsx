@@ -1,8 +1,8 @@
 import { getCurrentSpace } from '@/lib/spaces'
 import { redirect, notFound } from 'next/navigation'
 import { getLoanDetail } from '@/lib/actions/loans'
-import { db, movements, accounts } from '@/lib/db'
-import { eq, and, isNull, desc } from 'drizzle-orm'
+import { db, movements, accounts, transfers } from '@/lib/db'
+import { eq, and, isNull, desc, sql } from 'drizzle-orm'
 import { LoanDetailClient } from './loan-detail-client'
 
 export default async function LoanDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -34,8 +34,11 @@ export default async function LoanDetailPage({ params }: { params: Promise<{ id:
       eq(movements.emergency, false),
       eq(movements.loan, false),
       isNull(movements.loanId),
-      isNull(movements.transferId),
-      isNull(movements.transferPairId),
+      sql`NOT EXISTS (
+        SELECT 1 FROM ${transfers}
+        WHERE ${transfers.sourceMovementId} = ${movements.id}
+           OR ${transfers.destinationMovementId} = ${movements.id}
+      )`,
       isNull(movements.receivableId),
     ))
     .orderBy(desc(movements.date), desc(movements.createdAt))

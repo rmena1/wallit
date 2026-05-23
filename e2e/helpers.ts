@@ -133,8 +133,10 @@ export async function expectCategoryVisibleInSettings(page: Page, name: string) 
     return categoryText()
   }
 
-  // Same server-action/router.refresh timing as accounts: reload once to avoid
-  // asserting against a stale settings payload.
+  // Same server-action/router.refresh timing as accounts: wait for the
+  // server action to finish before reloading, otherwise the reload can abort
+  // a slow category creation and make the assertion flaky.
+  await expect(page.getByPlaceholder('Nombre de categoría')).toHaveValue('', { timeout: DEFAULT_TIMEOUT })
   await page.reload()
   await expect(page.getByText('Categorías')).toBeVisible({ timeout: DEFAULT_TIMEOUT })
   await expect(categoryText()).toBeVisible({ timeout: DEFAULT_TIMEOUT })

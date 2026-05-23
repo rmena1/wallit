@@ -10,6 +10,9 @@ import type { Category, Account } from '@/lib/db'
 
 interface AddMovementPageProps {
   accounts: Account[]
+  transferAccounts: Account[]
+  transferSpaces: { id: string; name: string; emoji: string; isCurrent: boolean; hasAccounts: boolean }[]
+  currentSpaceId: string
   categories: Category[]
 }
 
@@ -52,6 +55,7 @@ const errorTextStyle: React.CSSProperties = {
 interface FieldErrors {
   accountId?: string
   fromAccountId?: string
+  destinationSpaceId?: string
   toAccountId?: string
   name?: string
   amount?: string
@@ -62,7 +66,7 @@ interface FieldErrors {
 
 type MovementType = 'expense' | 'income' | 'transfer'
 
-export function AddMovementPage({ accounts, categories }: AddMovementPageProps) {
+export function AddMovementPage({ accounts, transferAccounts, transferSpaces, currentSpaceId, categories }: AddMovementPageProps) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -85,6 +89,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
   // Transfer form state
   const [fromAccountId, setFromAccountId] = useState('')
+  const [destinationSpaceId, setDestinationSpaceId] = useState(currentSpaceId)
   const [toAccountId, setToAccountId] = useState('')
   const [fromAmount, setFromAmount] = useState('')
   const [toAmount, setToAmount] = useState('')
@@ -93,10 +98,16 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
 
   // Get currencies for selected accounts
   const fromAccount = accounts.find(a => a.id === fromAccountId)
-  const toAccount = accounts.find(a => a.id === toAccountId)
+  const destinationAccounts = transferAccounts.filter(a => a.spaceId === destinationSpaceId)
+  const selectedDestinationSpace = transferSpaces.find(s => s.id === destinationSpaceId)
+  const toAccount = destinationAccounts.find(a => a.id === toAccountId)
   const fromCurrency = fromAccount?.currency || 'CLP'
   const toCurrency = toAccount?.currency || 'CLP'
   const currenciesDiffer = fromCurrency !== toCurrency
+
+  useEffect(() => {
+    setToAccountId('')
+  }, [destinationSpaceId])
 
   useEffect(() => {
     if (type !== 'expense' && emergency) setEmergency(false)
@@ -173,9 +184,12 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
       errors.fromAccountId = 'Selecciona cuenta origen'
     }
     if (!toAccountId) {
-      errors.toAccountId = 'Selecciona cuenta destino'
+      errors.toAccountId = selectedDestinationSpace?.hasAccounts === false ? 'Este Space no tiene cuentas disponibles' : 'Selecciona cuenta destino'
     }
-    if (fromAccountId && toAccountId && fromAccountId === toAccountId) {
+    if (!destinationSpaceId) {
+      errors.destinationSpaceId = 'Selecciona Space destino'
+    }
+    if (fromAccountId && toAccountId && fromAccountId === toAccountId && destinationSpaceId === currentSpaceId) {
       errors.toAccountId = 'Debe ser diferente a la cuenta origen'
     }
     if (!fromAmount.trim()) {
@@ -227,6 +241,7 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
         const result = await recordTransfer({
           fromAccountId,
           toAccountId,
+          destinationSpaceId,
           fromAmount: fromCents,
           toAmount: toCents,
           fromCurrency,
@@ -385,6 +400,25 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                   )}
                 </div>
 
+                {/* Destination Space */}
+                <div>
+                  <label htmlFor="add-transfer-destination-space" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Space destino</label>
+                  <select
+                    id="add-transfer-destination-space"
+                    aria-label="Space destino"
+                    value={destinationSpaceId}
+                    onChange={e => { setDestinationSpaceId(e.target.value); clearFieldError('destinationSpaceId'); clearFieldError('toAccountId') }}
+                    style={fieldErrors.destinationSpaceId ? selectErrorStyle : selectStyle}
+                  >
+                    {transferSpaces.map((space) => (
+                      <option key={space.id} value={space.id} disabled={!space.hasAccounts}>
+                        {space.emoji} {space.name}{space.isCurrent ? ' (actual)' : ''}{!space.hasAccounts ? ' — sin cuentas' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {fieldErrors.destinationSpaceId && <div style={errorTextStyle}>{fieldErrors.destinationSpaceId}</div>}
+                </div>
+
                 {/* To Account */}
                 <div>
                   <label htmlFor="add-transfer-to-account" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Hacia cuenta</label>
@@ -395,8 +429,8 @@ export function AddMovementPage({ accounts, categories }: AddMovementPageProps) 
                     onChange={e => { setToAccountId(e.target.value); clearFieldError('toAccountId') }}
                     style={fieldErrors.toAccountId ? selectErrorStyle : selectStyle}
                   >
-                    <option value="" disabled>Seleccionar cuenta destino</option>
-                    {accounts.filter(a => a.id !== fromAccountId).map((acc) => (
+                    <option value="" disabled>{destinationAccounts.length === 0 ? 'Space sin cuentas disponibles' : 'Seleccionar cuenta destino'}</option>
+                    {destinationAccounts.filter(a => destinationSpaceId !== currentSpaceId || a.id !== fromAccountId).map((acc) => (
                       <option key={acc.id} value={acc.id}>
                         {acc.emoji || '🏦'} {acc.bankName} · {acc.accountType} · ···{acc.lastFourDigits} ({acc.currency})
                       </option>

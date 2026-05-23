@@ -1,5 +1,5 @@
-import { and, eq, sql } from 'drizzle-orm'
-import { accounts, categories, db, emergencyPayments, movements, type Account, type Movement } from '@/lib/db'
+import { and, eq, isNull, or, sql } from 'drizzle-orm'
+import { accounts, categories, db, emergencyPayments, movements, spaces, spaceMemberships, transfers, type Account, type Movement, type Space } from '@/lib/db'
 import { convertUsdToClp, getUsdToClpRate } from '@/lib/exchange-rate'
 import { generateId } from '@/lib/utils'
 
@@ -32,6 +32,7 @@ type ReportableInput = MovementInput & {
 type TransferInput = {
   fromAccountId: string
   toAccountId: string
+  destinationSpaceId?: string
   fromAmount: number
   toAmount: number
   fromCurrency: Currency
@@ -44,6 +45,7 @@ type TransformToTransferInput = {
   movementId: string
   source: MovementInput
   toAccountId: string
+  destinationSpaceId?: string
   toAmount: number
   toCurrency: Currency
   note?: string
@@ -67,24 +69,73 @@ function fail(error: string): LedgerResult {
 
 function hasDependentWorkflow(movement: Movement): boolean {
   return Boolean(
-    movement.transferId ||
-    movement.transferPairId ||
     movement.receivableId ||
     movement.loanId
   )
 }
 
-function isOperational(movement: Pick<Movement, 'needsReview' | 'transferId' | 'transferPairId' | 'receivable' | 'receivableId' | 'emergency' | 'loan' | 'loanId'>): boolean {
+function isOperational(movement: Pick<Movement, 'needsReview' | 'receivable' | 'receivableId' | 'emergency' | 'loan' | 'loanId'>): boolean {
   return Boolean(
     movement.needsReview ||
-    movement.transferId ||
-    movement.transferPairId ||
     movement.receivable ||
     movement.receivableId ||
     movement.emergency ||
     movement.loan ||
     movement.loanId
   )
+}
+
+async function getMemberSpace(userId: string, spaceId: string): Promise<Pick<Space, 'id' | 'name'> | null> {
+  const [space] = await db
+    .select({ id: spaces.id, name: spaces.name })
+    .from(spaceMemberships)
+    .innerJoin(spaces, eq(spaceMemberships.spaceId, spaces.id))
+    .where(and(eq(spaceMemberships.userId, userId), eq(spaceMemberships.spaceId, spaceId), isNull(spaces.archivedAt)))
+    .limit(1)
+  return space ?? null
+}
+
+async function getAccountInSpace(spaceId: string, accountId: string | null): Promise<Pick<Account, 'id' | 'currency' | 'bankName'> | null> {
+  return getOwnedAccount(spaceId, accountId)
+}
+
+async function getTransferRootByMovementId(movementId: string) {
+  const [transfer] = await db
+    .select()
+    .from(transfers)
+    .where(or(eq(transfers.sourceMovementId, movementId), eq(transfers.destinationMovementId, movementId)))
+    .limit(1)
+  return transfer ?? null
+}
+
+async function movementIsTransfer(movementId: string): Promise<boolean> {
+  return Boolean(await getTransferRootByMovementId(movementId))
+}
+
+async function transferIsEmergencySettlement(transferId: string): Promise<boolean> {
+  const [payment] = await db
+    .select({ id: emergencyPayments.id })
+    .from(emergencyPayments)
+    .where(eq(emergencyPayments.transferId, transferId))
+    .limit(1)
+  return Boolean(payment)
+}
+
+function transferSideNames(params: {
+  sourceSpaceName: string
+  destinationSpaceName: string
+  sourceAccountName: string
+  destinationAccountName: string
+  note?: string
+}) {
+  const isInterSpace = params.sourceSpaceName !== params.destinationSpaceName
+  const sourceTarget = isInterSpace ? params.destinationSpaceName : params.destinationAccountName
+  const destinationSource = isInterSpace ? params.sourceSpaceName : params.sourceAccountName
+  const suffix = params.note?.trim() ? ` · ${params.note.trim()}` : ''
+  return {
+    sourceName: `Transferencia a ${sourceTarget}${suffix}`,
+    destinationName: `Transferencia desde ${destinationSource}${suffix}`,
+  }
 }
 
 async function getOwnedAccount(spaceId: string, accountId: string | null): Promise<Pick<Account, 'id' | 'currency' | 'bankName'> | null> {
@@ -208,8 +259,6 @@ function reportableResetFields() {
     receivable: false,
     received: false,
     receivableId: null,
-    transferId: null,
-    transferPairId: null,
     emergency: false,
     emergencySettled: false,
     loan: false,
@@ -330,7 +379,7 @@ export const movementLedger = {
     const original = await getOwnedMovement(spaceId, movementId)
     if (!original) return fail('Movement not found')
     if (!original.needsReview) return fail('Movement is not pending review')
-    if (hasDependentWorkflow(original)) return fail('Pending movement has dependent relationships')
+    if (hasDependentWorkflow(original) || await movementIsTransfer(original.id)) return fail('Pending movement has dependent relationships')
     if (!input.name.trim()) return fail('Name is required')
     if (input.emergency && input.type !== 'expense') return fail('Only expenses can be emergency movements')
     if (input.loan && input.type !== 'income') return fail('Only income movements can be loans')
@@ -364,7 +413,7 @@ export const movementLedger = {
     const original = await getOwnedMovement(spaceId, movementId)
     if (!original) return fail('Movement not found')
     if (original.needsReview) return fail('Confirm pending movements before reclassifying them')
-    if (original.transferId || original.transferPairId) return fail('Transfers must be edited through transfer operations')
+    if (await movementIsTransfer(original.id)) return fail('Transfers must be edited through transfer operations')
     if (original.receivableId || original.loanId) return fail('This movement is linked to another workflow')
     if (!input.name.trim()) return fail('Name is required')
     if (input.emergency && input.type !== 'expense') return fail('Only expenses can be emergency movements')
@@ -414,7 +463,7 @@ export const movementLedger = {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
     if (movement.type !== 'expense') return fail('Only expenses can be marked as emergency')
-    if (isOperational(movement) && !movement.emergency) return fail('Movement is already part of another workflow')
+    if ((await movementIsTransfer(movement.id)) || (isOperational(movement) && !movement.emergency)) return fail('Movement is already part of another workflow')
     await db.update(movements).set({ emergency: true, needsReview: false, updatedAt: new Date() }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
     return ok()
   },
@@ -435,7 +484,7 @@ export const movementLedger = {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
     if (movement.type !== 'income') return fail('Only income movements can be marked as loan')
-    if (isOperational(movement) && !movement.loan) return fail('Movement is already part of another workflow')
+    if ((await movementIsTransfer(movement.id)) || (isOperational(movement) && !movement.loan)) return fail('Movement is already part of another workflow')
     await db.update(movements).set({ loan: true, needsReview: false, updatedAt: new Date() }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
     return ok()
   },
@@ -456,7 +505,7 @@ export const movementLedger = {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
     if (movement.needsReview) return fail('Pending movements must be deleted through review operations')
-    if (movement.transferId || movement.transferPairId) return fail('Transfers must be deleted through transfer operations')
+    if (await movementIsTransfer(movement.id)) return fail('Transfers must be deleted through transfer operations')
     if (movement.receivable && await hasReceivablePayments(spaceId, movementId)) return fail('Unmark receivable before deleting linked payments')
     if (movement.emergency && await hasEmergencyPaymentRows(spaceId, movementId)) return fail('Cannot delete emergency movement with payments')
     if (movement.loan && await hasLoanPaybackRows(spaceId, movementId)) return fail('Cannot delete loan movement with paybacks')
@@ -470,7 +519,7 @@ export const movementLedger = {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
     if (!movement.needsReview) return fail('Movement is not pending review')
-    if (hasDependentWorkflow(movement)) return fail('Pending movement has dependent relationships')
+    if (hasDependentWorkflow(movement) || await movementIsTransfer(movement.id)) return fail('Pending movement has dependent relationships')
     await db.delete(movements).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
     return ok()
   },
@@ -478,7 +527,7 @@ export const movementLedger = {
   async markAsReceivable(spaceId: string, movementId: string, reminderText: string): Promise<LedgerResult> {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
-    if (hasDependentWorkflow(movement) || movement.receivable || movement.emergency || movement.loan) return fail('Movement is already part of another workflow')
+    if (hasDependentWorkflow(movement) || await movementIsTransfer(movement.id) || movement.receivable || movement.emergency || movement.loan) return fail('Movement is already part of another workflow')
     if (movement.type !== 'expense') return fail('Only expenses can be marked as receivable')
     if (!reminderText.trim()) return fail('Reminder text is required')
 
@@ -569,7 +618,7 @@ export const movementLedger = {
     if (!receivable.receivable) return fail('Movement is not receivable')
     if (receivable.received) return fail('Receivable already received')
     if (income.type !== 'income') return fail('Selected movement is not an income')
-    if (income.needsReview || hasDependentWorkflow(income) || income.loan || income.receivable) return fail('Selected income is already part of another workflow')
+    if (income.needsReview || hasDependentWorkflow(income) || await movementIsTransfer(income.id) || income.loan || income.receivable) return fail('Selected income is already part of another workflow')
 
     await db.transaction(async (tx) => {
       await tx.update(movements).set({ received: true, updatedAt: new Date() }).where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId)))
@@ -588,7 +637,7 @@ export const movementLedger = {
 
     const original = await getOwnedMovement(spaceId, originalId)
     if (!original) return fail('Movement not found')
-    if (hasDependentWorkflow(original) || original.receivable || original.emergency || original.loan) return fail('Resolve dependent workflow before splitting this movement')
+    if (hasDependentWorkflow(original) || await movementIsTransfer(original.id) || original.receivable || original.emergency || original.loan) return fail('Resolve dependent workflow before splitting this movement')
 
     const splitTotal = splits.reduce((sum, s) => sum + s.amount, 0)
     if (splitTotal !== original.amount) return fail('Split amounts must equal the original amount')
@@ -641,13 +690,18 @@ export const movementLedger = {
   },
 
   async recordTransfer(spaceId: string, actorUserId: string, input: TransferInput): Promise<LedgerResult> {
-    if (input.fromAccountId === input.toAccountId) return fail('Las cuentas origen y destino deben ser diferentes')
+    const destinationSpaceId = input.destinationSpaceId || spaceId
+    if (input.fromAccountId === input.toAccountId && destinationSpaceId === spaceId) return fail('Las cuentas origen y destino deben ser diferentes')
     if (input.fromAmount <= 0 || input.toAmount <= 0) return fail('Los montos deben ser mayores a 0')
 
-    const [fromAccount, toAccount] = await Promise.all([
-      getOwnedAccount(spaceId, input.fromAccountId),
-      getOwnedAccount(spaceId, input.toAccountId),
+    const [sourceSpace, destinationSpace, fromAccount, toAccount] = await Promise.all([
+      getMemberSpace(actorUserId, spaceId),
+      getMemberSpace(actorUserId, destinationSpaceId),
+      getAccountInSpace(spaceId, input.fromAccountId),
+      getAccountInSpace(destinationSpaceId, input.toAccountId),
     ])
+    if (!sourceSpace) return fail('No tienes acceso al Space origen')
+    if (!destinationSpace) return fail('No tienes acceso al Space destino')
     if (!fromAccount) return fail('Cuenta origen no válida')
     if (!toAccount) return fail('Cuenta destino no válida')
     if (input.fromCurrency !== fromAccount.currency || input.toCurrency !== toAccount.currency) {
@@ -656,134 +710,181 @@ export const movementLedger = {
 
     const fromMoney = await normalizeTransferLeg(spaceId, input.fromAccountId, input.fromAmount, input.fromCurrency)
     if ('error' in fromMoney) return fail(fromMoney.error)
-    const toMoney = await normalizeTransferLeg(spaceId, input.toAccountId, input.toAmount, input.toCurrency)
+    const toMoney = await normalizeTransferLeg(destinationSpaceId, input.toAccountId, input.toAmount, input.toCurrency)
     if ('error' in toMoney) return fail(toMoney.error)
 
     const transferId = generateId()
     const fromMovementId = generateId()
     const toMovementId = generateId()
-    const transferName = input.note?.trim() || `Transferencia a ${toAccount.bankName}`
-    const receiveTransferName = input.note?.trim() || `Transferencia desde ${fromAccount.bankName}`
+    const names = transferSideNames({
+      sourceSpaceName: sourceSpace.name,
+      destinationSpaceName: destinationSpace.name,
+      sourceAccountName: fromAccount.bankName,
+      destinationAccountName: toAccount.bankName,
+      note: input.note,
+    })
 
     await db.transaction(async (tx) => {
       await tx.insert(movements).values([
         {
           id: fromMovementId,
-          spaceId: spaceId,
+          spaceId,
           createdByUserId: actorUserId,
           accountId: fromAccount.id,
           categoryId: null,
-          name: transferName,
+          name: names.sourceName,
           date: input.date,
           amount: fromMoney.amount,
           type: 'expense',
           currency: fromAccount.currency,
           amountUsd: fromMoney.amountUsd,
           exchangeRate: fromMoney.exchangeRate,
-          transferId,
-          transferPairId: toMovementId,
           needsReview: false,
         },
         {
           id: toMovementId,
-          spaceId: spaceId,
+          spaceId: destinationSpaceId,
           createdByUserId: actorUserId,
           accountId: toAccount.id,
           categoryId: null,
-          name: receiveTransferName,
+          name: names.destinationName,
           date: input.date,
           amount: toMoney.amount,
           type: 'income',
           currency: toAccount.currency,
           amountUsd: toMoney.amountUsd,
           exchangeRate: toMoney.exchangeRate,
-          transferId,
-          transferPairId: fromMovementId,
           needsReview: false,
         },
       ])
+      await tx.insert(transfers).values({
+        id: transferId,
+        sourceSpaceId: spaceId,
+        destinationSpaceId,
+        sourceMovementId: fromMovementId,
+        destinationMovementId: toMovementId,
+        createdByUserId: actorUserId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
     })
 
     return ok({ transferId })
   },
 
-  async updateTransfer(spaceId: string, transferId: string, input: Omit<TransferInput, 'fromAccountId' | 'toAccountId'>): Promise<LedgerResult> {
-    const transferMovements = await db.select().from(movements).where(and(eq(movements.transferId, transferId), eq(movements.spaceId, spaceId)))
-    if (transferMovements.length !== 2) return fail('Transferencia no encontrada')
-    const expenseMovement = transferMovements.find((m) => m.type === 'expense')
-    const incomeMovement = transferMovements.find((m) => m.type === 'income')
-    if (!expenseMovement || !incomeMovement || expenseMovement.transferPairId !== incomeMovement.id || incomeMovement.transferPairId !== expenseMovement.id) {
-      return fail('Transferencia corrupta')
-    }
-    if (!expenseMovement.accountId || !incomeMovement.accountId) return fail('Transferencia corrupta')
+  async updateTransfer(spaceId: string, actorUserId: string, transferId: string, input: Omit<TransferInput, 'fromAccountId'> & { fromAccountId?: string }): Promise<LedgerResult> {
+    const [transfer] = await db.select().from(transfers).where(eq(transfers.id, transferId)).limit(1)
+    if (!transfer || (transfer.sourceSpaceId !== spaceId && transfer.destinationSpaceId !== spaceId)) return fail('Transferencia no encontrada')
+    if (await transferIsEmergencySettlement(transferId)) return fail('Esta transferencia está vinculada a un abono de emergencia y no se puede editar desde el flujo normal de transferencias')
+
+    const newDestinationSpaceId = input.destinationSpaceId || transfer.destinationSpaceId
+    const [sourceSpace, previousDestinationSpace, destinationSpace, sourceMovement, destinationMovement] = await Promise.all([
+      getMemberSpace(actorUserId, transfer.sourceSpaceId),
+      getMemberSpace(actorUserId, transfer.destinationSpaceId),
+      getMemberSpace(actorUserId, newDestinationSpaceId),
+      getOwnedMovement(transfer.sourceSpaceId, transfer.sourceMovementId),
+      getOwnedMovement(transfer.destinationSpaceId, transfer.destinationMovementId),
+    ])
+    if (!sourceSpace || !previousDestinationSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para editar esta transferencia')
+    if (!sourceMovement || !destinationMovement || sourceMovement.type !== 'expense' || destinationMovement.type !== 'income') return fail('Transferencia corrupta')
+
+    const sourceAccountId = input.fromAccountId || sourceMovement.accountId
+    const destinationAccountId = input.toAccountId
+    if (!sourceAccountId || !destinationAccountId) return fail('Transferencia corrupta')
+    if (sourceAccountId === destinationAccountId && transfer.sourceSpaceId === newDestinationSpaceId) return fail('Las cuentas origen y destino deben ser diferentes')
 
     const [fromAccount, toAccount] = await Promise.all([
-      getOwnedAccount(spaceId, expenseMovement.accountId),
-      getOwnedAccount(spaceId, incomeMovement.accountId),
+      getAccountInSpace(transfer.sourceSpaceId, sourceAccountId),
+      getAccountInSpace(newDestinationSpaceId, destinationAccountId),
     ])
-    if (!fromAccount || !toAccount) return fail('Transferencia corrupta')
-    if (input.fromCurrency !== fromAccount.currency || input.toCurrency !== toAccount.currency) {
-      return fail('La moneda no coincide con la cuenta')
-    }
+    if (!fromAccount) return fail('Cuenta origen no válida')
+    if (!toAccount) return fail('Cuenta destino no válida')
+    if (input.fromCurrency !== fromAccount.currency || input.toCurrency !== toAccount.currency) return fail('La moneda no coincide con la cuenta')
 
-    const fromMoney = await normalizeTransferLeg(spaceId, expenseMovement.accountId, input.fromAmount, input.fromCurrency)
+    const fromMoney = await normalizeTransferLeg(transfer.sourceSpaceId, sourceAccountId, input.fromAmount, input.fromCurrency)
     if ('error' in fromMoney) return fail(fromMoney.error)
-    const toMoney = await normalizeTransferLeg(spaceId, incomeMovement.accountId, input.toAmount, input.toCurrency)
+    const toMoney = await normalizeTransferLeg(newDestinationSpaceId, destinationAccountId, input.toAmount, input.toCurrency)
     if ('error' in toMoney) return fail(toMoney.error)
-    const transferName = input.note?.trim() || `Transferencia a ${toAccount.bankName}`
-    const receiveTransferName = input.note?.trim() || `Transferencia desde ${fromAccount.bankName}`
+    const names = transferSideNames({
+      sourceSpaceName: sourceSpace.name,
+      destinationSpaceName: destinationSpace.name,
+      sourceAccountName: fromAccount.bankName,
+      destinationAccountName: toAccount.bankName,
+      note: input.note,
+    })
 
     await db.transaction(async (tx) => {
       await tx.update(movements).set({
-        name: transferName,
+        name: names.sourceName,
         date: input.date,
+        accountId: fromAccount.id,
         amount: fromMoney.amount,
         currency: fromAccount.currency,
         amountUsd: fromMoney.amountUsd,
         exchangeRate: fromMoney.exchangeRate,
+        categoryId: null,
+        needsReview: false,
         updatedAt: new Date(),
-      }).where(and(eq(movements.id, expenseMovement.id), eq(movements.spaceId, spaceId)))
+      }).where(and(eq(movements.id, sourceMovement.id), eq(movements.spaceId, transfer.sourceSpaceId)))
       await tx.update(movements).set({
-        name: receiveTransferName,
+        name: names.destinationName,
         date: input.date,
+        spaceId: newDestinationSpaceId,
+        accountId: toAccount.id,
         amount: toMoney.amount,
         currency: toAccount.currency,
         amountUsd: toMoney.amountUsd,
         exchangeRate: toMoney.exchangeRate,
+        categoryId: null,
+        needsReview: false,
         updatedAt: new Date(),
-      }).where(and(eq(movements.id, incomeMovement.id), eq(movements.spaceId, spaceId)))
+      }).where(and(eq(movements.id, destinationMovement.id), eq(movements.spaceId, transfer.destinationSpaceId)))
+      await tx.update(transfers).set({
+        destinationSpaceId: newDestinationSpaceId,
+        updatedAt: new Date(),
+      }).where(eq(transfers.id, transferId))
     })
 
     return ok()
   },
 
-  async deleteTransfer(spaceId: string, transferId: string): Promise<LedgerResult> {
-    const transferMovements = await db.select({ id: movements.id, type: movements.type, transferPairId: movements.transferPairId }).from(movements).where(and(eq(movements.transferId, transferId), eq(movements.spaceId, spaceId)))
-    if (transferMovements.length !== 2) return fail('Transferencia no encontrada')
-    const expenseMovement = transferMovements.find((m) => m.type === 'expense')
-    const incomeMovement = transferMovements.find((m) => m.type === 'income')
-    if (!expenseMovement || !incomeMovement || expenseMovement.transferPairId !== incomeMovement.id || incomeMovement.transferPairId !== expenseMovement.id) {
-      return fail('Transferencia corrupta')
-    }
-    await db.delete(movements).where(and(eq(movements.transferId, transferId), eq(movements.spaceId, spaceId)))
+  async deleteTransfer(spaceId: string, actorUserId: string, transferId: string): Promise<LedgerResult> {
+    const [transfer] = await db.select().from(transfers).where(eq(transfers.id, transferId)).limit(1)
+    if (!transfer || (transfer.sourceSpaceId !== spaceId && transfer.destinationSpaceId !== spaceId)) return fail('Transferencia no encontrada')
+    if (await transferIsEmergencySettlement(transferId)) return fail('Esta transferencia está vinculada a un abono de emergencia y no se puede eliminar desde el flujo normal de transferencias')
+    const [sourceSpace, destinationSpace] = await Promise.all([
+      getMemberSpace(actorUserId, transfer.sourceSpaceId),
+      getMemberSpace(actorUserId, transfer.destinationSpaceId),
+    ])
+    if (!sourceSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para eliminar esta transferencia')
+
+    await db.transaction(async (tx) => {
+      await tx.delete(transfers).where(eq(transfers.id, transferId))
+      await tx.delete(movements).where(or(eq(movements.id, transfer.sourceMovementId), eq(movements.id, transfer.destinationMovementId)))
+    })
     return ok()
   },
 
   async transformToTransfer(spaceId: string, actorUserId: string, input: TransformToTransferInput): Promise<LedgerResult> {
+    const destinationSpaceId = input.destinationSpaceId || spaceId
     const original = await getOwnedMovement(spaceId, input.movementId)
     if (!original) return fail('Movimiento no encontrado')
     if (input.requirePending && !original.needsReview) return fail('Movement is not pending review')
-    if (original.transferId || original.transferPairId) return fail('Este movimiento ya es una transferencia')
+    if (await movementIsTransfer(original.id)) return fail('Este movimiento ya es una transferencia')
     if (hasDependentWorkflow(original) || original.receivable || original.emergency || original.loan) return fail('Resolve dependent workflow before transforming')
     if (input.source.type !== 'expense') return fail('Transfer source must be an expense')
     if (!input.source.accountId) return fail('El movimiento debe tener una cuenta asignada')
-    if (input.source.accountId === input.toAccountId) return fail('Las cuentas origen y destino deben ser diferentes')
+    if (input.source.accountId === input.toAccountId && destinationSpaceId === spaceId) return fail('Las cuentas origen y destino deben ser diferentes')
     if (input.toAmount <= 0) return fail('El monto destino debe ser mayor a 0')
 
-    const [fromAccount, toAccount] = await Promise.all([
-      getOwnedAccount(spaceId, input.source.accountId),
-      getOwnedAccount(spaceId, input.toAccountId),
+    const [sourceSpace, destinationSpace, fromAccount, toAccount] = await Promise.all([
+      getMemberSpace(actorUserId, spaceId),
+      getMemberSpace(actorUserId, destinationSpaceId),
+      getAccountInSpace(spaceId, input.source.accountId),
+      getAccountInSpace(destinationSpaceId, input.toAccountId),
     ])
+    if (!sourceSpace) return fail('No tienes acceso al Space origen')
+    if (!destinationSpace) return fail('No tienes acceso al Space destino')
     if (!fromAccount) return fail('Cuenta origen no válida')
     if (!toAccount) return fail('Cuenta destino no válida')
     if (input.source.currency !== fromAccount.currency || input.toCurrency !== toAccount.currency) {
@@ -792,17 +893,22 @@ export const movementLedger = {
 
     const sourceMoney = await normalizeMoney(spaceId, input.source)
     if ('error' in sourceMoney) return fail(sourceMoney.error)
-    const toMoney = await normalizeTransferLeg(spaceId, input.toAccountId, input.toAmount, input.toCurrency)
+    const toMoney = await normalizeTransferLeg(destinationSpaceId, input.toAccountId, input.toAmount, input.toCurrency)
     if ('error' in toMoney) return fail(toMoney.error)
 
     const transferId = generateId()
     const pairedMovementId = generateId()
-    const expenseName = input.note?.trim() || `Transferencia a ${toAccount.bankName}`
-    const incomeName = input.note?.trim() || `Transferencia desde ${fromAccount.bankName}`
+    const names = transferSideNames({
+      sourceSpaceName: sourceSpace.name,
+      destinationSpaceName: destinationSpace.name,
+      sourceAccountName: fromAccount.bankName,
+      destinationAccountName: toAccount.bankName,
+      note: input.note,
+    })
 
     await db.transaction(async (tx) => {
       await tx.update(movements).set({
-        name: expenseName,
+        name: names.sourceName,
         date: input.source.date,
         amount: sourceMoney.amount,
         type: 'expense',
@@ -821,27 +927,33 @@ export const movementLedger = {
         loan: false,
         loanSettled: false,
         loanId: null,
-        transferId,
-        transferPairId: pairedMovementId,
         updatedAt: new Date(),
       }).where(and(eq(movements.id, input.movementId), eq(movements.spaceId, spaceId)))
       await tx.insert(movements).values({
         id: pairedMovementId,
-        spaceId: spaceId,
+        spaceId: destinationSpaceId,
         createdByUserId: actorUserId,
         accountId: toAccount.id,
         categoryId: null,
-        name: incomeName,
+        name: names.destinationName,
         date: input.source.date,
         amount: toMoney.amount,
         type: 'income',
         currency: toAccount.currency,
         amountUsd: toMoney.amountUsd,
         exchangeRate: toMoney.exchangeRate,
-        transferId,
-        transferPairId: input.movementId,
         time: input.source.time ?? null,
         needsReview: false,
+      })
+      await tx.insert(transfers).values({
+        id: transferId,
+        sourceSpaceId: spaceId,
+        destinationSpaceId,
+        sourceMovementId: input.movementId,
+        destinationMovementId: pairedMovementId,
+        createdByUserId: actorUserId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       })
     })
 
@@ -914,8 +1026,6 @@ export const movementLedger = {
             currency: fromMoney!.account.currency,
             amountUsd: fromMoney!.amountUsd,
             exchangeRate: fromMoney!.exchangeRate,
-            transferId,
-            transferPairId: toMovementId,
             needsReview: false,
           },
           {
@@ -931,11 +1041,19 @@ export const movementLedger = {
             currency: toMoney!.account.currency,
             amountUsd: toMoney!.amountUsd,
             exchangeRate: toMoney!.exchangeRate,
-            transferId,
-            transferPairId: fromMovementId,
             needsReview: false,
           },
         ])
+        await tx.insert(transfers).values({
+          id: transferId,
+          sourceSpaceId: spaceId,
+          destinationSpaceId: spaceId,
+          sourceMovementId: fromMovementId,
+          destinationMovementId: toMovementId,
+          createdByUserId: actorUserId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
       }
       await tx.insert(emergencyPayments).values({ id: generateId(), spaceId: spaceId, emergencyId, fromAccountId, toAccountId, amount, date, transferId })
       const [totalResult] = await tx
@@ -990,7 +1108,7 @@ export const movementLedger = {
     if (expense.type !== 'expense') return fail('El movimiento seleccionado no es un gasto')
     if (expense.loanId === loanId) return fail('Este gasto ya está vinculado a este préstamo')
     if (expense.loanId) return fail('Este gasto ya está vinculado a otro préstamo')
-    if (expense.needsReview || expense.transferId || expense.transferPairId || expense.receivable || expense.receivableId || expense.emergency || expense.loan) return fail('El gasto seleccionado ya pertenece a otro workflow')
+    if (expense.needsReview || await movementIsTransfer(expense.id) || expense.receivable || expense.receivableId || expense.emergency || expense.loan) return fail('El gasto seleccionado ya pertenece a otro workflow')
     if (!hasAmountInCurrency(expense, loan.currency as Currency)) return fail('El gasto seleccionado no tiene monto en la moneda del préstamo')
 
     await db.update(movements).set({ loanId, updatedAt: new Date() }).where(and(eq(movements.id, expenseMovementId), eq(movements.spaceId, spaceId)))

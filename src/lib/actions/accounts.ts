@@ -1,8 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, accounts, movements, categories, investmentSnapshots, type Account } from '@/lib/db'
-import { eq, and, desc, isNotNull, sql } from 'drizzle-orm'
+import { db, accounts, movements, categories, investmentSnapshots, transfers, type Account } from '@/lib/db'
+import { eq, and, desc, sql } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
 import { generateId } from '@/lib/utils'
 
@@ -323,8 +323,13 @@ export async function getAccounts() {
  */
 export async function getAccountMovements(accountId: string, offset: number, limit: number = 50, transfersOnly: boolean = false) {
   const { space } = await getCurrentSpace()
+  const transferExists = sql`EXISTS (
+    SELECT 1 FROM ${transfers}
+    WHERE ${transfers.sourceMovementId} = ${movements.id}
+       OR ${transfers.destinationMovementId} = ${movements.id}
+  )`
   const whereCondition = transfersOnly
-    ? and(eq(movements.accountId, accountId), eq(movements.spaceId, space.id), isNotNull(movements.transferId))
+    ? and(eq(movements.accountId, accountId), eq(movements.spaceId, space.id), transferExists)
     : and(eq(movements.accountId, accountId), eq(movements.spaceId, space.id))
 
   return db
@@ -340,8 +345,13 @@ export async function getAccountMovements(accountId: string, offset: number, lim
       originalName: movements.originalName,
       receivable: movements.receivable,
       received: movements.received,
-      transferId: movements.transferId,
-      transferPairId: movements.transferPairId,
+      transferId: sql<string | null>`(
+        SELECT ${transfers.id}
+        FROM ${transfers}
+        WHERE ${transfers.sourceMovementId} = ${movements.id}
+           OR ${transfers.destinationMovementId} = ${movements.id}
+        LIMIT 1
+      )`,
       categoryName: categories.name,
       categoryEmoji: categories.emoji,
     })

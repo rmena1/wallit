@@ -1,0 +1,3 @@
+# Explicit Transfer root replaces movement-level transfer linkage
+
+Wallit represents account balance effects through Movements, but a Transfer is a higher-level operation that links one outgoing Movement and one incoming Movement. We will add an explicit Transfer root and replace movement-level transfer linkage fields such as `transferId` and `transferPairId` instead of keeping them as a parallel legacy model. This makes same-Space and Inter-Space Transfers use one canonical model, avoids duplicated sources of truth, and forces the implementation to update the whole app consistently rather than relying on compatibility shortcuts.

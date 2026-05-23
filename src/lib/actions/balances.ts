@@ -1,7 +1,7 @@
 'use server'
 
-import { db, accounts, movements, investmentSnapshots } from '@/lib/db'
-import { eq, and, sql } from 'drizzle-orm'
+import { db, accounts, movements, investmentSnapshots, transfers } from '@/lib/db'
+import { eq, and, or, sql } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
 import { calculateInvestmentPerformance } from '@/lib/investment-performance'
 
@@ -71,11 +71,12 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       )`,
       incomeSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
       expenseSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
-      transferInSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'income' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
-      transferOutSum: sql<number>`COALESCE(SUM(CASE WHEN ${movements.transferId} IS NOT NULL AND ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
+      transferInSum: sql<number>`COALESCE(SUM(CASE WHEN ${transfers.id} IS NOT NULL AND ${movements.type} = 'income' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
+      transferOutSum: sql<number>`COALESCE(SUM(CASE WHEN ${transfers.id} IS NOT NULL AND ${movements.type} = 'expense' THEN ${amountForAccountCurrency} ELSE 0 END), 0)`,
     })
     .from(accounts)
     .leftJoin(movements, and(eq(accounts.id, movements.accountId), eq(movements.spaceId, space.id)))
+    .leftJoin(transfers, or(eq(transfers.sourceMovementId, movements.id), eq(transfers.destinationMovementId, movements.id)))
     .where(eq(accounts.spaceId, space.id))
     .groupBy(accounts.id)
     .orderBy(sql`${accounts.sortOrder} ASC, ${accounts.bankName} ASC, ${accounts.createdAt} ASC`)

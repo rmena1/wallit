@@ -206,8 +206,8 @@ test.describe('Complete User Journey', () => {
     await screenshot(page, 'journey-22-transfer-form')
 
     // 7.3 Fill transfer - from BCI to Santander
-    await page.locator('select').first().selectOption({ index: 1 }) // From BCI
-    await page.locator('select').nth(1).selectOption({ index: 1 }) // To Santander
+    await page.getByLabel('Desde cuenta').selectOption({ index: 1 }) // From BCI
+    await page.getByLabel('Hacia cuenta').selectOption({ index: 1 }) // To Santander
     await page.getByPlaceholder('0.00').first().fill('100000')
     await screenshot(page, 'journey-23-transfer-filled')
 
