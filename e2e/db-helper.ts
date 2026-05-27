@@ -328,6 +328,81 @@ export async function seedTransferMovement(userId: string, accountId: string, op
   `
 }
 
+export async function seedPendingTransfer(userId: string, sourceAccountId: string, destinationAccountId: string, opts: {
+  name?: string
+  amount: number
+  date?: string
+  spaceId?: string
+}): Promise<{ transferId: string; sourceMovementId: string; destinationMovementId: string }> {
+  const now = new Date()
+  const date = opts.date ?? now.toISOString().slice(0, 10)
+  const spaceId = await resolveSpaceId(userId, opts.spaceId)
+  const transferId = testId('pending-transfer')
+  const sourceMovementId = testId('pending-transfer-source')
+  const destinationMovementId = testId('pending-transfer-dest')
+  const name = opts.name ?? 'Transferencia pendiente'
+
+  await sql`
+    INSERT INTO movements (
+      id, space_id, created_by_user_id, account_id, name, date, amount, type,
+      needs_review, currency, receivable, received, created_at, updated_at
+    )
+    VALUES
+      (${sourceMovementId}, ${spaceId}, ${userId}, ${sourceAccountId}, ${`${name} salida`}, ${date}, ${opts.amount}, 'expense', true, 'CLP', false, false, ${now}, ${now}),
+      (${destinationMovementId}, ${spaceId}, ${userId}, ${destinationAccountId}, ${`${name} entrada`}, ${date}, ${opts.amount}, 'income', true, 'CLP', false, false, ${now}, ${now})
+  `
+
+  await sql`
+    INSERT INTO transfers (id, source_space_id, destination_space_id, source_movement_id, destination_movement_id, created_by_user_id, created_at, updated_at)
+    VALUES (${transferId}, ${spaceId}, ${spaceId}, ${sourceMovementId}, ${destinationMovementId}, ${userId}, ${now}, ${now})
+  `
+
+  return { transferId, sourceMovementId, destinationMovementId }
+}
+
+export async function markMovementReviewed(movementId: string): Promise<void> {
+  await sql`
+    UPDATE movements
+    SET needs_review = false, updated_at = ${new Date()}
+    WHERE id = ${movementId}
+  `
+}
+
+export async function getPendingTransferState(transferId: string): Promise<{
+  transferExists: boolean
+  movementCount: number
+  pendingCount: number
+} | null> {
+  const rows = await sql`
+    SELECT
+      EXISTS (SELECT 1 FROM transfers WHERE id = ${transferId}) AS transfer_exists,
+      COUNT(m.id)::int AS movement_count,
+      COUNT(*) FILTER (WHERE m.needs_review = true)::int AS pending_count
+    FROM transfers t
+    RIGHT JOIN movements m ON m.id IN (t.source_movement_id, t.destination_movement_id)
+    WHERE t.id = ${transferId}
+  `
+  const row = rows[0]
+  if (!row) return null
+  return {
+    transferExists: Boolean(row.transfer_exists),
+    movementCount: Number(row.movement_count ?? 0),
+    pendingCount: Number(row.pending_count ?? 0),
+  }
+}
+
+export async function countTransferAndMovementRows(transferId: string, movementIds: string[]): Promise<{ transfers: number; movements: number }> {
+  const rows = await sql`
+    SELECT
+      (SELECT COUNT(*)::int FROM transfers WHERE id = ${transferId}) AS transfers,
+      (SELECT COUNT(*)::int FROM movements WHERE id IN ${sql(movementIds)}) AS movements
+  `
+  return {
+    transfers: Number(rows[0]?.transfers ?? 0),
+    movements: Number(rows[0]?.movements ?? 0),
+  }
+}
+
 export async function seedReviewMovements(userId: string, accountId: string | null) {
   const today = new Date().toISOString().slice(0, 10)
   const base = Date.now()

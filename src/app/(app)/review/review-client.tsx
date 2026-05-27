@@ -2,11 +2,28 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { confirmPendingAsReportable, deletePendingMovement, getPendingReviewMovements, markAsReceivable, splitMovement } from '@/lib/actions/review'
+import { confirmPendingAsReportable, confirmPendingTransfer, deletePendingMovement, deletePendingTransfer, getPendingReviewMovements, markAsReceivable, splitMovement } from '@/lib/actions/review'
 import { confirmPendingAsTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { formatMovementDisplayAmount, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
 import type { Category, Account } from '@/lib/db'
+
+interface PendingTransferMovement {
+  id: string
+  spaceId: string
+  name: string
+  date: string
+  amount: number
+  type: 'income' | 'expense'
+  currency: 'CLP' | 'USD'
+  amountUsd: number | null
+  exchangeRate: number | null
+  accountId: string | null
+  needsReview: boolean
+  time: string | null
+  accountBankName: string | null
+  accountLastFour: string | null
+}
 
 interface PendingMovement {
   id: string
@@ -25,6 +42,14 @@ interface PendingMovement {
   categoryEmoji: string | null
   accountBankName: string | null
   accountLastFour: string | null
+  transferId?: string
+  transferSourceMovementId?: string
+  transferDestinationMovementId?: string
+  transferSourceSpaceId?: string
+  transferDestinationSpaceId?: string
+  transferCanReview?: boolean
+  transferSourceMovement?: PendingTransferMovement | null
+  transferDestinationMovement?: PendingTransferMovement | null
 }
 
 interface Props {
@@ -58,6 +83,16 @@ function centsToDisplay(cents: number): string {
   return (cents / 100).toString()
 }
 
+function transferLegAccountLabel(movement: PendingTransferMovement | null | undefined) {
+  if (!movement?.accountBankName) return 'Cuenta sin detalle'
+  return `${movement.accountBankName}${movement.accountLastFour ? ` ···${movement.accountLastFour}` : ''}`
+}
+
+function transferLegAmountLabel(movement: PendingTransferMovement | null | undefined) {
+  if (!movement) return '—'
+  return formatMovementDisplayAmount(movement.amount, movement.amountUsd, movement.currency)
+}
+
 export function ReviewClient({ movements, accounts, transferAccounts, transferSpaces, currentSpaceId, categories }: Props) {
   const router = useRouter()
   const [reviewMovements, setReviewMovements] = useState(movements)
@@ -72,6 +107,8 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
   const total = reviewMovements.length
 
   const current = reviewMovements[currentIndex] as PendingMovement | undefined
+  const isExistingPendingTransfer = Boolean(current?.transferId)
+  const pendingTransferNeedsAccess = isExistingPendingTransfer && current?.transferCanReview === false
   const [formName, setFormName] = useState(current?.name ?? '')
   const [formDate, setFormDate] = useState(current?.date ?? '')
   const [formAmount, setFormAmount] = useState(current ? centsToDisplay(current.amount) : '')
@@ -244,6 +281,17 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     setLoading(true)
     setError(null)
     try {
+      if (current.transferId) {
+        const result = await confirmPendingTransfer(current.transferId)
+        if (!result.success) {
+          setError(result.error || 'Error al aprobar transferencia')
+          setLoading(false)
+          return
+        }
+        goNext(true)
+        return
+      }
+
       const amountCents = parseMoney(formAmount)
       if (amountCents <= 0) { setError('Monto inválido'); setLoading(false); return }
       
@@ -344,8 +392,11 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     if (!current) return
     setLoading(true)
     try {
-      const result = await deletePendingMovement(current.id)
+      const result = current.transferId
+        ? await deletePendingTransfer(current.transferId)
+        : await deletePendingMovement(current.id)
       if (!result.success) {
+        setShowDeleteConfirm(false)
         setError(result.error || 'Error al eliminar')
         setLoading(false)
         return
@@ -537,18 +588,59 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
         }}>
           {/* Prominent amount + name header */}
           <div style={{ textAlign: 'center', marginBottom: 10 }}>
+            {isExistingPendingTransfer && (
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '3px 8px', borderRadius: 999,
+                backgroundColor: '#172554', color: '#93c5fd',
+                fontSize: 11, fontWeight: 700, marginBottom: 6,
+                border: '1px solid #1d4ed8',
+              }}>
+                ↔️ Transferencia pendiente
+              </div>
+            )}
             <div style={{
               fontSize: 28, fontWeight: 800,
-              color: formType === 'expense' ? '#f87171' : '#4ade80',
+              color: isExistingPendingTransfer ? '#60a5fa' : formType === 'expense' ? '#f87171' : '#4ade80',
               lineHeight: 1.1,
             }}>
-              {formatMovementDisplayAmount(current!.amount, current!.amountUsd, current!.currency)}
+              {isExistingPendingTransfer && current!.transferSourceMovement && current!.transferDestinationMovement
+                ? `${transferLegAmountLabel(current!.transferSourceMovement)} → ${transferLegAmountLabel(current!.transferDestinationMovement)}`
+                : formatMovementDisplayAmount(current!.amount, current!.amountUsd, current!.currency)}
             </div>
             <div style={{ fontSize: 13, color: '#a1a1aa', marginTop: 2 }}>
-              {current!.name}
+              {isExistingPendingTransfer ? 'Aprueba o elimina la transferencia completa' : current!.name}
             </div>
           </div>
 
+          {isExistingPendingTransfer ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{
+                display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
+              }}>
+                <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#111827', border: '1px solid #1e3a8a' }}>
+                  <div style={{ fontSize: 11, color: '#93c5fd', fontWeight: 700, marginBottom: 4 }}>Sale de</div>
+                  <div style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 700 }}>{transferLegAccountLabel(current!.transferSourceMovement)}</div>
+                  <div style={{ fontSize: 15, color: '#fca5a5', fontWeight: 800, marginTop: 4 }}>{transferLegAmountLabel(current!.transferSourceMovement)}</div>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 3 }}>{current!.transferSourceMovement?.name ?? 'Movimiento origen'}</div>
+                </div>
+                <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#111827', border: '1px solid #1e3a8a' }}>
+                  <div style={{ fontSize: 11, color: '#93c5fd', fontWeight: 700, marginBottom: 4 }}>Entra a</div>
+                  <div style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 700 }}>{transferLegAccountLabel(current!.transferDestinationMovement)}</div>
+                  <div style={{ fontSize: 15, color: '#86efac', fontWeight: 800, marginTop: 4 }}>{transferLegAmountLabel(current!.transferDestinationMovement)}</div>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 3 }}>{current!.transferDestinationMovement?.name ?? 'Movimiento destino'}</div>
+                </div>
+              </div>
+              {!current!.transferCanReview && (
+                <div style={{ fontSize: 12, color: '#fbbf24', backgroundColor: '#1f1a0b', border: '1px solid #854d0e', borderRadius: 8, padding: '8px 10px' }}>
+                  Necesitas acceso a ambos Spaces para revisar esta transferencia.
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: '#a1a1aa', backgroundColor: '#111', borderRadius: 8, padding: '8px 10px' }}>
+                Esta tarjeta representa ambos movimientos ligados al mismo transfer root. Aprobar la marca como revisada completa; eliminar borra la transferencia y sus dos movimientos.
+              </div>
+            </div>
+          ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {/* Type toggle - compact with transfer option */}
             <div style={{
@@ -809,6 +901,7 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
               </label>
             )}
           </div>
+          )}
         </div>
 
         {/* Primary action buttons */}
@@ -820,44 +913,50 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
           }}>
             Después →
           </button>
-          <button onClick={handleConfirm} disabled={loading} style={{
+          <button onClick={handleConfirm} disabled={loading || pendingTransferNeedsAccess} style={{
             flex: 1.3, height: 40, borderRadius: 10, border: 'none',
-            background: loading ? '#27272a' : isTransferMode 
+            background: (loading || pendingTransferNeedsAccess) ? '#27272a' : (isTransferMode || isExistingPendingTransfer)
               ? 'linear-gradient(135deg, #3b82f6, #2563eb)'
               : 'linear-gradient(135deg, #22c55e, #16a34a)',
             color: '#fff', fontSize: 14, fontWeight: 600,
-            cursor: loading ? 'not-allowed' : 'pointer',
-            boxShadow: loading ? 'none' : isTransferMode 
+            cursor: (loading || pendingTransferNeedsAccess) ? 'not-allowed' : 'pointer',
+            boxShadow: (loading || pendingTransferNeedsAccess) ? 'none' : (isTransferMode || isExistingPendingTransfer)
               ? '0 2px 8px rgba(59,130,246,0.3)'
               : '0 2px 8px rgba(34,197,94,0.3)',
           }}>
-            {loading ? '...' : isTransferMode ? '↔️ Crear Transferencia' : '✓ Confirmar'}
+            {loading ? '...' : isExistingPendingTransfer ? '↔️ Aprobar transferencia' : isTransferMode ? '↔️ Crear Transferencia' : '✓ Confirmar'}
           </button>
         </div>
 
         {/* Secondary actions - icon-style compact */}
         <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-          <button onClick={() => setShowDeleteConfirm(true)} disabled={loading} style={{
+          <button onClick={() => setShowDeleteConfirm(true)} disabled={loading || pendingTransferNeedsAccess} style={{
             flex: 1, height: 34, borderRadius: 8, border: '1px solid #7f1d1d',
             backgroundColor: '#1a1a1a', color: '#f87171',
-            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            fontSize: 13, fontWeight: 600,
+            cursor: (loading || pendingTransferNeedsAccess) ? 'not-allowed' : 'pointer',
+            opacity: pendingTransferNeedsAccess ? 0.55 : 1,
           }}>
-            🗑 Eliminar
+            🗑 {isExistingPendingTransfer ? 'Eliminar transferencia' : 'Eliminar'}
           </button>
-          <button onClick={() => { setShowReceivable(true); setReceivableText(current?.name || '') }} disabled={loading} style={{
-            flex: 1, height: 34, borderRadius: 8, border: '1px solid #854d0e',
-            backgroundColor: '#1a1a1a', color: '#fbbf24',
-            fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          }}>
-            💰 Cobrar
-          </button>
-          <button onClick={openSplit} disabled={loading} style={{
-            flex: 1, height: 34, borderRadius: 8, border: '1px solid #1e40af',
-            backgroundColor: '#1a1a1a', color: '#60a5fa',
-            fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          }}>
-            ✂️ Dividir
-          </button>
+          {!isExistingPendingTransfer && (
+            <>
+              <button onClick={() => { setShowReceivable(true); setReceivableText(current?.name || '') }} disabled={loading} style={{
+                flex: 1, height: 34, borderRadius: 8, border: '1px solid #854d0e',
+                backgroundColor: '#1a1a1a', color: '#fbbf24',
+                fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}>
+                💰 Cobrar
+              </button>
+              <button onClick={openSplit} disabled={loading} style={{
+                flex: 1, height: 34, borderRadius: 8, border: '1px solid #1e40af',
+                backgroundColor: '#1a1a1a', color: '#60a5fa',
+                fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}>
+                ✂️ Dividir
+              </button>
+            </>
+          )}
         </div>
 
         {/* Delete confirmation dialog */}
@@ -871,10 +970,10 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
               border: '1px solid #2a2a2a', maxWidth: 360, width: '100%',
             }}>
               <div style={{ fontSize: 18, fontWeight: 700, color: '#e5e5e5', marginBottom: 8 }}>
-                ¿Eliminar este movimiento?
+                {isExistingPendingTransfer ? '¿Eliminar esta transferencia?' : '¿Eliminar este movimiento?'}
               </div>
               <div style={{ fontSize: 14, color: '#a1a1aa', marginBottom: 20 }}>
-                Esta acción no se puede deshacer.
+                {isExistingPendingTransfer ? 'Se eliminarán el transfer root y sus dos movimientos. Esta acción no se puede deshacer.' : 'Esta acción no se puede deshacer.'}
               </div>
               <div style={{ display: 'flex', gap: 12 }}>
                 <button onClick={() => setShowDeleteConfirm(false)} style={{

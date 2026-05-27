@@ -524,6 +524,69 @@ export const movementLedger = {
     return ok()
   },
 
+  async confirmPendingTransfer(spaceId: string, actorUserId: string, transferId: string): Promise<LedgerResult> {
+    const [transfer] = await db.select().from(transfers).where(eq(transfers.id, transferId)).limit(1)
+    if (!transfer || (transfer.sourceSpaceId !== spaceId && transfer.destinationSpaceId !== spaceId)) return fail('Transferencia pendiente no encontrada')
+
+    const [sourceSpace, destinationSpace, sourceMovement, destinationMovement] = await Promise.all([
+      getMemberSpace(actorUserId, transfer.sourceSpaceId),
+      getMemberSpace(actorUserId, transfer.destinationSpaceId),
+      getOwnedMovement(transfer.sourceSpaceId, transfer.sourceMovementId),
+      getOwnedMovement(transfer.destinationSpaceId, transfer.destinationMovementId),
+    ])
+
+    if (!sourceSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para revisar esta transferencia')
+    if (!sourceMovement || !destinationMovement || sourceMovement.type !== 'expense' || destinationMovement.type !== 'income') return fail('Transferencia corrupta')
+    if (!sourceMovement.needsReview && !destinationMovement.needsReview) return fail('Transferencia no está pendiente de revisión')
+    if ((transfer.sourceSpaceId === spaceId && !sourceMovement.needsReview) || (transfer.destinationSpaceId === spaceId && !destinationMovement.needsReview)) return fail('Transferencia no está pendiente de revisión en este Space')
+    if (hasDependentWorkflow(sourceMovement) || hasDependentWorkflow(destinationMovement)) return fail('Pending transfer has dependent relationships')
+
+    await db.transaction(async (tx) => {
+      await tx.update(movements).set({ needsReview: false, updatedAt: new Date() })
+        .where(or(eq(movements.id, transfer.sourceMovementId), eq(movements.id, transfer.destinationMovementId)))
+    })
+    return ok({ transferId })
+  },
+
+  async deletePendingTransfer(spaceId: string, actorUserId: string, transferId: string): Promise<LedgerResult> {
+    const partiallyReviewedError = 'La transferencia ya fue revisada parcialmente y no se puede eliminar desde revisión'
+    const [transfer] = await db.select().from(transfers).where(eq(transfers.id, transferId)).limit(1)
+    if (!transfer || (transfer.sourceSpaceId !== spaceId && transfer.destinationSpaceId !== spaceId)) return fail('Transferencia pendiente no encontrada')
+    if (await transferIsEmergencySettlement(transferId)) return fail('Esta transferencia está vinculada a un abono de emergencia y no se puede eliminar desde revisión')
+
+    const [sourceSpace, destinationSpace, sourceMovement, destinationMovement] = await Promise.all([
+      getMemberSpace(actorUserId, transfer.sourceSpaceId),
+      getMemberSpace(actorUserId, transfer.destinationSpaceId),
+      getOwnedMovement(transfer.sourceSpaceId, transfer.sourceMovementId),
+      getOwnedMovement(transfer.destinationSpaceId, transfer.destinationMovementId),
+    ])
+
+    if (!sourceSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para eliminar esta transferencia')
+    if (!sourceMovement || !destinationMovement || sourceMovement.type !== 'expense' || destinationMovement.type !== 'income') return fail('Transferencia corrupta')
+    if (!sourceMovement.needsReview || !destinationMovement.needsReview) return fail(partiallyReviewedError)
+    if (hasDependentWorkflow(sourceMovement) || hasDependentWorkflow(destinationMovement)) return fail('Pending transfer has dependent relationships')
+
+    try {
+      await db.transaction(async (tx) => {
+        await tx.delete(transfers).where(eq(transfers.id, transferId))
+        const deletedMovements = await tx
+          .delete(movements)
+          .where(and(
+            or(eq(movements.id, transfer.sourceMovementId), eq(movements.id, transfer.destinationMovementId)),
+            eq(movements.needsReview, true),
+            isNull(movements.receivableId),
+            isNull(movements.loanId),
+          ))
+          .returning({ id: movements.id })
+        if (deletedMovements.length !== 2) throw new Error('PENDING_TRANSFER_DELETE_CONFLICT')
+      })
+    } catch (error) {
+      if (error instanceof Error && error.message === 'PENDING_TRANSFER_DELETE_CONFLICT') return fail(partiallyReviewedError)
+      throw error
+    }
+    return ok()
+  },
+
   async markAsReceivable(spaceId: string, movementId: string, reminderText: string): Promise<LedgerResult> {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')

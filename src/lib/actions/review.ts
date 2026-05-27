@@ -1,23 +1,21 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, movements, categories, accounts } from '@/lib/db'
+import { db, movements, categories, accounts, transfers } from '@/lib/db'
 import { movementLedger, type AmountInputMode } from '@/lib/domain/movement-ledger'
-import { eq, and, desc, sql } from 'drizzle-orm'
+import { eq, and, desc, inArray, or } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
+import { getPendingReviewItemCount } from '@/lib/domain/pending-review'
 
 export async function getPendingReviewCount() {
-  const { user: session, space } = await getCurrentSpace()
-  const result = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(movements)
-    .where(and(eq(movements.spaceId, space.id), eq(movements.needsReview, true)))
-  return Number(result[0]?.count ?? 0)
+  const { space } = await getCurrentSpace()
+  return getPendingReviewItemCount(space.id)
 }
 
 export async function getPendingReviewMovements() {
-  const { user: session, space } = await getCurrentSpace()
-  return db
+  const { space, spaces } = await getCurrentSpace()
+
+  const pendingMovements = await db
     .select({
       id: movements.id,
       name: movements.name,
@@ -42,6 +40,73 @@ export async function getPendingReviewMovements() {
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(eq(movements.spaceId, space.id), eq(movements.needsReview, true)))
     .orderBy(desc(movements.date), desc(movements.createdAt))
+
+  if (pendingMovements.length === 0) return pendingMovements
+
+  const pendingIds = pendingMovements.map((movement) => movement.id)
+  const transferRoots = await db
+    .select()
+    .from(transfers)
+    .where(or(inArray(transfers.sourceMovementId, pendingIds), inArray(transfers.destinationMovementId, pendingIds)))
+
+  if (transferRoots.length === 0) return pendingMovements
+
+  const memberSpaceIds = new Set(spaces.map((memberSpace) => memberSpace.id))
+  const transferByMovementId = new Map<string, typeof transferRoots[number]>()
+  const relatedMovementIds = new Set<string>()
+  for (const transfer of transferRoots) {
+    transferByMovementId.set(transfer.sourceMovementId, transfer)
+    transferByMovementId.set(transfer.destinationMovementId, transfer)
+    relatedMovementIds.add(transfer.sourceMovementId)
+    relatedMovementIds.add(transfer.destinationMovementId)
+  }
+
+  const relatedMovements = await db
+    .select({
+      id: movements.id,
+      spaceId: movements.spaceId,
+      name: movements.name,
+      date: movements.date,
+      amount: movements.amount,
+      type: movements.type,
+      currency: movements.currency,
+      amountUsd: movements.amountUsd,
+      exchangeRate: movements.exchangeRate,
+      accountId: movements.accountId,
+      needsReview: movements.needsReview,
+      time: movements.time,
+      accountBankName: accounts.bankName,
+      accountLastFour: accounts.lastFourDigits,
+    })
+    .from(movements)
+    .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, movements.spaceId)))
+    .where(inArray(movements.id, Array.from(relatedMovementIds)))
+
+  const movementById = new Map(relatedMovements.map((movement) => [movement.id, movement]))
+  const seenTransferIds = new Set<string>()
+
+  return pendingMovements.flatMap((movement) => {
+    const transfer = transferByMovementId.get(movement.id)
+    if (!transfer) return [movement]
+    if (seenTransferIds.has(transfer.id)) return []
+    seenTransferIds.add(transfer.id)
+
+    const canReviewTransfer = memberSpaceIds.has(transfer.sourceSpaceId) && memberSpaceIds.has(transfer.destinationSpaceId)
+    const source = memberSpaceIds.has(transfer.sourceSpaceId) ? movementById.get(transfer.sourceMovementId) : null
+    const destination = memberSpaceIds.has(transfer.destinationSpaceId) ? movementById.get(transfer.destinationMovementId) : null
+
+    return [{
+      ...movement,
+      transferId: transfer.id,
+      transferSourceMovementId: transfer.sourceMovementId,
+      transferDestinationMovementId: transfer.destinationMovementId,
+      transferSourceSpaceId: transfer.sourceSpaceId,
+      transferDestinationSpaceId: transfer.destinationSpaceId,
+      transferCanReview: canReviewTransfer,
+      transferSourceMovement: source ?? null,
+      transferDestinationMovement: destination ?? null,
+    }]
+  })
 }
 
 export async function confirmPendingAsReportable(id: string, data: {
@@ -59,7 +124,7 @@ export async function confirmPendingAsReportable(id: string, data: {
   emergency?: boolean
   loan?: boolean
 }) {
-  const { user: session, space } = await getCurrentSpace()
+  const { space } = await getCurrentSpace()
   const result = await movementLedger.confirmPendingAsReportable(space.id, id, {
     ...data,
     amountInputMode: data.amountInputMode ?? 'canonicalClp',
@@ -75,7 +140,7 @@ export async function confirmPendingAsReportable(id: string, data: {
 }
 
 export async function deletePendingMovement(id: string) {
-  const { user: session, space } = await getCurrentSpace()
+  const { space } = await getCurrentSpace()
   const result = await movementLedger.deletePendingMovement(space.id, id)
   if (result.success) {
     revalidatePath('/')
@@ -84,8 +149,30 @@ export async function deletePendingMovement(id: string) {
   return result
 }
 
-export async function markAsReceivable(id: string, reminderText: string) {
+export async function confirmPendingTransfer(transferId: string) {
   const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.confirmPendingTransfer(space.id, session.id, transferId)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/review')
+    revalidatePath('/reports')
+  }
+  return result
+}
+
+export async function deletePendingTransfer(transferId: string) {
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.deletePendingTransfer(space.id, session.id, transferId)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/review')
+    revalidatePath('/reports')
+  }
+  return result
+}
+
+export async function markAsReceivable(id: string, reminderText: string) {
+  const { space } = await getCurrentSpace()
   const result = await movementLedger.markAsReceivable(space.id, id, reminderText)
   if (result.success) {
     revalidatePath('/')
@@ -97,7 +184,7 @@ export async function markAsReceivable(id: string, reminderText: string) {
 }
 
 export async function unmarkReceivable(id: string) {
-  const { user: session, space } = await getCurrentSpace()
+  const { space } = await getCurrentSpace()
   const result = await movementLedger.unmarkReceivable(space.id, id)
   if (result.success) {
     revalidatePath('/')
@@ -130,7 +217,7 @@ export async function settleReceivableWithNewMovement(id: string, paymentAccount
 }
 
 export async function settleReceivableWithExistingMovement(receivableId: string, existingIncomeId: string) {
-  const { user: session, space } = await getCurrentSpace()
+  const { space } = await getCurrentSpace()
   const result = await movementLedger.settleReceivableWithExistingMovement(space.id, receivableId, existingIncomeId)
   if (result.success) {
     revalidatePath('/')
@@ -141,7 +228,7 @@ export async function settleReceivableWithExistingMovement(receivableId: string,
 }
 
 export async function getAccountsAndCategories() {
-  const { user: session, space } = await getCurrentSpace()
+  const { space } = await getCurrentSpace()
   const [userAccounts, userCategories] = await Promise.all([
     db
       .select()

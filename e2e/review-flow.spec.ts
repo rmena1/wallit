@@ -1,6 +1,17 @@
 import { test, expect, Page } from '@playwright/test'
-import { registerAndLogin, ensureAccount, ensureCategory, screenshot } from './helpers'
-import { getUserId, getFirstAccountId, seedReviewMovements, seedReviewMovement, seedTypedReviewMovement } from './db-helper'
+import { ensureAccount, ensureCategory, screenshot } from './helpers'
+import {
+  countTransferAndMovementRows,
+  createRegularAccount,
+  getFirstAccountId,
+  getPendingTransferState,
+  getUserId,
+  markMovementReviewed,
+  seedPendingTransfer,
+  seedReviewMovement,
+  seedReviewMovements,
+  seedTypedReviewMovement,
+} from './db-helper'
 
 async function registerUser(page: Page): Promise<string> {
   const email = `e2e-review-${Date.now()}-${Math.random().toString(36).slice(2, 5)}@wallit.app`
@@ -93,6 +104,83 @@ test.describe('Review Flow — Complete', () => {
     await page.getByRole('button', { name: 'Volver al inicio' }).click()
     await page.waitForURL('**/', { timeout: 5000 })
     await screenshot(page, 'review-09-back-home')
+  })
+
+  test('reviews existing pending transfers as one card and can approve or delete them', async ({ page }) => {
+    const email = await registerUser(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+
+    const sourceAccountId = await createRegularAccount(userId, { bankName: 'BCI origen', lastFourDigits: '1111' })
+    const destinationAccountId = await createRegularAccount(userId, { bankName: 'BCI destino', lastFourDigits: '2222' })
+
+    await seedReviewMovement(userId, sourceAccountId, 'Loose pending review item', 990000)
+    const approveTransfer = await seedPendingTransfer(userId, sourceAccountId, destinationAccountId, {
+      name: 'Pending transfer approve',
+      amount: 4200000,
+    })
+    const deleteTransfer = await seedPendingTransfer(userId, sourceAccountId, destinationAccountId, {
+      name: 'Pending transfer delete',
+      amount: 2100000,
+    })
+
+    await page.goto('/')
+    const reviewBanner = page.locator('a[href="/review"]').filter({ hasText: 'pendiente' })
+    await expect(reviewBanner).toContainText('3 movimientos pendientes de revisión', { timeout: 5000 })
+    await expect(reviewBanner).not.toContainText('5 movimientos pendientes de revisión')
+    await reviewBanner.click()
+    await expect(page).toHaveURL(/\/review/)
+
+    await expect(page.getByText('1/3')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Transferencia pendiente')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Pending transfer delete salida')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Pending transfer delete entrada')).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'review-pending-transfer-01-card')
+
+    await page.getByRole('button', { name: /Eliminar transferencia/i }).click()
+    await expect(page.getByText('¿Eliminar esta transferencia?')).toBeVisible({ timeout: 3000 })
+    await screenshot(page, 'review-pending-transfer-02-delete-dialog')
+    await page.locator('div[style*="position: fixed"]').getByRole('button', { name: 'Eliminar' }).click()
+
+    await expect(page.getByText('Pending transfer approve salida')).toBeVisible({ timeout: 5000 })
+    const deletedRows = await countTransferAndMovementRows(deleteTransfer.transferId, [deleteTransfer.sourceMovementId, deleteTransfer.destinationMovementId])
+    expect(deletedRows).toEqual({ transfers: 0, movements: 0 })
+
+    await page.getByRole('button', { name: /Aprobar transferencia/i }).click()
+    await expect(page.getByText('Loose pending review item')).toBeVisible({ timeout: 5000 })
+    await page.getByRole('button', { name: '✓ Confirmar' }).click()
+    await expect(page.getByText('¡Revisión completada!').or(page.getByText('No hay movimientos pendientes'))).toBeVisible({ timeout: 5000 })
+    await screenshot(page, 'review-pending-transfer-03-approved')
+
+    const approvedState = await getPendingTransferState(approveTransfer.transferId)
+    expect(approvedState).toEqual({ transferExists: true, movementCount: 2, pendingCount: 0 })
+  })
+
+  test('does not delete a pending transfer when one leg was already reviewed', async ({ page }) => {
+    const email = await registerUser(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+
+    const sourceAccountId = await createRegularAccount(userId, { bankName: 'Banco origen', lastFourDigits: '3333' })
+    const destinationAccountId = await createRegularAccount(userId, { bankName: 'Banco destino', lastFourDigits: '4444' })
+    const partialTransfer = await seedPendingTransfer(userId, sourceAccountId, destinationAccountId, {
+      name: 'Partial pending transfer',
+      amount: 1500000,
+    })
+    await markMovementReviewed(partialTransfer.destinationMovementId)
+
+    await page.goto('/review')
+    await expect(page.getByText('Transferencia pendiente')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Partial pending transfer salida')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Partial pending transfer entrada')).toBeVisible({ timeout: 5000 })
+
+    await page.getByRole('button', { name: /Eliminar transferencia/i }).click()
+    await expect(page.getByText('¿Eliminar esta transferencia?')).toBeVisible({ timeout: 3000 })
+    await page.locator('div[style*="position: fixed"]').getByRole('button', { name: 'Eliminar' }).click()
+
+    await expect(page.getByText('La transferencia ya fue revisada parcialmente y no se puede eliminar desde revisión')).toBeVisible({ timeout: 5000 })
+    const partialState = await getPendingTransferState(partialTransfer.transferId)
+    expect(partialState).toEqual({ transferExists: true, movementCount: 2, pendingCount: 1 })
   })
 
   test('mark movement as receivable and edit fields before confirming', async ({ page }) => {

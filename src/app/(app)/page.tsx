@@ -1,5 +1,4 @@
 import { getCurrentSpace } from '@/lib/spaces'
-import { redirect } from 'next/navigation'
 import { db, movements, categories, accounts, transfers } from '@/lib/db'
 import { eq, desc, sql, and, gte } from 'drizzle-orm'
 import { getAccountBalances, getNetLiquidity, type AccountWithBalanceSerialized, type NetLiquidityData } from '@/lib/actions/balances'
@@ -7,6 +6,7 @@ import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { getUnsettledEmergencyCount } from '@/lib/actions/emergency'
 import { getUnsettledLoanCount } from '@/lib/actions/loans'
 import { reportableMovementSqlFilters } from '@/lib/domain/reporting'
+import { getPendingReviewItemCount } from '@/lib/domain/pending-review'
 import { HomePage } from './home-client'
 
 export default async function Home() {
@@ -25,7 +25,7 @@ export default async function Home() {
     usdClpRate,
     recentMovements,
     totalsResult,
-    reviewResult,
+    pendingReviewCount,
     unsettledEmergencyCount,
     unsettledLoanCount,
     recentUnlinkedIncomes,
@@ -104,11 +104,8 @@ export default async function Home() {
       .from(movements)
       .where(reportableMovementWhere),
 
-    // Pending review count
-    db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(movements)
-      .where(and(eq(movements.spaceId, space.id), eq(movements.needsReview, true))),
+    // Pending review item count. Transfer roots count as one review item even when both legs are pending.
+    getPendingReviewItemCount(space.id),
 
     // Unsettled emergency count
     getUnsettledEmergencyCount().catch(() => 0),
@@ -152,7 +149,6 @@ export default async function Home() {
   }, 0)
 
   const totals = totalsResult[0] || { totalIncome: 0, totalExpense: 0 }
-  const pendingReviewCount = reviewResult[0]?.count ?? 0
   const netLiquidity: NetLiquidityData = await getNetLiquidity(usdClpRate ?? undefined, accountBalances)
   const serializedAccountBalances: AccountWithBalanceSerialized[] = accountBalances.map((account) => ({
     ...account,
