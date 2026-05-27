@@ -636,9 +636,6 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
                   Necesitas acceso a ambos Spaces para revisar esta transferencia.
                 </div>
               )}
-              <div style={{ fontSize: 12, color: '#a1a1aa', backgroundColor: '#111', borderRadius: 8, padding: '8px 10px' }}>
-                Esta tarjeta representa ambos movimientos ligados al mismo transfer root. Aprobar la marca como revisada completa; eliminar borra la transferencia y sus dos movimientos.
-              </div>
             </div>
           ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
