@@ -1,13 +1,15 @@
 import { and, eq, isNull, or, sql } from 'drizzle-orm'
-import { accounts, categories, db, emergencyPayments, movements, spaces, spaceMemberships, transfers, type Account, type Movement, type Space } from '@/lib/db'
+import { accounts, categories, db, emergencyPayments, movements, receivableSettlements, spaces, spaceMemberships, transfers, type Account, type Movement, type ReceivableSettlement, type Space, type Transfer } from '@/lib/db'
 import { convertUsdToClp, getUsdToClpRate } from '@/lib/exchange-rate'
-import { generateId } from '@/lib/utils'
+import { formatCurrency, generateId } from '@/lib/utils'
 
-export type LedgerResult = { success: boolean; error?: string; transferId?: string; remaining?: number; settled?: boolean; totalPaid?: number }
+export type LedgerResult = { success: boolean; error?: string; transferId?: string; settlementId?: string; remaining?: number; settled?: boolean; totalPaid?: number }
 export type Currency = 'CLP' | 'USD'
 export type MovementType = 'income' | 'expense'
 export type AmountInputMode = 'inputCurrency' | 'canonicalClp'
 
+const RECEIVABLE_SETTLEMENT_TOLERANCE = 0.05
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 type MovementInput = {
   name: string
@@ -50,6 +52,14 @@ type TransformToTransferInput = {
   toCurrency: Currency
   note?: string
   requirePending?: boolean
+}
+
+type CrossSpaceReceivableSettlementInput = {
+  payingSpaceId: string
+  sourceAccountId: string
+  destinationAccountId: string
+  amount: number
+  date: string
 }
 
 type NormalizedMoney = {
@@ -108,8 +118,45 @@ async function getTransferRootByMovementId(movementId: string) {
   return transfer ?? null
 }
 
+async function getReceivableSettlementByMovementId(movementId: string): Promise<ReceivableSettlement | null> {
+  const [settlement] = await db
+    .select()
+    .from(receivableSettlements)
+    .where(or(
+      eq(receivableSettlements.receivableId, movementId),
+      eq(receivableSettlements.outgoingMovementId, movementId),
+      eq(receivableSettlements.incomingMovementId, movementId),
+    ))
+    .limit(1)
+  return settlement ?? null
+}
+
+type ReceivableSettlementMovementRole = 'receivable' | 'outgoing' | 'incoming'
+
+async function getReceivableSettlementMovementLink(movementId: string): Promise<{ settlement: ReceivableSettlement; role: ReceivableSettlementMovementRole } | null> {
+  const settlement = await getReceivableSettlementByMovementId(movementId)
+  if (!settlement) return null
+  if (settlement.receivableId === movementId) return { settlement, role: 'receivable' }
+  if (settlement.outgoingMovementId === movementId) return { settlement, role: 'outgoing' }
+  if (settlement.incomingMovementId === movementId) return { settlement, role: 'incoming' }
+  return null
+}
+
+async function getReceivableSettlementByReceivableId(receivableId: string): Promise<ReceivableSettlement | null> {
+  const [settlement] = await db
+    .select()
+    .from(receivableSettlements)
+    .where(eq(receivableSettlements.receivableId, receivableId))
+    .limit(1)
+  return settlement ?? null
+}
+
 async function movementIsTransfer(movementId: string): Promise<boolean> {
   return Boolean(await getTransferRootByMovementId(movementId))
+}
+
+async function movementIsReceivableSettlement(movementId: string): Promise<boolean> {
+  return Boolean(await getReceivableSettlementByMovementId(movementId))
 }
 
 async function transferIsEmergencySettlement(transferId: string): Promise<boolean> {
@@ -304,6 +351,87 @@ function hasAmountInCurrency(movement: Pick<Movement, 'amountUsd'>, currency: Cu
   return currency === 'CLP' || movement.amountUsd != null
 }
 
+function settlementBounds(requiredClpAmount: number) {
+  return {
+    min: Math.ceil(requiredClpAmount * (1 - RECEIVABLE_SETTLEMENT_TOLERANCE)),
+    max: Math.floor(requiredClpAmount * (1 + RECEIVABLE_SETTLEMENT_TOLERANCE)),
+  }
+}
+
+function settlementAmountError(prefix: string, availableClpAmount: number, requiredClpAmount: number) {
+  const bounds = settlementBounds(requiredClpAmount)
+  return `${prefix}: disponible ${formatCurrency(availableClpAmount, 'CLP')}, requerido ${formatCurrency(requiredClpAmount, 'CLP')}, tolerancia ±5% (${formatCurrency(bounds.min, 'CLP')} a ${formatCurrency(bounds.max, 'CLP')})`
+}
+
+function isWithinReceivableSettlementTolerance(actualClpAmount: number, requiredClpAmount: number): boolean {
+  const bounds = settlementBounds(requiredClpAmount)
+  return actualClpAmount >= bounds.min && actualClpAmount <= bounds.max
+}
+
+function settlementSafeClassificationError() {
+  return 'Receivable settlement expenses only allow name/category review; amount, date, account, currency and workflow type are locked'
+}
+
+function validatesSettlementOutgoingSafeFields(original: Movement, input: ReportableInput): boolean {
+  return input.type === 'expense'
+    && input.accountId === original.accountId
+    && input.date === original.date
+    && input.amount === original.amount
+    && input.currency === original.currency
+    && (input.amountUsd ?? null) === (original.amountUsd ?? null)
+    && (input.exchangeRate ?? null) === (original.exchangeRate ?? null)
+    && (input.time ?? null) === (original.time ?? null)
+    && !input.emergency
+    && !input.loan
+}
+
+function proportionalAmount(total: number, ratio: number): number {
+  if (ratio >= 1) return total
+  return Math.max(1, Math.min(total, Math.round(total * ratio)))
+}
+
+function proportionalNullableAmount(total: number | null, ratio: number): number | null {
+  if (total == null) return null
+  return proportionalAmount(total, ratio)
+}
+
+function addNullableAmount(current: number | null, restored: number | null): number | null {
+  if (restored == null) return current
+  return (current ?? 0) + restored
+}
+
+function subtractNullableAmount(current: number | null, consumed: number | null): number | null {
+  if (current == null || consumed == null) return current
+  return Math.max(0, current - consumed)
+}
+
+async function normalizeCanonicalForAccount(
+  spaceId: string,
+  account: Pick<Account, 'id' | 'currency' | 'bankName'>,
+  canonicalClpAmount: number,
+  preferredExchangeRate?: number | null,
+): Promise<NormalizedMoney | { error: string }> {
+  if (account.currency === 'CLP') {
+    return normalizeMoney(spaceId, {
+      accountId: account.id,
+      amount: canonicalClpAmount,
+      amountInputMode: 'inputCurrency',
+      currency: 'CLP',
+    })
+  }
+
+  const rate = preferredExchangeRate ?? await getUsdToClpRate()
+  const amountUsd = Math.max(1, Math.round(canonicalClpAmount * 100 / rate))
+  return normalizeMoney(spaceId, {
+    accountId: account.id,
+    amount: canonicalClpAmount,
+    amountInputMode: 'canonicalClp',
+    currency: 'USD',
+    amountUsd,
+    exchangeRate: rate,
+  })
+}
+
 async function normalizeEmergencySettlementLeg(
   spaceId: string,
   account: Pick<Account, 'id' | 'currency' | 'bankName'>,
@@ -339,6 +467,339 @@ async function normalizeEmergencySettlementLeg(
     amountInputMode: 'inputCurrency',
     currency: 'USD',
     exchangeRate: rate,
+  })
+}
+
+async function deleteReceivableSettlementRecord(spaceId: string, actorUserId: string, settlementId: string): Promise<LedgerResult> {
+  const [settlement] = await db
+    .select()
+    .from(receivableSettlements)
+    .where(eq(receivableSettlements.id, settlementId))
+    .limit(1)
+
+  if (!settlement || (settlement.fundedSpaceId !== spaceId && settlement.payingSpaceId !== spaceId)) {
+    return fail('Receivable settlement not found')
+  }
+
+  const [fundedSpace, payingSpace] = await Promise.all([
+    getMemberSpace(actorUserId, settlement.fundedSpaceId),
+    getMemberSpace(actorUserId, settlement.payingSpaceId),
+  ])
+  if (!fundedSpace || !payingSpace) return fail('Necesitas acceso a ambos Spaces para eliminar este cobro')
+
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:receivable-settlement:${settlement.id}`}, 0))`)
+    if (settlement.consumedTransferId) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:transfer-consumption:${settlement.consumedTransferId}`}, 0))`)
+    }
+
+    const [lockedSettlement] = await tx
+      .select()
+      .from(receivableSettlements)
+      .where(eq(receivableSettlements.id, settlement.id))
+      .limit(1)
+    if (!lockedSettlement) return fail('Receivable settlement not found')
+
+    if (lockedSettlement.consumedTransferId) {
+      const consumedTransferFields = [
+        lockedSettlement.consumedTransferSourceSpaceId,
+        lockedSettlement.consumedTransferDestinationSpaceId,
+        lockedSettlement.consumedTransferSourceAccountId,
+        lockedSettlement.consumedTransferDestinationAccountId,
+        lockedSettlement.consumedTransferSourceName,
+        lockedSettlement.consumedTransferDestinationName,
+        lockedSettlement.consumedTransferDate,
+        lockedSettlement.consumedSourceAmount,
+        lockedSettlement.consumedSourceCurrency,
+        lockedSettlement.consumedDestinationAmount,
+        lockedSettlement.consumedDestinationCurrency,
+      ]
+      if (consumedTransferFields.some((value) => value == null)) {
+        return fail('Receivable settlement is missing transfer restoration data')
+      }
+
+      const [existingTransfer] = await tx
+        .select()
+        .from(transfers)
+        .where(eq(transfers.id, lockedSettlement.consumedTransferId))
+        .limit(1)
+
+      if (existingTransfer) {
+        const [sourceMovement, destinationMovement] = await Promise.all([
+          tx.select().from(movements).where(eq(movements.id, existingTransfer.sourceMovementId)).limit(1),
+          tx.select().from(movements).where(eq(movements.id, existingTransfer.destinationMovementId)).limit(1),
+        ])
+        const source = sourceMovement[0]
+        const destination = destinationMovement[0]
+        if (!source || !destination) return fail('Transferencia consumida corrupta')
+
+        await tx.update(movements).set({
+          amount: source.amount + lockedSettlement.consumedSourceAmount!,
+          amountUsd: addNullableAmount(source.amountUsd, lockedSettlement.consumedSourceAmountUsd),
+          updatedAt: new Date(),
+        }).where(eq(movements.id, source.id))
+        await tx.update(movements).set({
+          amount: destination.amount + lockedSettlement.consumedDestinationAmount!,
+          amountUsd: addNullableAmount(destination.amountUsd, lockedSettlement.consumedDestinationAmountUsd),
+          updatedAt: new Date(),
+        }).where(eq(movements.id, destination.id))
+      } else {
+        const sourceMovementId = generateId()
+        const destinationMovementId = generateId()
+        const now = new Date()
+        await tx.insert(movements).values([
+          {
+            id: sourceMovementId,
+            spaceId: lockedSettlement.consumedTransferSourceSpaceId!,
+            createdByUserId: lockedSettlement.createdByUserId ?? actorUserId,
+            accountId: lockedSettlement.consumedTransferSourceAccountId!,
+            categoryId: null,
+            name: lockedSettlement.consumedTransferSourceName!,
+            date: lockedSettlement.consumedTransferDate!,
+            amount: lockedSettlement.consumedSourceAmount!,
+            type: 'expense',
+            currency: lockedSettlement.consumedSourceCurrency!,
+            amountUsd: lockedSettlement.consumedSourceAmountUsd,
+            exchangeRate: lockedSettlement.consumedSourceExchangeRate,
+            time: lockedSettlement.consumedTransferSourceTime,
+            needsReview: false,
+            receivable: false,
+            received: false,
+            receivableId: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: destinationMovementId,
+            spaceId: lockedSettlement.consumedTransferDestinationSpaceId!,
+            createdByUserId: lockedSettlement.createdByUserId ?? actorUserId,
+            accountId: lockedSettlement.consumedTransferDestinationAccountId!,
+            categoryId: null,
+            name: lockedSettlement.consumedTransferDestinationName!,
+            date: lockedSettlement.consumedTransferDate!,
+            amount: lockedSettlement.consumedDestinationAmount!,
+            type: 'income',
+            currency: lockedSettlement.consumedDestinationCurrency!,
+            amountUsd: lockedSettlement.consumedDestinationAmountUsd,
+            exchangeRate: lockedSettlement.consumedDestinationExchangeRate,
+            time: lockedSettlement.consumedTransferDestinationTime,
+            needsReview: false,
+            receivable: false,
+            received: false,
+            receivableId: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ])
+        await tx.insert(transfers).values({
+          id: lockedSettlement.consumedTransferId,
+          sourceSpaceId: lockedSettlement.consumedTransferSourceSpaceId!,
+          destinationSpaceId: lockedSettlement.consumedTransferDestinationSpaceId!,
+          sourceMovementId,
+          destinationMovementId,
+          createdByUserId: lockedSettlement.createdByUserId ?? actorUserId,
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
+    }
+
+    await tx.delete(receivableSettlements).where(eq(receivableSettlements.id, lockedSettlement.id))
+    await tx.delete(movements).where(or(
+      eq(movements.id, lockedSettlement.outgoingMovementId),
+      eq(movements.id, lockedSettlement.incomingMovementId),
+    ))
+    await tx.update(movements).set({ received: false, updatedAt: new Date() })
+      .where(and(eq(movements.id, lockedSettlement.receivableId), eq(movements.spaceId, lockedSettlement.fundedSpaceId)))
+
+    return ok({ settlementId: lockedSettlement.id })
+  })
+}
+
+async function consumeIncomingTransferForReceivableSettlement(
+  spaceId: string,
+  actorUserId: string,
+  receivableId: string,
+  destinationMovementId: string,
+  transfer: Transfer,
+): Promise<LedgerResult> {
+  if (transfer.destinationMovementId !== destinationMovementId || transfer.destinationSpaceId !== spaceId || transfer.sourceSpaceId === transfer.destinationSpaceId) {
+    return fail('Selected movement is not an incoming transfer from another Space')
+  }
+  if (await transferIsEmergencySettlement(transfer.id)) return fail('Esta transferencia está vinculada a otro workflow')
+
+  const [sourceSpace, destinationSpace] = await Promise.all([
+    getMemberSpace(actorUserId, transfer.sourceSpaceId),
+    getMemberSpace(actorUserId, transfer.destinationSpaceId),
+  ])
+  if (!sourceSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para usar esta transferencia')
+
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:receivable-settlement:${spaceId}:${receivableId}`}, 0))`)
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:transfer-consumption:${transfer.id}`}, 0))`)
+
+    const [lockedReceivable] = await tx
+      .select()
+      .from(movements)
+      .where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId)))
+      .limit(1)
+    if (!lockedReceivable) return fail('Receivable not found')
+    if (!lockedReceivable.receivable) return fail('Movement is not receivable')
+    if (lockedReceivable.received) return fail('Receivable already received')
+
+    const [existingSettlement] = await tx
+      .select({ id: receivableSettlements.id })
+      .from(receivableSettlements)
+      .where(eq(receivableSettlements.receivableId, receivableId))
+      .limit(1)
+    if (existingSettlement) return fail('Receivable already has a settlement')
+
+    const [lockedTransfer] = await tx
+      .select()
+      .from(transfers)
+      .where(eq(transfers.id, transfer.id))
+      .limit(1)
+    if (!lockedTransfer || lockedTransfer.destinationMovementId !== destinationMovementId || lockedTransfer.destinationSpaceId !== spaceId || lockedTransfer.sourceSpaceId === lockedTransfer.destinationSpaceId) {
+      return fail('Selected movement is not an incoming transfer from another Space')
+    }
+
+    const [sourceRows, destinationRows] = await Promise.all([
+      tx.select().from(movements).where(and(eq(movements.id, lockedTransfer.sourceMovementId), eq(movements.spaceId, lockedTransfer.sourceSpaceId))).limit(1),
+      tx.select().from(movements).where(and(eq(movements.id, lockedTransfer.destinationMovementId), eq(movements.spaceId, lockedTransfer.destinationSpaceId))).limit(1),
+    ])
+    const sourceMovement = sourceRows[0]
+    const destinationMovement = destinationRows[0]
+    if (!sourceMovement || !destinationMovement || sourceMovement.type !== 'expense' || destinationMovement.type !== 'income') return fail('Transferencia corrupta')
+    if (!sourceMovement.accountId || !destinationMovement.accountId) return fail('Transferencia corrupta')
+    if (sourceMovement.needsReview || destinationMovement.needsReview) return fail('La transferencia debe estar revisada antes de usarla para cobrar')
+    if (hasDependentWorkflow(sourceMovement) || hasDependentWorkflow(destinationMovement) || sourceMovement.receivable || destinationMovement.receivable || sourceMovement.emergency || destinationMovement.emergency || sourceMovement.loan || destinationMovement.loan) {
+      return fail('La transferencia seleccionada ya pertenece a otro workflow')
+    }
+    if ((sourceMovement.currency === 'USD' && sourceMovement.amountUsd == null) || (destinationMovement.currency === 'USD' && destinationMovement.amountUsd == null)) {
+      return fail('La transferencia seleccionada no tiene datos completos de moneda')
+    }
+
+    const bounds = settlementBounds(lockedReceivable.amount)
+    if (destinationMovement.amount < bounds.min) {
+      return fail(settlementAmountError('Monto insuficiente para saldar el por cobrar', destinationMovement.amount, lockedReceivable.amount))
+    }
+
+    const consumesWholeTransfer = destinationMovement.amount <= bounds.max
+    const consumedDestinationAmount = consumesWholeTransfer ? destinationMovement.amount : lockedReceivable.amount
+    const ratio = consumedDestinationAmount / destinationMovement.amount
+    const consumedDestinationAmountUsd = proportionalNullableAmount(destinationMovement.amountUsd, ratio)
+    const consumedSourceAmount = proportionalAmount(sourceMovement.amount, ratio)
+    const consumedSourceAmountUsd = proportionalNullableAmount(sourceMovement.amountUsd, ratio)
+    const remainingSourceAmount = sourceMovement.amount - consumedSourceAmount
+    const remainingDestinationAmount = destinationMovement.amount - consumedDestinationAmount
+    const remainingSourceAmountUsd = subtractNullableAmount(sourceMovement.amountUsd, consumedSourceAmountUsd)
+    const remainingDestinationAmountUsd = subtractNullableAmount(destinationMovement.amountUsd, consumedDestinationAmountUsd)
+    const fullyConsumed = consumesWholeTransfer ||
+      remainingSourceAmount <= 0 ||
+      remainingDestinationAmount <= 0 ||
+      (sourceMovement.currency === 'USD' && (!remainingSourceAmountUsd || remainingSourceAmountUsd <= 0)) ||
+      (destinationMovement.currency === 'USD' && (!remainingDestinationAmountUsd || remainingDestinationAmountUsd <= 0))
+
+    const now = new Date()
+    const settlementId = generateId()
+    const outgoingMovementId = generateId()
+    const incomingMovementId = generateId()
+
+    await tx.insert(movements).values([
+      {
+        id: outgoingMovementId,
+        spaceId: lockedTransfer.sourceSpaceId,
+        createdByUserId: actorUserId,
+        accountId: sourceMovement.accountId,
+        categoryId: null,
+        name: lockedReceivable.name,
+        date: sourceMovement.date,
+        amount: consumedSourceAmount,
+        type: 'expense',
+        currency: sourceMovement.currency,
+        amountUsd: consumedSourceAmountUsd,
+        exchangeRate: sourceMovement.exchangeRate,
+        time: sourceMovement.time,
+        needsReview: true,
+        receivable: false,
+        received: false,
+        receivableId: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: incomingMovementId,
+        spaceId,
+        createdByUserId: actorUserId,
+        accountId: destinationMovement.accountId,
+        categoryId: null,
+        name: `Cobro: ${lockedReceivable.name}`,
+        date: destinationMovement.date,
+        amount: consumedDestinationAmount,
+        type: 'income',
+        currency: destinationMovement.currency,
+        amountUsd: consumedDestinationAmountUsd,
+        exchangeRate: destinationMovement.exchangeRate,
+        time: destinationMovement.time,
+        needsReview: false,
+        receivable: false,
+        received: false,
+        receivableId,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ])
+
+    if (fullyConsumed) {
+      await tx.delete(transfers).where(eq(transfers.id, lockedTransfer.id))
+      await tx.delete(movements).where(or(eq(movements.id, sourceMovement.id), eq(movements.id, destinationMovement.id)))
+    } else {
+      await tx.update(movements).set({
+        amount: remainingSourceAmount,
+        amountUsd: remainingSourceAmountUsd,
+        updatedAt: now,
+      }).where(and(eq(movements.id, sourceMovement.id), eq(movements.spaceId, lockedTransfer.sourceSpaceId)))
+      await tx.update(movements).set({
+        amount: remainingDestinationAmount,
+        amountUsd: remainingDestinationAmountUsd,
+        updatedAt: now,
+      }).where(and(eq(movements.id, destinationMovement.id), eq(movements.spaceId, lockedTransfer.destinationSpaceId)))
+      await tx.update(transfers).set({ updatedAt: now }).where(eq(transfers.id, lockedTransfer.id))
+    }
+
+    await tx.update(movements).set({ received: true, updatedAt: now })
+      .where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId)))
+    await tx.insert(receivableSettlements).values({
+      id: settlementId,
+      fundedSpaceId: spaceId,
+      payingSpaceId: lockedTransfer.sourceSpaceId,
+      receivableId,
+      outgoingMovementId,
+      incomingMovementId,
+      consumedTransferId: lockedTransfer.id,
+      consumedTransferSourceSpaceId: lockedTransfer.sourceSpaceId,
+      consumedTransferDestinationSpaceId: lockedTransfer.destinationSpaceId,
+      consumedTransferSourceAccountId: sourceMovement.accountId,
+      consumedTransferDestinationAccountId: destinationMovement.accountId,
+      consumedTransferSourceName: sourceMovement.name,
+      consumedTransferDestinationName: destinationMovement.name,
+      consumedTransferDate: destinationMovement.date,
+      consumedTransferSourceTime: sourceMovement.time,
+      consumedTransferDestinationTime: destinationMovement.time,
+      consumedSourceAmount,
+      consumedSourceCurrency: sourceMovement.currency,
+      consumedSourceAmountUsd,
+      consumedSourceExchangeRate: sourceMovement.exchangeRate,
+      consumedDestinationAmount,
+      consumedDestinationCurrency: destinationMovement.currency,
+      consumedDestinationAmountUsd,
+      consumedDestinationExchangeRate: destinationMovement.exchangeRate,
+      createdByUserId: actorUserId,
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    return ok({ settlementId })
   })
 }
 
@@ -380,6 +841,27 @@ export const movementLedger = {
     if (!original) return fail('Movement not found')
     if (!original.needsReview) return fail('Movement is not pending review')
     if (hasDependentWorkflow(original) || await movementIsTransfer(original.id)) return fail('Pending movement has dependent relationships')
+    const settlementLink = await getReceivableSettlementMovementLink(original.id)
+    if (settlementLink) {
+      if (settlementLink.role !== 'outgoing') return fail('Receivable settlement operational movements cannot be reviewed here')
+      if (!validatesSettlementOutgoingSafeFields(original, input)) return fail(settlementSafeClassificationError())
+      if (!input.name.trim()) return fail('Name is required')
+      if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+
+      await db.update(movements).set({
+        name: input.name.trim(),
+        categoryId: input.categoryId || null,
+        type: 'expense',
+        needsReview: false,
+        emergency: false,
+        emergencySettled: false,
+        loan: false,
+        loanSettled: false,
+        updatedAt: new Date(),
+      }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
+
+      return ok()
+    }
     if (!input.name.trim()) return fail('Name is required')
     if (input.emergency && input.type !== 'expense') return fail('Only expenses can be emergency movements')
     if (input.loan && input.type !== 'income') return fail('Only income movements can be loans')
@@ -414,6 +896,29 @@ export const movementLedger = {
     if (!original) return fail('Movement not found')
     if (original.needsReview) return fail('Confirm pending movements before reclassifying them')
     if (await movementIsTransfer(original.id)) return fail('Transfers must be edited through transfer operations')
+    const settlementMovement = await movementIsReceivableSettlement(original.id)
+    if (settlementMovement) {
+      const settlementLink = await getReceivableSettlementMovementLink(original.id)
+      if (!settlementLink) return fail('Receivable settlement link not found')
+      if (settlementLink.role !== 'outgoing') return fail('Receivable settlement operational movements cannot be edited through reportable movement edits')
+      if (!validatesSettlementOutgoingSafeFields(original, input)) return fail(settlementSafeClassificationError())
+      if (!input.name.trim()) return fail('Name is required')
+      if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+
+      await db.update(movements).set({
+        name: input.name.trim(),
+        categoryId: input.categoryId || null,
+        type: 'expense',
+        needsReview: false,
+        emergency: false,
+        emergencySettled: false,
+        loan: false,
+        loanSettled: false,
+        updatedAt: new Date(),
+      }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
+
+      return ok()
+    }
     if (original.receivableId || original.loanId) return fail('This movement is linked to another workflow')
     if (!input.name.trim()) return fail('Name is required')
     if (input.emergency && input.type !== 'expense') return fail('Only expenses can be emergency movements')
@@ -463,7 +968,7 @@ export const movementLedger = {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
     if (movement.type !== 'expense') return fail('Only expenses can be marked as emergency')
-    if ((await movementIsTransfer(movement.id)) || (isOperational(movement) && !movement.emergency)) return fail('Movement is already part of another workflow')
+    if ((await movementIsTransfer(movement.id)) || await movementIsReceivableSettlement(movement.id) || (isOperational(movement) && !movement.emergency)) return fail('Movement is already part of another workflow')
     await db.update(movements).set({ emergency: true, needsReview: false, updatedAt: new Date() }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
     return ok()
   },
@@ -484,7 +989,7 @@ export const movementLedger = {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
     if (movement.type !== 'income') return fail('Only income movements can be marked as loan')
-    if ((await movementIsTransfer(movement.id)) || (isOperational(movement) && !movement.loan)) return fail('Movement is already part of another workflow')
+    if ((await movementIsTransfer(movement.id)) || await movementIsReceivableSettlement(movement.id) || (isOperational(movement) && !movement.loan)) return fail('Movement is already part of another workflow')
     await db.update(movements).set({ loan: true, needsReview: false, updatedAt: new Date() }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
     return ok()
   },
@@ -501,9 +1006,11 @@ export const movementLedger = {
     return ok()
   },
 
-  async deleteReportableMovement(spaceId: string, movementId: string): Promise<LedgerResult> {
+  async deleteReportableMovement(spaceId: string, actorUserId: string, movementId: string): Promise<LedgerResult> {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
+    const settlement = await getReceivableSettlementByMovementId(movement.id)
+    if (settlement) return deleteReceivableSettlementRecord(spaceId, actorUserId, settlement.id)
     if (movement.needsReview) return fail('Pending movements must be deleted through review operations')
     if (await movementIsTransfer(movement.id)) return fail('Transfers must be deleted through transfer operations')
     if (movement.receivable && await hasReceivablePayments(spaceId, movementId)) return fail('Unmark receivable before deleting linked payments')
@@ -515,9 +1022,11 @@ export const movementLedger = {
     return ok()
   },
 
-  async deletePendingMovement(spaceId: string, movementId: string): Promise<LedgerResult> {
+  async deletePendingMovement(spaceId: string, actorUserId: string, movementId: string): Promise<LedgerResult> {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
+    const settlement = await getReceivableSettlementByMovementId(movement.id)
+    if (settlement) return deleteReceivableSettlementRecord(spaceId, actorUserId, settlement.id)
     if (!movement.needsReview) return fail('Movement is not pending review')
     if (hasDependentWorkflow(movement) || await movementIsTransfer(movement.id)) return fail('Pending movement has dependent relationships')
     await db.delete(movements).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
@@ -590,7 +1099,7 @@ export const movementLedger = {
   async markAsReceivable(spaceId: string, movementId: string, reminderText: string): Promise<LedgerResult> {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
-    if (hasDependentWorkflow(movement) || await movementIsTransfer(movement.id) || movement.receivable || movement.emergency || movement.loan) return fail('Movement is already part of another workflow')
+    if (hasDependentWorkflow(movement) || await movementIsTransfer(movement.id) || await movementIsReceivableSettlement(movement.id) || movement.receivable || movement.emergency || movement.loan) return fail('Movement is already part of another workflow')
     if (movement.type !== 'expense') return fail('Only expenses can be marked as receivable')
     if (!reminderText.trim()) return fail('Reminder text is required')
 
@@ -604,10 +1113,16 @@ export const movementLedger = {
     return ok()
   },
 
-  async unmarkReceivable(spaceId: string, movementId: string): Promise<LedgerResult> {
+  async unmarkReceivable(spaceId: string, actorUserId: string, movementId: string): Promise<LedgerResult> {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
     if (!movement.receivable) return fail('Movement is not receivable')
+
+    const settlement = await getReceivableSettlementByReceivableId(movementId)
+    if (settlement) {
+      const deleted = await deleteReceivableSettlementRecord(spaceId, actorUserId, settlement.id)
+      if (!deleted.success) return deleted
+    }
 
     await db.transaction(async (tx) => {
       await tx.delete(movements).where(and(eq(movements.receivableId, movementId), eq(movements.spaceId, spaceId)))
@@ -673,7 +1188,126 @@ export const movementLedger = {
     return ok()
   },
 
-  async settleReceivableWithExistingMovement(spaceId: string, receivableId: string, existingIncomeId: string): Promise<LedgerResult> {
+  async settleReceivableWithCrossSpacePayment(spaceId: string, actorUserId: string, receivableId: string, input: CrossSpaceReceivableSettlementInput): Promise<LedgerResult> {
+    if (!DATE_RE.test(input.date)) return fail('Invalid payment date')
+    if (!Number.isInteger(input.amount) || input.amount <= 0) return fail('Amount must be a positive integer')
+    if (input.payingSpaceId === spaceId) return fail('Use same-Space income for payments from the current Space')
+
+    const receivable = await getOwnedMovement(spaceId, receivableId)
+    if (!receivable) return fail('Receivable not found')
+    if (!receivable.receivable) return fail('Movement is not receivable')
+    if (receivable.received) return fail('Receivable already received')
+    if (await getReceivableSettlementByReceivableId(receivableId)) return fail('Receivable already has a settlement')
+
+    const [fundedSpace, payingSpace, sourceAccount, destinationAccount] = await Promise.all([
+      getMemberSpace(actorUserId, spaceId),
+      getMemberSpace(actorUserId, input.payingSpaceId),
+      getOwnedAccount(input.payingSpaceId, input.sourceAccountId),
+      getOwnedAccount(spaceId, input.destinationAccountId),
+    ])
+    if (!fundedSpace) return fail('No tienes acceso al Space actual')
+    if (!payingSpace) return fail('No tienes acceso al Space pagador')
+    if (!sourceAccount) return fail('Cuenta origen no válida')
+    if (!destinationAccount) return fail('Cuenta destino no válida')
+
+    const destinationMoney = await normalizeTransferLeg(spaceId, destinationAccount.id, input.amount, destinationAccount.currency)
+    if ('error' in destinationMoney) return fail(destinationMoney.error)
+    if (!isWithinReceivableSettlementTolerance(destinationMoney.amount, receivable.amount)) {
+      return fail(settlementAmountError('Monto fuera de tolerancia para saldar el por cobrar', destinationMoney.amount, receivable.amount))
+    }
+
+    const sourceMoney = await normalizeCanonicalForAccount(
+      input.payingSpaceId,
+      sourceAccount,
+      destinationMoney.amount,
+      destinationMoney.exchangeRate ?? receivable.exchangeRate,
+    )
+    if ('error' in sourceMoney) return fail(sourceMoney.error)
+
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:receivable-settlement:${spaceId}:${receivableId}`}, 0))`)
+      const [lockedReceivable] = await tx
+        .select()
+        .from(movements)
+        .where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId)))
+        .limit(1)
+      if (!lockedReceivable) return fail('Receivable not found')
+      if (!lockedReceivable.receivable) return fail('Movement is not receivable')
+      if (lockedReceivable.received) return fail('Receivable already received')
+
+      const [existingSettlement] = await tx
+        .select({ id: receivableSettlements.id })
+        .from(receivableSettlements)
+        .where(eq(receivableSettlements.receivableId, receivableId))
+        .limit(1)
+      if (existingSettlement) return fail('Receivable already has a settlement')
+
+      const now = new Date()
+      const settlementId = generateId()
+      const outgoingMovementId = generateId()
+      const incomingMovementId = generateId()
+
+      await tx.insert(movements).values([
+        {
+          id: outgoingMovementId,
+          spaceId: input.payingSpaceId,
+          createdByUserId: actorUserId,
+          accountId: sourceAccount.id,
+          categoryId: null,
+          name: lockedReceivable.name,
+          date: input.date,
+          amount: sourceMoney.amount,
+          type: 'expense',
+          currency: sourceAccount.currency,
+          amountUsd: sourceMoney.amountUsd,
+          exchangeRate: sourceMoney.exchangeRate,
+          needsReview: true,
+          receivable: false,
+          received: false,
+          receivableId: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: incomingMovementId,
+          spaceId,
+          createdByUserId: actorUserId,
+          accountId: destinationAccount.id,
+          categoryId: null,
+          name: `Cobro: ${lockedReceivable.name}`,
+          date: input.date,
+          amount: destinationMoney.amount,
+          type: 'income',
+          currency: destinationAccount.currency,
+          amountUsd: destinationMoney.amountUsd,
+          exchangeRate: destinationMoney.exchangeRate,
+          needsReview: false,
+          receivable: false,
+          received: false,
+          receivableId,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ])
+      await tx.update(movements).set({ received: true, updatedAt: now })
+        .where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId)))
+      await tx.insert(receivableSettlements).values({
+        id: settlementId,
+        fundedSpaceId: spaceId,
+        payingSpaceId: input.payingSpaceId,
+        receivableId,
+        outgoingMovementId,
+        incomingMovementId,
+        createdByUserId: actorUserId,
+        createdAt: now,
+        updatedAt: now,
+      })
+
+      return ok({ settlementId })
+    })
+  },
+
+  async settleReceivableWithExistingMovement(spaceId: string, actorUserId: string, receivableId: string, existingIncomeId: string): Promise<LedgerResult> {
     const receivable = await getOwnedMovement(spaceId, receivableId)
     const income = await getOwnedMovement(spaceId, existingIncomeId)
     if (!receivable) return fail('Receivable not found')
@@ -681,7 +1315,17 @@ export const movementLedger = {
     if (!receivable.receivable) return fail('Movement is not receivable')
     if (receivable.received) return fail('Receivable already received')
     if (income.type !== 'income') return fail('Selected movement is not an income')
-    if (income.needsReview || hasDependentWorkflow(income) || await movementIsTransfer(income.id) || income.loan || income.receivable) return fail('Selected income is already part of another workflow')
+
+    const transfer = await getTransferRootByMovementId(income.id)
+    if (transfer) return consumeIncomingTransferForReceivableSettlement(spaceId, actorUserId, receivableId, income.id, transfer)
+
+    if (income.needsReview || hasDependentWorkflow(income) || income.loan || income.receivable) return fail('Selected income is already part of another workflow')
+    if (await movementIsReceivableSettlement(income.id)) return fail('Selected income is already part of another workflow')
+    // Legacy same-Space income matching intentionally remains a simple receivableId link
+    // instead of creating receivable_settlements, but it shares the settlement amount invariant.
+    if (!isWithinReceivableSettlementTolerance(income.amount, receivable.amount)) {
+      return fail(settlementAmountError('Monto fuera de tolerancia para saldar el por cobrar', income.amount, receivable.amount))
+    }
 
     await db.transaction(async (tx) => {
       await tx.update(movements).set({ received: true, updatedAt: new Date() }).where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId)))
@@ -700,7 +1344,7 @@ export const movementLedger = {
 
     const original = await getOwnedMovement(spaceId, originalId)
     if (!original) return fail('Movement not found')
-    if (hasDependentWorkflow(original) || await movementIsTransfer(original.id) || original.receivable || original.emergency || original.loan) return fail('Resolve dependent workflow before splitting this movement')
+    if (hasDependentWorkflow(original) || await movementIsTransfer(original.id) || await movementIsReceivableSettlement(original.id) || original.receivable || original.emergency || original.loan) return fail('Resolve dependent workflow before splitting this movement')
 
     const splitTotal = splits.reduce((sum, s) => sum + s.amount, 0)
     if (splitTotal !== original.amount) return fail('Split amounts must equal the original amount')
@@ -934,6 +1578,7 @@ export const movementLedger = {
     if (!original) return fail('Movimiento no encontrado')
     if (input.requirePending && !original.needsReview) return fail('Movement is not pending review')
     if (await movementIsTransfer(original.id)) return fail('Este movimiento ya es una transferencia')
+    if (await movementIsReceivableSettlement(original.id)) return fail('Receivable settlement movements cannot be transformed to transfer')
     if (hasDependentWorkflow(original) || original.receivable || original.emergency || original.loan) return fail('Resolve dependent workflow before transforming')
     if (input.source.type !== 'expense') return fail('Transfer source must be an expense')
     if (!input.source.accountId) return fail('El movimiento debe tener una cuenta asignada')

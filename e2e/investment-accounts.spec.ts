@@ -3,7 +3,7 @@ import { expectAccountVisibleInSettings, registerAndLogin, screenshot, TEST_PASS
 import { createInvestmentAccount, getUserId, seedInvestmentSnapshot, seedTransferMovement } from './db-helper'
 import postgres from 'postgres'
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/wallit'
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://127.0.0.1:5432/wallit_e2e'
 const sql = postgres(DATABASE_URL, { max: 5 })
 
 async function registerUser(page: Page): Promise<string> {

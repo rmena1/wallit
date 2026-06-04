@@ -1,6 +1,6 @@
 import postgres from 'postgres'
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/wallit'
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://127.0.0.1:5432/wallit_e2e'
 
 const sql = postgres(DATABASE_URL, { max: 5 })
 
@@ -133,6 +133,75 @@ export async function countMovementsInSpace(spaceId: string, nameLike: string): 
       AND name ILIKE ${`%${nameLike}%`}
   `
   return Number(rows[0]?.count ?? 0)
+}
+
+export async function getReportTotalsForSpace(spaceId: string): Promise<{ totalIncome: number; totalExpense: number; count: number }> {
+  const rows = await sql`
+    SELECT
+      COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0)::bigint AS total_income,
+      COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0)::bigint AS total_expense,
+      COUNT(*)::int AS count
+    FROM movements m
+    WHERE m.space_id = ${spaceId}
+      AND m.needs_review = false
+      AND (m.receivable = false OR m.receivable IS NULL)
+      AND m.receivable_id IS NULL
+      AND (m.emergency = false OR m.emergency IS NULL)
+      AND (m.loan = false OR m.loan IS NULL)
+      AND m.loan_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM transfers t
+        WHERE t.source_movement_id = m.id OR t.destination_movement_id = m.id
+      )
+  `
+  return {
+    totalIncome: Number(rows[0]?.total_income ?? 0),
+    totalExpense: Number(rows[0]?.total_expense ?? 0),
+    count: Number(rows[0]?.count ?? 0),
+  }
+}
+
+export async function getMovementWorkflowState(spaceId: string, nameLike: string): Promise<{
+  id: string
+  amount: number
+  type: 'income' | 'expense'
+  needsReview: boolean
+  receivableId: string | null
+  receivableSettlementRole: 'receivable' | 'outgoing' | 'incoming' | null
+} | null> {
+  const rows = await sql`
+    SELECT
+      m.id,
+      m.amount,
+      m.type,
+      m.needs_review,
+      m.receivable_id,
+      CASE
+        WHEN rs.receivable_id = m.id THEN 'receivable'
+        WHEN rs.outgoing_movement_id = m.id THEN 'outgoing'
+        WHEN rs.incoming_movement_id = m.id THEN 'incoming'
+        ELSE NULL
+      END AS receivable_settlement_role
+    FROM movements m
+    LEFT JOIN receivable_settlements rs
+      ON rs.receivable_id = m.id
+      OR rs.outgoing_movement_id = m.id
+      OR rs.incoming_movement_id = m.id
+    WHERE m.space_id = ${spaceId}
+      AND m.name ILIKE ${`%${nameLike}%`}
+    ORDER BY m.created_at DESC
+    LIMIT 1
+  `
+  const row = rows[0]
+  if (!row) return null
+  return {
+    id: row.id,
+    amount: Number(row.amount),
+    type: row.type,
+    needsReview: Boolean(row.needs_review),
+    receivableId: row.receivable_id ?? null,
+    receivableSettlementRole: row.receivable_settlement_role ?? null,
+  }
 }
 
 export async function getAccounts(userId: string): Promise<{ id: string; bank_name: string }[]> {
@@ -606,6 +675,26 @@ export async function getTransferIdForMovement(movementId: string): Promise<stri
   return rows[0]?.id ?? null
 }
 
+export async function getMovementReviewState(movementId: string): Promise<{
+  type: 'income' | 'expense'
+  category_id: string | null
+  needs_review: boolean
+} | null> {
+  const rows = await sql`
+    SELECT type, category_id, needs_review
+    FROM movements
+    WHERE id = ${movementId}
+    LIMIT 1
+  `
+  const row = rows[0]
+  if (!row) return null
+  return {
+    type: row.type as 'income' | 'expense',
+    category_id: row.category_id ?? null,
+    needs_review: Boolean(row.needs_review),
+  }
+}
+
 export async function seedConfirmedMovement(userId: string, accountId: string | null, name: string, amount: number): Promise<string> {
   const now = new Date()
   const today = now.toISOString().slice(0, 10)
@@ -618,16 +707,61 @@ export async function seedConfirmedMovement(userId: string, accountId: string | 
   return id
 }
 
-export async function seedReceivable(userId: string, accountId: string | null, name: string, amount: number): Promise<string> {
+export async function seedReceivable(userId: string, accountId: string | null, name: string, amount: number, spaceIdOverride?: string): Promise<string> {
   const now = new Date()
   const today = now.toISOString().slice(0, 10)
   const id = testId('recv')
-  const spaceId = await getPersonalSpaceId(userId)
+  const spaceId = await resolveSpaceId(userId, spaceIdOverride)
   await sql`
     INSERT INTO movements (id, space_id, created_by_user_id, account_id, name, date, amount, type, needs_review, currency, receivable, received, created_at, updated_at)
     VALUES (${id}, ${spaceId}, ${userId}, ${accountId}, ${name}, ${today}, ${amount}, 'expense', false, 'CLP', true, false, ${now}, ${now})
   `
   return id
+}
+
+export async function seedInterspaceTransfer(userId: string, opts: {
+  sourceSpaceId: string
+  destinationSpaceId: string
+  sourceAccountId: string
+  destinationAccountId: string
+  amount: number
+  note?: string
+  date?: string
+}): Promise<{ transferId: string; sourceMovementId: string; destinationMovementId: string }> {
+  const now = new Date()
+  const date = opts.date ?? now.toISOString().slice(0, 10)
+  const transferId = testId('transfer')
+  const sourceMovementId = testId('transfer-source')
+  const destinationMovementId = testId('transfer-dest')
+  const note = opts.note ? ` · ${opts.note}` : ''
+
+  const sourceSpaceRows = await sql`SELECT name FROM spaces WHERE id = ${opts.sourceSpaceId} LIMIT 1`
+  const destinationSpaceRows = await sql`SELECT name FROM spaces WHERE id = ${opts.destinationSpaceId} LIMIT 1`
+  const sourceSpaceName = sourceSpaceRows[0]?.name ?? 'Origen'
+  const destinationSpaceName = destinationSpaceRows[0]?.name ?? 'Destino'
+
+  await sql`
+    INSERT INTO movements (
+      id, space_id, created_by_user_id, account_id, name, date, amount, type,
+      needs_review, currency, receivable, received, created_at, updated_at
+    )
+    VALUES
+      (${sourceMovementId}, ${opts.sourceSpaceId}, ${userId}, ${opts.sourceAccountId}, ${`Transferencia a ${destinationSpaceName}${note}`}, ${date}, ${opts.amount}, 'expense', false, 'CLP', false, false, ${now}, ${now}),
+      (${destinationMovementId}, ${opts.destinationSpaceId}, ${userId}, ${opts.destinationAccountId}, ${`Transferencia desde ${sourceSpaceName}${note}`}, ${date}, ${opts.amount}, 'income', false, 'CLP', false, false, ${now}, ${now})
+  `
+
+  await sql`
+    INSERT INTO transfers (
+      id, source_space_id, destination_space_id, source_movement_id, destination_movement_id,
+      created_by_user_id, created_at, updated_at
+    )
+    VALUES (
+      ${transferId}, ${opts.sourceSpaceId}, ${opts.destinationSpaceId}, ${sourceMovementId}, ${destinationMovementId},
+      ${userId}, ${now}, ${now}
+    )
+  `
+
+  return { transferId, sourceMovementId, destinationMovementId }
 }
 
 export async function seedManyMovements(userId: string, accountId: string, count: number) {

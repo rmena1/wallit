@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, movements, categories, accounts, transfers } from '@/lib/db'
+import { db, movements, categories, accounts, transfers, receivableSettlements } from '@/lib/db'
 import { eq, and, desc, gte, isNull, lte, sql, type SQL } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
 import { createMovementSchema } from '@/lib/validations'
@@ -90,7 +90,7 @@ export async function reclassifyReportableMovement(id: string, data: {
 
 export async function deleteReportableMovement(id: string): Promise<MovementActionResult> {
   const { user: session, space } = await getCurrentSpace()
-  const result = await movementLedger.deleteReportableMovement(space.id, id)
+  const result = await movementLedger.deleteReportableMovement(space.id, session.id, id)
   if (result.success) revalidateMovementPaths()
   return result
 }
@@ -123,6 +123,19 @@ export async function getMovementById(id: string) {
         FROM ${transfers}
         WHERE ${transfers.sourceMovementId} = ${movements.id}
            OR ${transfers.destinationMovementId} = ${movements.id}
+        LIMIT 1
+      )`,
+      receivableSettlementRole: sql<'receivable' | 'outgoing' | 'incoming' | null>`(
+        SELECT CASE
+          WHEN ${receivableSettlements.receivableId} = ${movements.id} THEN 'receivable'
+          WHEN ${receivableSettlements.outgoingMovementId} = ${movements.id} THEN 'outgoing'
+          WHEN ${receivableSettlements.incomingMovementId} = ${movements.id} THEN 'incoming'
+          ELSE NULL
+        END
+        FROM ${receivableSettlements}
+        WHERE ${receivableSettlements.receivableId} = ${movements.id}
+           OR ${receivableSettlements.outgoingMovementId} = ${movements.id}
+           OR ${receivableSettlements.incomingMovementId} = ${movements.id}
         LIMIT 1
       )`,
       emergency: movements.emergency,
@@ -236,6 +249,7 @@ export async function getMovementsPaginated(
     amount: movements.amount,
     amountUsd: movements.amountUsd,
     type: movements.type,
+    exchangeRate: movements.exchangeRate,
     createdAt: movements.createdAt,
     updatedAt: movements.updatedAt,
     categoryName: categories.name,

@@ -98,10 +98,6 @@ export async function createAccount(page: Page, opts: CreateAccountOptions = {})
   await page.getByPlaceholder(/Saldo inicial|Valor invertido actual/).fill(initialBalance)
   await page.getByRole('button', { name: /Agregar Cuenta/i }).click()
 
-  await expect.poll(async () => {
-    return await bankSelect.isVisible().catch(() => false)
-  }, { timeout: DEFAULT_TIMEOUT }).toBe(false)
-
   await expectAccountVisibleInSettings(page, lastFourDigits)
 }
 

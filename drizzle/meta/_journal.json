@@ -5,15 +5,57 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1779473000000,
-      "tag": "0012_spaces",
+      "when": 1779000000000,
+      "tag": "0000_naive_sabretooth",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "7",
+      "when": 1779200000000,
+      "tag": "0009_emergency_expenses",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1779300000000,
+      "tag": "0010_loans",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1779400000000,
+      "tag": "0011_account_sort_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1779473000000,
+      "tag": "0012_spaces",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
       "when": 1779476580000,
       "tag": "0013_transfer_roots",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780444800000,
+      "tag": "0014_receivable_settlements",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780448400000,
+      "tag": "0015_investment_account_schema",
       "breakpoints": true
     }
   ]

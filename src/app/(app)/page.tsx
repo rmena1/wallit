@@ -10,7 +10,7 @@ import { getPendingReviewItemCount } from '@/lib/domain/pending-review'
 import { HomePage } from './home-client'
 
 export default async function Home() {
-  const { user: session, space } = await getCurrentSpace()
+  const { user: session, space, spaces: availableSpaces } = await getCurrentSpace()
 
   // First fetch account balances (needed to determine if we need USD rate)
   const accountBalances = await getAccountBalances()
@@ -28,7 +28,9 @@ export default async function Home() {
     pendingReviewCount,
     unsettledEmergencyCount,
     unsettledLoanCount,
-    recentUnlinkedIncomes,
+    regularUnlinkedIncomes,
+    incomingTransferCandidates,
+    settlementAccounts,
   ] = await Promise.all([
     // Exchange rate - only fetch if needed
     hasUsdAccount ? getUsdToClpRate().catch(() => null as number | null) : Promise.resolve(null),
@@ -44,6 +46,7 @@ export default async function Home() {
         date: movements.date,
         amount: movements.amount,
         amountUsd: movements.amountUsd,
+        exchangeRate: movements.exchangeRate,
         type: movements.type,
         createdAt: movements.createdAt,
         updatedAt: movements.updatedAt,
@@ -116,6 +119,7 @@ export default async function Home() {
     // Recent confirmed reportable incomes eligible for receivable matching
     db
       .select({
+        kind: sql<'income'>`'income'`,
         id: movements.id,
         name: movements.name,
         date: movements.date,
@@ -127,6 +131,9 @@ export default async function Home() {
         accountEmoji: accounts.emoji,
         categoryName: categories.name,
         categoryEmoji: categories.emoji,
+        sourceSpaceId: sql<string | null>`NULL`,
+        sourceSpaceName: sql<string | null>`NULL`,
+        sourceSpaceEmoji: sql<string | null>`NULL`,
       })
       .from(movements)
       .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
@@ -138,6 +145,94 @@ export default async function Home() {
       ))
       .orderBy(desc(movements.date), desc(movements.createdAt))
       .limit(20),
+
+    // Incoming inter-Space Transfers eligible for receivable settlement.
+    db
+      .select({
+        kind: sql<'transfer'>`'transfer'`,
+        id: movements.id,
+        name: movements.name,
+        date: movements.date,
+        amount: movements.amount,
+        amountUsd: movements.amountUsd,
+        currency: movements.currency,
+        accountBankName: accounts.bankName,
+        accountLastFour: accounts.lastFourDigits,
+        accountEmoji: accounts.emoji,
+        categoryName: sql<string | null>`NULL`,
+        categoryEmoji: sql<string | null>`NULL`,
+        sourceSpaceId: transfers.sourceSpaceId,
+        sourceSpaceName: sql<string | null>`(
+          SELECT source_space.name
+          FROM spaces source_space
+          WHERE source_space.id = ${transfers.sourceSpaceId}
+          LIMIT 1
+        )`,
+        sourceSpaceEmoji: sql<string | null>`(
+          SELECT source_space.emoji
+          FROM spaces source_space
+          WHERE source_space.id = ${transfers.sourceSpaceId}
+          LIMIT 1
+        )`,
+      })
+      .from(transfers)
+      .innerJoin(movements, eq(transfers.destinationMovementId, movements.id))
+      .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
+      .where(and(
+        eq(transfers.destinationSpaceId, space.id),
+        sql`${transfers.sourceSpaceId} <> ${transfers.destinationSpaceId}`,
+        eq(movements.needsReview, false),
+        sql`${movements.receivableId} IS NULL`,
+        sql`${movements.loanId} IS NULL`,
+        sql`(${movements.receivable} = false OR ${movements.receivable} IS NULL)`,
+        sql`(${movements.emergency} = false OR ${movements.emergency} IS NULL)`,
+        sql`(${movements.loan} = false OR ${movements.loan} IS NULL)`,
+        sql`NOT EXISTS (
+          SELECT 1
+          FROM emergency_payments emergency_payment
+          WHERE emergency_payment.transfer_id = ${transfers.id}
+        )`,
+        sql`NOT EXISTS (
+          SELECT 1
+          FROM receivable_settlements settlement
+          WHERE settlement.consumed_transfer_id = ${transfers.id}
+             OR settlement.outgoing_movement_id = ${transfers.sourceMovementId}
+             OR settlement.incoming_movement_id = ${transfers.destinationMovementId}
+        )`,
+        sql`EXISTS (
+          SELECT 1
+          FROM movements source_movement
+          WHERE source_movement.id = ${transfers.sourceMovementId}
+            AND source_movement.needs_review = false
+            AND source_movement.receivable_id IS NULL
+            AND source_movement.loan_id IS NULL
+            AND (source_movement.receivable = false OR source_movement.receivable IS NULL)
+            AND (source_movement.emergency = false OR source_movement.emergency IS NULL)
+            AND (source_movement.loan = false OR source_movement.loan IS NULL)
+        )`,
+        sql`EXISTS (
+          SELECT 1
+          FROM space_memberships source_membership
+          WHERE source_membership.user_id = ${session.id}
+            AND source_membership.space_id = ${transfers.sourceSpaceId}
+        )`,
+      ))
+      .orderBy(desc(movements.date), desc(movements.createdAt))
+      .limit(20),
+
+    // Accounts from every accessible Space for cross-Space receivable settlement.
+    db
+      .select({
+        id: accounts.id,
+        spaceId: accounts.spaceId,
+        bankName: accounts.bankName,
+        lastFourDigits: accounts.lastFourDigits,
+        emoji: accounts.emoji,
+        currency: accounts.currency,
+      })
+      .from(accounts)
+      .where(sql`${accounts.spaceId} IN (${sql.join(availableSpaces.map((s) => sql`${s.id}`), sql`, `)})`)
+      .orderBy(accounts.bankName),
   ])
 
   // Compute total balance from parallel results
@@ -160,6 +255,9 @@ export default async function Home() {
     createdAt: m.createdAt.toISOString(),
     updatedAt: m.updatedAt.toISOString(),
   }))
+  const recentUnlinkedIncomes = [...regularUnlinkedIncomes, ...incomingTransferCandidates]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 30)
 
   return (
     <HomePage
@@ -173,8 +271,10 @@ export default async function Home() {
       pendingReviewCount={pendingReviewCount}
       usdClpRate={usdClpRate}
       netLiquidity={netLiquidity}
-      userAccounts={accountBalances.map(a => ({ id: a.id, bankName: a.bankName, lastFourDigits: a.lastFourDigits, emoji: a.emoji }))}
+      userAccounts={accountBalances.map(a => ({ id: a.id, bankName: a.bankName, lastFourDigits: a.lastFourDigits, emoji: a.emoji, currency: a.currency }))}
       recentUnlinkedIncomes={recentUnlinkedIncomes}
+      settlementSpaces={availableSpaces.map((s) => ({ id: s.id, name: s.name, emoji: s.emoji, isCurrent: s.id === space.id, hasAccounts: settlementAccounts.some((a) => a.spaceId === s.id) }))}
+      settlementAccounts={settlementAccounts}
       unsettledEmergencyCount={unsettledEmergencyCount}
       unsettledLoanCount={unsettledLoanCount}
     />

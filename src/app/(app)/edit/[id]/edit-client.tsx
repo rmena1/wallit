@@ -28,6 +28,7 @@ interface MovementData {
   originalName: string | null
   emergency: boolean
   loan: boolean
+  receivableSettlementRole?: 'receivable' | 'outgoing' | 'incoming' | null
 }
 
 interface Props {
@@ -118,7 +119,9 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
   const fromCurrency = fromAccount?.currency || 'CLP'
   const toCurrencyTransfer = toAccountForTransfer?.currency || 'CLP'
   const currenciesDifferTransfer = fromCurrency !== toCurrencyTransfer
-  const canEditEmergencyWorkflow = !movement.receivable
+  const isReceivableSettlementExpense = movement.receivableSettlementRole === 'outgoing'
+  const canEditEmergencyWorkflow = !movement.receivable && !isReceivableSettlementExpense
+  const lockedSettlementFieldStyle = isReceivableSettlementExpense ? { opacity: 0.65, cursor: 'not-allowed' } : {}
 
   useEffect(() => {
     setTransferToAccountId('')
@@ -177,6 +180,12 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
     try {
       const amountCents = parseMoney(formAmount)
       if (amountCents <= 0) { setError('Monto inválido'); setLoading(false); return }
+
+      if (isReceivableSettlementExpense && isTransferMode) {
+        setError('Este gasto salda un por cobrar entre Spaces y no puede transformarse en transferencia')
+        setLoading(false)
+        return
+      }
 
       // If in transfer mode, convert to transfer
       if (isTransferMode) {
@@ -405,8 +414,11 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
               display: 'flex', backgroundColor: '#111', borderRadius: 12,
               padding: 4, gap: 4, border: '1px solid #2a2a2a',
             }}>
-              {(['expense', 'income', 'transfer'] as const).map(t => (
-                <button key={t} type="button" onClick={() => {
+              {(isReceivableSettlementExpense ? ['expense'] as const : ['expense', 'income', 'transfer'] as const).map(t => {
+                const disabledForSettlement = isReceivableSettlementExpense && t !== 'expense'
+                return (
+                <button key={t} type="button" disabled={disabledForSettlement} onClick={() => {
+                  if (disabledForSettlement) return
                   if (t === 'transfer') {
                     setIsTransferMode(true)
                     setFormType('expense') // Transfers start as expense
@@ -416,18 +428,28 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
                   }
                 }} style={{
                   flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
-                  fontSize: 14, fontWeight: 500, cursor: 'pointer',
+                  fontSize: 14, fontWeight: 500, cursor: disabledForSettlement ? 'not-allowed' : 'pointer',
                   backgroundColor: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '#27272a' : 'transparent',
                   color: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) 
                     ? (t === 'expense' ? '#f87171' : t === 'income' ? '#4ade80' : '#60a5fa') 
                     : '#9ca3af',
+                  opacity: disabledForSettlement ? 0.4 : 1,
                   boxShadow: (t === 'transfer' ? isTransferMode : (!isTransferMode && formType === t)) ? '0 1px 3px rgba(0,0,0,0.3)' : 'none',
                   transition: 'all 0.2s ease',
                 }}>
                   {t === 'expense' ? '↓ Gasto' : t === 'income' ? '↑ Ingreso' : '↔️ Transferencia'}
                 </button>
-              ))}
+              )})}
             </div>
+
+            {isReceivableSettlementExpense && (
+              <div style={{
+                fontSize: 13, color: '#fbbf24', backgroundColor: '#1f1a0b',
+                border: '1px solid #854d0e', borderRadius: 12, padding: '10px 12px',
+              }}>
+                Gasto de settlement por cobrar: solo puedes ajustar nombre/categoría. Monto, fecha, cuenta, moneda y workflows quedan bloqueados para mantener ambos Spaces alineados.
+              </div>
+            )}
 
             {/* Account or Transfer accounts */}
             {isTransferMode ? (
@@ -507,7 +529,7 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
             ) : (
               <div>
                 <label style={labelStyle}>Cuenta</label>
-                <select value={formAccountId} onChange={e => setFormAccountId(e.target.value)} style={selectStyle}>
+                <select value={formAccountId} disabled={isReceivableSettlementExpense} onChange={e => setFormAccountId(e.target.value)} style={{ ...selectStyle, ...lockedSettlementFieldStyle }}>
                   <option value="">Sin cuenta</option>
                   {accounts.map(a => (
                     <option key={a.id} value={a.id}>{a.emoji || '🏦'} {a.bankName} · {a.accountType} · ···{a.lastFourDigits}</option>
@@ -528,11 +550,11 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
                 <label style={labelStyle}>{formCurrency === 'USD' ? 'Monto CLP equivalente' : 'Monto'}</label>
                 <input value={formAmount} onChange={e => setFormAmount(e.target.value)}
                   aria-label={formCurrency === 'USD' ? 'Monto CLP equivalente' : 'Monto'}
-                  inputMode="decimal" style={inputStyle} />
+                  inputMode="decimal" readOnly={isReceivableSettlementExpense} style={{ ...inputStyle, ...lockedSettlementFieldStyle }} />
               </div>
               <div style={{ flex: 1 }}>
                 <label style={labelStyle}>Moneda</label>
-                <select value={formCurrency} onChange={e => setFormCurrency(e.target.value as 'CLP' | 'USD')} style={selectStyle}>
+                <select value={formCurrency} disabled={isReceivableSettlementExpense} onChange={e => setFormCurrency(e.target.value as 'CLP' | 'USD')} style={{ ...selectStyle, ...lockedSettlementFieldStyle }}>
                   <option value="CLP">CLP</option>
                   <option value="USD">USD</option>
                 </select>
@@ -546,13 +568,13 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
                   <label style={labelStyle}>Monto USD</label>
                   <input value={formAmountUsd} onChange={e => setFormAmountUsd(e.target.value)}
                     aria-label="Monto USD"
-                    inputMode="decimal" style={inputStyle} />
+                    inputMode="decimal" readOnly={isReceivableSettlementExpense} style={{ ...inputStyle, ...lockedSettlementFieldStyle }} />
                 </div>
                 <div style={{ flex: 1 }}>
                   <label style={labelStyle}>Tipo de cambio (CLP/USD)</label>
                   <input value={formExchangeRate} onChange={e => setFormExchangeRate(e.target.value)}
                     aria-label="Tipo de cambio CLP/USD"
-                    inputMode="decimal" style={inputStyle} />
+                    inputMode="decimal" readOnly={isReceivableSettlementExpense} style={{ ...inputStyle, ...lockedSettlementFieldStyle }} />
                 </div>
               </div>
             )}
@@ -561,13 +583,13 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
             <div style={{ display: 'flex', gap: 12 }}>
               <div style={{ flex: 2 }}>
                 <label style={labelStyle}>Fecha</label>
-                <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)}
-                  style={{ ...inputStyle, colorScheme: 'dark' }} />
+                <input type="date" value={formDate} disabled={isReceivableSettlementExpense} onChange={e => setFormDate(e.target.value)}
+                  style={{ ...inputStyle, colorScheme: 'dark', ...lockedSettlementFieldStyle }} />
               </div>
               <div style={{ flex: 1 }}>
                 <label style={labelStyle}>Hora</label>
-                <input type="time" value={formTime} onChange={e => setFormTime(e.target.value)}
-                  style={{ ...inputStyle, colorScheme: 'dark' }} />
+                <input type="time" value={formTime} disabled={isReceivableSettlementExpense} onChange={e => setFormTime(e.target.value)}
+                  style={{ ...inputStyle, colorScheme: 'dark', ...lockedSettlementFieldStyle }} />
               </div>
             </div>
 
@@ -706,18 +728,18 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
               💰 Desmarcar cobro
             </button>
           ) : (
-            <button onClick={() => { setShowReceivable(true); setReceivableText(movement.name) }} disabled={loading} style={{
+            <button onClick={() => { setShowReceivable(true); setReceivableText(movement.name) }} disabled={loading || isReceivableSettlementExpense} style={{
               flex: 1, height: 42, borderRadius: 12, border: '1px solid #854d0e',
               backgroundColor: '#1a1a1a', color: '#fbbf24',
-              fontSize: 14, fontWeight: 600, cursor: 'pointer',
+              fontSize: 14, fontWeight: 600, cursor: isReceivableSettlementExpense ? 'not-allowed' : 'pointer', opacity: isReceivableSettlementExpense ? 0.45 : 1,
             }}>
               💰 Por cobrar
             </button>
           )}
-          <button onClick={openSplit} disabled={loading} style={{
+          <button onClick={openSplit} disabled={loading || isReceivableSettlementExpense} style={{
             flex: 1, height: 42, borderRadius: 12, border: '1px solid #1e40af',
             backgroundColor: '#1a1a1a', color: '#60a5fa',
-            fontSize: 14, fontWeight: 600, cursor: 'pointer',
+            fontSize: 14, fontWeight: 600, cursor: isReceivableSettlementExpense ? 'not-allowed' : 'pointer', opacity: isReceivableSettlementExpense ? 0.45 : 1,
           }}>
             ✂️ Dividir
           </button>

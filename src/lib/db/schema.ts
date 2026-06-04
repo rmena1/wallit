@@ -171,6 +171,46 @@ export const transfers = pgTable('transfers', {
 ])
 
 // ============================================================================
+// RECEIVABLE SETTLEMENTS
+// ============================================================================
+export const receivableSettlements = pgTable('receivable_settlements', {
+  id: text('id').primaryKey(),
+  fundedSpaceId: text('funded_space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  payingSpaceId: text('paying_space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  receivableId: text('receivable_id').notNull().references(() => movements.id, { onDelete: 'cascade' }),
+  outgoingMovementId: text('outgoing_movement_id').notNull().references(() => movements.id, { onDelete: 'cascade' }),
+  incomingMovementId: text('incoming_movement_id').notNull().references(() => movements.id, { onDelete: 'cascade' }),
+  consumedTransferId: text('consumed_transfer_id'),
+  consumedTransferSourceSpaceId: text('consumed_transfer_source_space_id'),
+  consumedTransferDestinationSpaceId: text('consumed_transfer_destination_space_id'),
+  consumedTransferSourceAccountId: text('consumed_transfer_source_account_id'),
+  consumedTransferDestinationAccountId: text('consumed_transfer_destination_account_id'),
+  consumedTransferSourceName: text('consumed_transfer_source_name'),
+  consumedTransferDestinationName: text('consumed_transfer_destination_name'),
+  consumedTransferDate: text('consumed_transfer_date'),
+  consumedTransferSourceTime: text('consumed_transfer_source_time'),
+  consumedTransferDestinationTime: text('consumed_transfer_destination_time'),
+  consumedSourceAmount: bigint('consumed_source_amount', { mode: 'number' }),
+  consumedSourceCurrency: text('consumed_source_currency').$type<'CLP' | 'USD'>(),
+  consumedSourceAmountUsd: integer('consumed_source_amount_usd'),
+  consumedSourceExchangeRate: integer('consumed_source_exchange_rate'),
+  consumedDestinationAmount: bigint('consumed_destination_amount', { mode: 'number' }),
+  consumedDestinationCurrency: text('consumed_destination_currency').$type<'CLP' | 'USD'>(),
+  consumedDestinationAmountUsd: integer('consumed_destination_amount_usd'),
+  consumedDestinationExchangeRate: integer('consumed_destination_exchange_rate'),
+  createdByUserId: text('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
+}, (table) => [
+  index('idx_receivable_settlements_funded_space').on(table.fundedSpaceId),
+  index('idx_receivable_settlements_paying_space').on(table.payingSpaceId),
+  uniqueIndex('idx_receivable_settlements_receivable').on(table.receivableId),
+  uniqueIndex('idx_receivable_settlements_outgoing').on(table.outgoingMovementId),
+  uniqueIndex('idx_receivable_settlements_incoming').on(table.incomingMovementId),
+  index('idx_receivable_settlements_consumed_transfer').on(table.consumedTransferId),
+])
+
+// ============================================================================
 // EXCHANGE RATES
 // ============================================================================
 export const exchangeRates = pgTable('exchange_rates', {
@@ -231,6 +271,9 @@ export type NewMovement = typeof movements.$inferInsert
 
 export type Transfer = typeof transfers.$inferSelect
 export type NewTransfer = typeof transfers.$inferInsert
+
+export type ReceivableSettlement = typeof receivableSettlements.$inferSelect
+export type NewReceivableSettlement = typeof receivableSettlements.$inferInsert
 
 export type ExchangeRate = typeof exchangeRates.$inferSelect
 export type NewExchangeRate = typeof exchangeRates.$inferInsert

@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { logout } from '@/lib/actions/auth'
 import { getMovementsPaginated } from '@/lib/actions/movements'
-import { settleReceivableWithNewMovement, settleReceivableWithExistingMovement } from '@/lib/actions/review'
-import { formatDateDisplay, formatCurrency, formatMovementDisplayAmount } from '@/lib/utils'
+import { settleReceivableWithNewMovement, settleReceivableWithExistingMovement, settleReceivableWithCrossSpacePayment } from '@/lib/actions/review'
+import { formatDateDisplay, formatCurrency, formatMovementDisplayAmount, parseMoney, today } from '@/lib/utils'
 import type { AccountWithBalanceSerialized as AccountWithBalance, NetLiquidityData } from '@/lib/actions/balances'
 
 interface MovementWithCategory {
@@ -18,6 +18,7 @@ interface MovementWithCategory {
   date: string
   amount: number
   amountUsd: number | null
+  exchangeRate: number | null
   type: 'income' | 'expense'
   createdAt: string  // ISO string (serialized from Date for client component)
   updatedAt: string  // ISO string (serialized from Date for client component)
@@ -42,9 +43,11 @@ interface UserAccount {
   bankName: string
   lastFourDigits: string
   emoji: string | null
+  currency: 'CLP' | 'USD'
 }
 
 interface UnlinkedIncome {
+  kind: 'income' | 'transfer'
   id: string
   name: string
   date: string
@@ -56,6 +59,26 @@ interface UnlinkedIncome {
   accountEmoji: string | null
   categoryName: string | null
   categoryEmoji: string | null
+  sourceSpaceId: string | null
+  sourceSpaceName: string | null
+  sourceSpaceEmoji: string | null
+}
+
+interface SettlementSpace {
+  id: string
+  name: string
+  emoji: string
+  isCurrent: boolean
+  hasAccounts: boolean
+}
+
+interface SettlementAccount {
+  id: string
+  spaceId: string
+  bankName: string
+  lastFourDigits: string
+  emoji: string | null
+  currency: 'CLP' | 'USD'
 }
 
 interface HomePageProps {
@@ -71,6 +94,8 @@ interface HomePageProps {
   netLiquidity: NetLiquidityData
   userAccounts: UserAccount[]
   recentUnlinkedIncomes: UnlinkedIncome[]
+  settlementSpaces: SettlementSpace[]
+  settlementAccounts: SettlementAccount[]
   unsettledEmergencyCount: number
   unsettledLoanCount: number
 }
@@ -213,14 +238,31 @@ function getAccountIconFromType(accountType: string): string {
 
 const PAGE_SIZE = 20
 
-export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, currentSpaceId, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes, unsettledEmergencyCount, unsettledLoanCount }: HomePageProps) {
+function centsToInputValue(cents: number, currency: 'CLP' | 'USD'): string {
+  return currency === 'USD' ? (cents / 100).toFixed(2) : String(Math.round(cents / 100))
+}
+
+function defaultSettlementAmount(receivable: MovementWithCategory, accountCurrency: 'CLP' | 'USD', usdClpRate: number | null): number {
+  if (accountCurrency === 'CLP') return receivable.amount
+  if (receivable.currency === 'USD' && receivable.amountUsd != null) return receivable.amountUsd
+  const rate = receivable.exchangeRate ?? usdClpRate
+  return rate ? Math.max(1, Math.round(receivable.amount * 100 / rate)) : 0
+}
+
+export function HomePage({ email, accountBalances, totalBalance, totalIncome, totalExpense, movements: initialMovements, currentSpaceId, pendingReviewCount, usdClpRate, netLiquidity, userAccounts, recentUnlinkedIncomes, settlementSpaces, settlementAccounts, unsettledEmergencyCount, unsettledLoanCount }: HomePageProps) {
   const router = useRouter()
   const [receivableFilter, setReceivableFilter] = useState(false)
   const [markingReceived, setMarkingReceived] = useState<string | null>(null)
   const [paymentDialogId, setPaymentDialogId] = useState<string | null>(null)
   const [selectedAccountId, setSelectedAccountId] = useState<string>('cash')
   const [paymentMode, setPaymentMode] = useState<'new' | 'existing'>('new')
+  const [newPaymentSource, setNewPaymentSource] = useState<'current-space' | 'other-space'>('current-space')
   const [selectedExistingIncomeId, setSelectedExistingIncomeId] = useState<string | null>(null)
+  const [crossSpaceId, setCrossSpaceId] = useState('')
+  const [crossSourceAccountId, setCrossSourceAccountId] = useState('')
+  const [crossDestinationAccountId, setCrossDestinationAccountId] = useState('')
+  const [crossAmount, setCrossAmount] = useState('')
+  const [crossDate, setCrossDate] = useState(today())
   const [showUserMenu, setShowUserMenu] = useState(false)
   const reviewCount = pendingReviewCount
   const userInitial = email.charAt(0).toUpperCase()
@@ -308,14 +350,61 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
 
   // Use displayed movements (managed state) instead of prop
   const filteredMovements = displayedMovements
+  const paymentReceivable = paymentDialogId
+    ? displayedMovements.find((movement) => movement.id === paymentDialogId) ?? initialMovements.find((movement) => movement.id === paymentDialogId) ?? null
+    : null
+  const otherSpaces = settlementSpaces.filter((space) => !space.isCurrent)
+  const currentDestinationAccounts = settlementAccounts.filter((account) => account.spaceId === currentSpaceId)
+  const crossSourceAccounts = settlementAccounts.filter((account) => account.spaceId === crossSpaceId)
+  const selectedDestinationAccount = settlementAccounts.find((account) => account.id === crossDestinationAccountId) ?? currentDestinationAccounts[0] ?? null
 
   // Stable callback for opening payment dialog
   const openPaymentDialog = useCallback((id: string) => {
     setSelectedAccountId('cash')
     setPaymentMode('new')
+    setNewPaymentSource('current-space')
     setSelectedExistingIncomeId(null)
+    setCrossDate(today())
     setPaymentDialogId(id)
   }, [])
+
+  useEffect(() => {
+    if (!paymentDialogId) return
+    const firstOtherSpace = otherSpaces[0]
+    if (otherSpaces.length === 1) {
+      setCrossSpaceId(otherSpaces[0].id)
+    } else if (!firstOtherSpace) {
+      setCrossSpaceId('')
+    } else if (!otherSpaces.some((space) => space.id === crossSpaceId)) {
+      setCrossSpaceId(firstOtherSpace.id)
+    }
+  }, [paymentDialogId, otherSpaces, crossSpaceId])
+
+  useEffect(() => {
+    if (!paymentDialogId) return
+    const firstSourceAccount = crossSourceAccounts[0]
+    if (!firstSourceAccount) {
+      setCrossSourceAccountId('')
+    } else if (!crossSourceAccounts.some((account) => account.id === crossSourceAccountId)) {
+      setCrossSourceAccountId(firstSourceAccount.id)
+    }
+  }, [paymentDialogId, crossSourceAccounts, crossSourceAccountId])
+
+  useEffect(() => {
+    if (!paymentDialogId) return
+    const firstDestinationAccount = currentDestinationAccounts[0]
+    if (!firstDestinationAccount) {
+      setCrossDestinationAccountId('')
+    } else if (!currentDestinationAccounts.some((account) => account.id === crossDestinationAccountId)) {
+      setCrossDestinationAccountId(firstDestinationAccount.id)
+    }
+  }, [paymentDialogId, currentDestinationAccounts, crossDestinationAccountId])
+
+  useEffect(() => {
+    if (!paymentDialogId || !paymentReceivable || !selectedDestinationAccount) return
+    const amount = defaultSettlementAmount(paymentReceivable, selectedDestinationAccount.currency, usdClpRate)
+    setCrossAmount(amount > 0 ? centsToInputValue(amount, selectedDestinationAccount.currency) : '')
+  }, [paymentDialogId, paymentReceivable, selectedDestinationAccount, usdClpRate])
 
   // Stable callback for navigating to edit
   const handleNavigateToEdit = useCallback((id: string) => {
@@ -330,7 +419,15 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
     try {
       const result = paymentMode === 'existing' && selectedExistingIncomeId
         ? await settleReceivableWithExistingMovement(id, selectedExistingIncomeId)
-        : await settleReceivableWithNewMovement(id, selectedAccountId === 'cash' ? undefined : selectedAccountId)
+        : newPaymentSource === 'other-space'
+          ? await settleReceivableWithCrossSpacePayment(id, {
+            payingSpaceId: crossSpaceId,
+            sourceAccountId: crossSourceAccountId,
+            destinationAccountId: crossDestinationAccountId,
+            amount: parseMoney(crossAmount),
+            date: crossDate,
+          })
+          : await settleReceivableWithNewMovement(id, selectedAccountId === 'cash' ? undefined : selectedAccountId)
       if (!result.success) {
         alert(result.error || 'Error al marcar como cobrado')
         return
@@ -350,7 +447,10 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
     }
   }
 
-  const canConfirmPayment = paymentMode === 'new' || (paymentMode === 'existing' && selectedExistingIncomeId !== null)
+  const canConfirmCrossSpacePayment = otherSpaces.length > 0 && Boolean(crossSpaceId && crossSourceAccountId && crossDestinationAccountId && crossDate && parseMoney(crossAmount) > 0)
+  const canConfirmPayment = paymentMode === 'new'
+    ? newPaymentSource === 'current-space' || canConfirmCrossSpacePayment
+    : selectedExistingIncomeId !== null
   return (
     <>
       {/* Header */}
@@ -731,6 +831,9 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
       {/* Payment Dialog */}
       {paymentDialogId && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="payment-dialog-title"
           onClick={() => setPaymentDialogId(null)}
           style={{
             position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)',
@@ -743,9 +846,10 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
             style={{
               backgroundColor: '#1a1a1a', borderRadius: 20, padding: 24,
               border: '1px solid #2a2a2a', width: '100%', maxWidth: 380,
+              maxHeight: '90dvh', overflowY: 'auto',
             }}
           >
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#e5e5e5', marginBottom: 4 }}>
+            <div id="payment-dialog-title" style={{ fontSize: 18, fontWeight: 700, color: '#e5e5e5', marginBottom: 4 }}>
               💰 Cobrar gasto
             </div>
             <div style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 16 }}>
@@ -784,20 +888,22 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
 
             {paymentMode === 'new' ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
-              {/* Cash option */}
+              <div style={{ fontSize: 12, color: '#a1a1aa', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0 }}>
+                En este Space
+              </div>
               <label
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
-                  backgroundColor: selectedAccountId === 'cash' ? '#27272a' : 'transparent',
-                  border: selectedAccountId === 'cash' ? '1px solid #4ade80' : '1px solid #2a2a2a',
+                  backgroundColor: newPaymentSource === 'current-space' && selectedAccountId === 'cash' ? '#27272a' : 'transparent',
+                  border: newPaymentSource === 'current-space' && selectedAccountId === 'cash' ? '1px solid #4ade80' : '1px solid #2a2a2a',
                   transition: 'all 0.15s ease',
                 }}
               >
                 <input
                   type="radio" name="paymentAccount" value="cash"
-                  checked={selectedAccountId === 'cash'}
-                  onChange={() => setSelectedAccountId('cash')}
+                  checked={newPaymentSource === 'current-space' && selectedAccountId === 'cash'}
+                  onChange={() => { setNewPaymentSource('current-space'); setSelectedAccountId('cash') }}
                   style={{ display: 'none' }}
                 />
                 <span style={{ fontSize: 20 }}>💵</span>
@@ -805,39 +911,159 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                   <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e5e5' }}>Efectivo</div>
                   <div style={{ fontSize: 11, color: '#a1a1aa' }}>No genera movimiento de ingreso</div>
                 </div>
-                {selectedAccountId === 'cash' && (
+                {newPaymentSource === 'current-space' && selectedAccountId === 'cash' && (
                   <span style={{ marginLeft: 'auto', color: '#4ade80', fontSize: 16 }}>✓</span>
                 )}
               </label>
 
-              {/* Account options */}
               {userAccounts.map(acc => (
                 <label
                   key={acc.id}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 10,
                     padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
-                    backgroundColor: selectedAccountId === acc.id ? '#27272a' : 'transparent',
-                    border: selectedAccountId === acc.id ? '1px solid #4ade80' : '1px solid #2a2a2a',
+                    backgroundColor: newPaymentSource === 'current-space' && selectedAccountId === acc.id ? '#27272a' : 'transparent',
+                    border: newPaymentSource === 'current-space' && selectedAccountId === acc.id ? '1px solid #4ade80' : '1px solid #2a2a2a',
                     transition: 'all 0.15s ease',
                   }}
                 >
                   <input
                     type="radio" name="paymentAccount" value={acc.id}
-                    checked={selectedAccountId === acc.id}
-                    onChange={() => setSelectedAccountId(acc.id)}
+                    checked={newPaymentSource === 'current-space' && selectedAccountId === acc.id}
+                    onChange={() => { setNewPaymentSource('current-space'); setSelectedAccountId(acc.id) }}
                     style={{ display: 'none' }}
                   />
                   <span style={{ fontSize: 20 }}>{acc.emoji || '🏦'}</span>
                   <div>
                     <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e5e5' }}>{acc.bankName}</div>
-                    <div style={{ fontSize: 11, color: '#a1a1aa' }}>···{acc.lastFourDigits}</div>
+                    <div style={{ fontSize: 11, color: '#a1a1aa' }}>···{acc.lastFourDigits} · {acc.currency}</div>
                   </div>
-                  {selectedAccountId === acc.id && (
+                  {newPaymentSource === 'current-space' && selectedAccountId === acc.id && (
                     <span style={{ marginLeft: 'auto', color: '#4ade80', fontSize: 16 }}>✓</span>
                   )}
                 </label>
               ))}
+
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: '12px 14px',
+                  borderRadius: 12,
+                  border: newPaymentSource === 'other-space' ? '1px solid #4ade80' : '1px solid #2a2a2a',
+                  backgroundColor: newPaymentSource === 'other-space' ? '#17251d' : 'transparent',
+                  opacity: otherSpaces.length === 0 ? 0.55 : 1,
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: otherSpaces.length === 0 ? 'not-allowed' : 'pointer', marginBottom: 12 }}>
+                  <input
+                    type="radio"
+                    name="paymentAccount"
+                    value="other-space"
+                    disabled={otherSpaces.length === 0}
+                    checked={newPaymentSource === 'other-space'}
+                    onChange={() => setNewPaymentSource('other-space')}
+                    style={{ display: 'none' }}
+                  />
+                  <span style={{ fontSize: 20 }}>↘</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#e5e5e5' }}>Pago desde otro Space</div>
+                    <div style={{ fontSize: 11, color: '#a1a1aa' }}>
+                      {otherSpaces.length === 0 ? 'No hay otros Spaces disponibles' : 'Crea gasto pendiente desde el otro Space'}
+                    </div>
+                  </div>
+                  {newPaymentSource === 'other-space' && (
+                    <span style={{ color: '#4ade80', fontSize: 16 }}>✓</span>
+                  )}
+                </label>
+
+                <div style={{ display: 'grid', gap: 10 }}>
+                  <label style={{ display: 'grid', gap: 4, fontSize: 12, color: '#a1a1aa' }}>
+                    Space que paga
+                    <select
+                      aria-label="Space que paga"
+                      value={crossSpaceId}
+                      disabled={otherSpaces.length === 0}
+                      onChange={(event) => { setNewPaymentSource('other-space'); setCrossSpaceId(event.target.value) }}
+                      style={{ height: 38, borderRadius: 10, border: '1px solid #2a2a2a', backgroundColor: '#111', color: '#e5e5e5', padding: '0 10px' }}
+                    >
+                      {otherSpaces.length === 0 ? (
+                        <option value="">Sin otros Spaces</option>
+                      ) : (
+                        otherSpaces.map((space) => (
+                          <option key={space.id} value={space.id} disabled={!space.hasAccounts}>
+                            {space.emoji} {space.name}{space.hasAccounts ? '' : ' · sin cuentas'}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </label>
+
+                  <label style={{ display: 'grid', gap: 4, fontSize: 12, color: '#a1a1aa' }}>
+                    Cuenta origen
+                    <select
+                      aria-label="Cuenta origen para el pago"
+                      value={crossSourceAccountId}
+                      disabled={otherSpaces.length === 0 || crossSourceAccounts.length === 0}
+                      onChange={(event) => { setNewPaymentSource('other-space'); setCrossSourceAccountId(event.target.value) }}
+                      style={{ height: 38, borderRadius: 10, border: '1px solid #2a2a2a', backgroundColor: '#111', color: '#e5e5e5', padding: '0 10px' }}
+                    >
+                      {crossSourceAccounts.length === 0 ? (
+                        <option value="">Sin cuentas origen</option>
+                      ) : (
+                        crossSourceAccounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.emoji || '🏦'} {account.bankName} ···{account.lastFourDigits} · {account.currency}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </label>
+
+                  <label style={{ display: 'grid', gap: 4, fontSize: 12, color: '#a1a1aa' }}>
+                    Cuenta destino
+                    <select
+                      aria-label="Cuenta destino del Space actual"
+                      value={crossDestinationAccountId}
+                      disabled={currentDestinationAccounts.length === 0}
+                      onChange={(event) => { setNewPaymentSource('other-space'); setCrossDestinationAccountId(event.target.value) }}
+                      style={{ height: 38, borderRadius: 10, border: '1px solid #2a2a2a', backgroundColor: '#111', color: '#e5e5e5', padding: '0 10px' }}
+                    >
+                      {currentDestinationAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.emoji || '🏦'} {account.bankName} ···{account.lastFourDigits} · {account.currency}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12, color: '#a1a1aa' }}>
+                      Monto recibido
+                      <input
+                        aria-label="Monto recibido desde otro Space"
+                        value={crossAmount}
+                        disabled={otherSpaces.length === 0}
+                        onFocus={() => setNewPaymentSource('other-space')}
+                        onChange={(event) => setCrossAmount(event.target.value)}
+                        inputMode="decimal"
+                        style={{ height: 38, borderRadius: 10, border: '1px solid #2a2a2a', backgroundColor: '#111', color: '#e5e5e5', padding: '0 10px', minWidth: 0 }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12, color: '#a1a1aa' }}>
+                      Fecha pago
+                      <input
+                        aria-label="Fecha de pago desde otro Space"
+                        type="date"
+                        value={crossDate}
+                        disabled={otherSpaces.length === 0}
+                        onFocus={() => setNewPaymentSource('other-space')}
+                        onChange={(event) => setCrossDate(event.target.value)}
+                        style={{ height: 38, borderRadius: 10, border: '1px solid #2a2a2a', backgroundColor: '#111', color: '#e5e5e5', padding: '0 10px', minWidth: 0 }}
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
             </div>
             ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24, maxHeight: 280, overflowY: 'auto' }}>
@@ -849,6 +1075,15 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                 recentUnlinkedIncomes.map(inc => (
                   <label
                     key={inc.id}
+                    role="radio"
+                    aria-checked={selectedExistingIncomeId === inc.id}
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        setSelectedExistingIncomeId(inc.id)
+                      }
+                    }}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 10,
                       padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
@@ -863,18 +1098,21 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                       onChange={() => setSelectedExistingIncomeId(inc.id)}
                       style={{ display: 'none' }}
                     />
-                    <span style={{ fontSize: 16 }}>{inc.categoryEmoji || '↑'}</span>
+                    <span style={{ fontSize: 16 }}>{inc.kind === 'transfer' ? '↔' : inc.categoryEmoji || '↑'}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e5e5', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {inc.name}
                       </div>
                       <div style={{ fontSize: 11, color: '#a1a1aa' }}>
                         {formatDateDisplay(inc.date)}
+                        {inc.kind === 'transfer' && inc.sourceSpaceName && (
+                          <span style={{ color: '#60a5fa' }}> · desde {inc.sourceSpaceEmoji || ''} {inc.sourceSpaceName}</span>
+                        )}
                         {inc.accountBankName && <span> · {inc.accountEmoji || ''} {inc.accountBankName}</span>}
                       </div>
                     </div>
                     <span style={{ fontSize: 14, fontWeight: 600, color: '#4ade80', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                      +{formatMovementDisplayAmount(inc.amount, inc.amountUsd, inc.currency)}
+                      {inc.kind === 'transfer' ? 'Disponible ' : '+'}{formatMovementDisplayAmount(inc.amount, inc.amountUsd, inc.currency)}
                     </span>
                     {selectedExistingIncomeId === inc.id && (
                       <span style={{ color: '#4ade80', fontSize: 16, flexShrink: 0 }}>✓</span>

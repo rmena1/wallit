@@ -1,9 +1,9 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, movements, categories, accounts, transfers } from '@/lib/db'
+import { db, movements, categories, accounts, transfers, receivableSettlements } from '@/lib/db'
 import { movementLedger, type AmountInputMode } from '@/lib/domain/movement-ledger'
-import { eq, and, desc, inArray, or } from 'drizzle-orm'
+import { eq, and, desc, inArray, or, sql } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
 import { getPendingReviewItemCount } from '@/lib/domain/pending-review'
 
@@ -34,6 +34,19 @@ export async function getPendingReviewMovements() {
       categoryEmoji: categories.emoji,
       accountBankName: accounts.bankName,
       accountLastFour: accounts.lastFourDigits,
+      receivableSettlementRole: sql<'receivable' | 'outgoing' | 'incoming' | null>`(
+        SELECT CASE
+          WHEN ${receivableSettlements.receivableId} = ${movements.id} THEN 'receivable'
+          WHEN ${receivableSettlements.outgoingMovementId} = ${movements.id} THEN 'outgoing'
+          WHEN ${receivableSettlements.incomingMovementId} = ${movements.id} THEN 'incoming'
+          ELSE NULL
+        END
+        FROM ${receivableSettlements}
+        WHERE ${receivableSettlements.receivableId} = ${movements.id}
+           OR ${receivableSettlements.outgoingMovementId} = ${movements.id}
+           OR ${receivableSettlements.incomingMovementId} = ${movements.id}
+        LIMIT 1
+      )`,
     })
     .from(movements)
     .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
@@ -140,11 +153,13 @@ export async function confirmPendingAsReportable(id: string, data: {
 }
 
 export async function deletePendingMovement(id: string) {
-  const { space } = await getCurrentSpace()
-  const result = await movementLedger.deletePendingMovement(space.id, id)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.deletePendingMovement(space.id, session.id, id)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/review')
+    revalidatePath('/reports')
+    revalidatePath('/receivables')
   }
   return result
 }
@@ -184,10 +199,11 @@ export async function markAsReceivable(id: string, reminderText: string) {
 }
 
 export async function unmarkReceivable(id: string) {
-  const { space } = await getCurrentSpace()
-  const result = await movementLedger.unmarkReceivable(space.id, id)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.unmarkReceivable(space.id, session.id, id)
   if (result.success) {
     revalidatePath('/')
+    revalidatePath('/review')
     revalidatePath('/receivables')
     revalidatePath('/reports')
   }
@@ -217,10 +233,29 @@ export async function settleReceivableWithNewMovement(id: string, paymentAccount
 }
 
 export async function settleReceivableWithExistingMovement(receivableId: string, existingIncomeId: string) {
-  const { space } = await getCurrentSpace()
-  const result = await movementLedger.settleReceivableWithExistingMovement(space.id, receivableId, existingIncomeId)
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.settleReceivableWithExistingMovement(space.id, session.id, receivableId, existingIncomeId)
   if (result.success) {
     revalidatePath('/')
+    revalidatePath('/review')
+    revalidatePath('/receivables')
+    revalidatePath('/reports')
+  }
+  return result
+}
+
+export async function settleReceivableWithCrossSpacePayment(receivableId: string, data: {
+  payingSpaceId: string
+  sourceAccountId: string
+  destinationAccountId: string
+  amount: number
+  date: string
+}) {
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.settleReceivableWithCrossSpacePayment(space.id, session.id, receivableId, data)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/review')
     revalidatePath('/receivables')
     revalidatePath('/reports')
   }
