@@ -33,7 +33,7 @@ type ReportableInput = MovementInput & {
 
 type TransferInput = {
   fromAccountId: string
-  toAccountId: string
+  toAccountId?: string | null
   destinationSpaceId?: string
   fromAmount: number
   toAmount: number
@@ -95,9 +95,9 @@ function isOperational(movement: Pick<Movement, 'needsReview' | 'receivable' | '
   )
 }
 
-async function getMemberSpace(userId: string, spaceId: string): Promise<Pick<Space, 'id' | 'name'> | null> {
+async function getMemberSpace(userId: string, spaceId: string): Promise<Pick<Space, 'id' | 'name' | 'isPersonal'> | null> {
   const [space] = await db
-    .select({ id: spaces.id, name: spaces.name })
+    .select({ id: spaces.id, name: spaces.name, isPersonal: spaces.isPersonal })
     .from(spaceMemberships)
     .innerJoin(spaces, eq(spaceMemberships.spaceId, spaces.id))
     .where(and(eq(spaceMemberships.userId, userId), eq(spaceMemberships.spaceId, spaceId), isNull(spaces.archivedAt)))
@@ -107,6 +107,57 @@ async function getMemberSpace(userId: string, spaceId: string): Promise<Pick<Spa
 
 async function getAccountInSpace(spaceId: string, accountId: string | null): Promise<Pick<Account, 'id' | 'currency' | 'bankName'> | null> {
   return getOwnedAccount(spaceId, accountId)
+}
+
+
+type PendingMemberPersonalDestination = {
+  id: string
+  name: string
+  destinationUserId: string
+}
+
+async function getPendingMemberPersonalDestination(actorUserId: string, sourceSpaceId: string, destinationSpaceId: string): Promise<PendingMemberPersonalDestination | null> {
+  const [destination] = await db
+    .select({ id: spaces.id, name: spaces.name, isPersonal: spaces.isPersonal, createdByUserId: spaces.createdByUserId })
+    .from(spaces)
+    .where(and(eq(spaces.id, destinationSpaceId), eq(spaces.isPersonal, true), isNull(spaces.archivedAt)))
+    .limit(1)
+
+  if (!destination || destination.createdByUserId === actorUserId) return null
+
+  const [destinationMembership] = await db
+    .select({ userId: spaceMemberships.userId })
+    .from(spaceMemberships)
+    .where(and(eq(spaceMemberships.spaceId, destination.id), eq(spaceMemberships.userId, destination.createdByUserId)))
+    .limit(1)
+  if (!destinationMembership) return null
+
+  const [sharedMembership] = await db
+    .select({ userId: spaceMemberships.userId })
+    .from(spaceMemberships)
+    .innerJoin(spaces, eq(spaceMemberships.spaceId, spaces.id))
+    .where(and(
+      eq(spaceMemberships.spaceId, sourceSpaceId),
+      eq(spaceMemberships.userId, destination.createdByUserId),
+      eq(spaces.isPersonal, false),
+      isNull(spaces.archivedAt),
+    ))
+    .limit(1)
+
+  if (!sharedMembership) return null
+  return { id: destination.id, name: destination.name, destinationUserId: destination.createdByUserId }
+}
+
+async function normalizePendingTransferLeg(amount: number, currency: Currency): Promise<Pick<NormalizedMoney, 'amount' | 'amountUsd' | 'exchangeRate'> | { error: string }> {
+  if (!Number.isInteger(amount) || amount <= 0) return { error: 'Amount must be a positive integer' }
+  if (currency === 'CLP') return { amount, amountUsd: null, exchangeRate: null }
+
+  try {
+    const conversion = await convertUsdToClp(amount)
+    return { amount: conversion.clpCents, amountUsd: amount, exchangeRate: conversion.rate }
+  } catch {
+    return { error: 'Error al obtener tipo de cambio' }
+  }
 }
 
 async function getTransferRootByMovementId(movementId: string) {
@@ -1083,6 +1134,7 @@ export const movementLedger = {
 
     if (!sourceSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para revisar esta transferencia')
     if (!sourceMovement || !destinationMovement || sourceMovement.type !== 'expense' || destinationMovement.type !== 'income') return fail('Transferencia corrupta')
+    if (!sourceMovement.accountId || !destinationMovement.accountId) return fail('Selecciona la cuenta destino antes de confirmar esta transferencia')
     if (!sourceMovement.needsReview && !destinationMovement.needsReview) return fail('Transferencia no está pendiente de revisión')
     if ((transfer.sourceSpaceId === spaceId && !sourceMovement.needsReview) || (transfer.destinationSpaceId === spaceId && !destinationMovement.needsReview)) return fail('Transferencia no está pendiente de revisión en este Space')
     if (hasDependentWorkflow(sourceMovement) || hasDependentWorkflow(destinationMovement)) return fail('Pending transfer has dependent relationships')
@@ -1435,36 +1487,46 @@ export const movementLedger = {
 
   async recordTransfer(spaceId: string, actorUserId: string, input: TransferInput): Promise<LedgerResult> {
     const destinationSpaceId = input.destinationSpaceId || spaceId
-    if (input.fromAccountId === input.toAccountId && destinationSpaceId === spaceId) return fail('Las cuentas origen y destino deben ser diferentes')
+    const toAccountId = input.toAccountId || null
+    if (input.fromAccountId === toAccountId && destinationSpaceId === spaceId) return fail('Las cuentas origen y destino deben ser diferentes')
     if (input.fromAmount <= 0 || input.toAmount <= 0) return fail('Los montos deben ser mayores a 0')
 
-    const [sourceSpace, destinationSpace, fromAccount, toAccount] = await Promise.all([
+    const [sourceSpace, actorDestinationSpace, pendingMemberDestination, fromAccount] = await Promise.all([
       getMemberSpace(actorUserId, spaceId),
       getMemberSpace(actorUserId, destinationSpaceId),
+      toAccountId ? Promise.resolve(null) : getPendingMemberPersonalDestination(actorUserId, spaceId, destinationSpaceId),
       getAccountInSpace(spaceId, input.fromAccountId),
-      getAccountInSpace(destinationSpaceId, input.toAccountId),
     ])
     if (!sourceSpace) return fail('No tienes acceso al Space origen')
-    if (!destinationSpace) return fail('No tienes acceso al Space destino')
     if (!fromAccount) return fail('Cuenta origen no válida')
-    if (!toAccount) return fail('Cuenta destino no válida')
-    if (input.fromCurrency !== fromAccount.currency || input.toCurrency !== toAccount.currency) {
+
+    const isPendingMemberDestination = Boolean(pendingMemberDestination && !actorDestinationSpace && !toAccountId)
+    if (sourceSpace.isPersonal && isPendingMemberDestination) return fail('Solo puedes enviar a un miembro desde un Space compartido')
+    if (!actorDestinationSpace && !isPendingMemberDestination) return fail('No tienes acceso al Space destino')
+    if (isPendingMemberDestination && toAccountId) return fail('La cuenta destino debe quedar pendiente para el receptor')
+
+    const toAccount = isPendingMemberDestination ? null : await getAccountInSpace(destinationSpaceId, toAccountId)
+    if (!isPendingMemberDestination && !toAccount) return fail('Cuenta destino no válida')
+    if (input.fromCurrency !== fromAccount.currency || (!isPendingMemberDestination && toAccount && input.toCurrency !== toAccount.currency)) {
       return fail('La moneda no coincide con la cuenta')
     }
 
     const fromMoney = await normalizeTransferLeg(spaceId, input.fromAccountId, input.fromAmount, input.fromCurrency)
     if ('error' in fromMoney) return fail(fromMoney.error)
-    const toMoney = await normalizeTransferLeg(destinationSpaceId, input.toAccountId, input.toAmount, input.toCurrency)
+    const toMoney = isPendingMemberDestination
+      ? await normalizePendingTransferLeg(input.toAmount, input.toCurrency)
+      : await normalizeTransferLeg(destinationSpaceId, toAccountId!, input.toAmount, input.toCurrency)
     if ('error' in toMoney) return fail(toMoney.error)
 
     const transferId = generateId()
     const fromMovementId = generateId()
     const toMovementId = generateId()
+    const destinationSpaceName = isPendingMemberDestination ? 'Personal del receptor' : actorDestinationSpace!.name
     const names = transferSideNames({
       sourceSpaceName: sourceSpace.name,
-      destinationSpaceName: destinationSpace.name,
+      destinationSpaceName,
       sourceAccountName: fromAccount.bankName,
-      destinationAccountName: toAccount.bankName,
+      destinationAccountName: toAccount?.bankName ?? 'Cuenta por confirmar',
       note: input.note,
     })
 
@@ -1489,16 +1551,16 @@ export const movementLedger = {
           id: toMovementId,
           spaceId: destinationSpaceId,
           createdByUserId: actorUserId,
-          accountId: toAccount.id,
+          accountId: toAccount?.id ?? null,
           categoryId: null,
           name: names.destinationName,
           date: input.date,
           amount: toMoney.amount,
           type: 'income',
-          currency: toAccount.currency,
+          currency: isPendingMemberDestination ? input.toCurrency : toAccount!.currency,
           amountUsd: toMoney.amountUsd,
           exchangeRate: toMoney.exchangeRate,
-          needsReview: false,
+          needsReview: isPendingMemberDestination,
         },
       ])
       await tx.insert(transfers).values({

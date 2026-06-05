@@ -1,7 +1,7 @@
 import { getCurrentSpace } from '@/lib/spaces'
 import { redirect } from 'next/navigation'
-import { db, accounts, categories } from '@/lib/db'
-import { eq, sql } from 'drizzle-orm'
+import { db, accounts, categories, spaceMemberships, spaces as spacesTable, users } from '@/lib/db'
+import { and, eq, isNull, ne, sql } from 'drizzle-orm'
 import { AddMovementPage } from './add-client'
 
 export default async function AddPage() {
@@ -25,6 +25,22 @@ export default async function AddPage() {
     .where(sql`${accounts.spaceId} IN (${sql.join(availableSpaces.map((s) => sql`${s.id}`), sql`, `)})`)
     .orderBy(accounts.bankName)
 
+  const memberPersonalDestinations = space.isPersonal
+    ? []
+    : await db
+      .select({
+        id: spacesTable.id,
+        name: spacesTable.name,
+        emoji: spacesTable.emoji,
+        userId: users.id,
+        email: users.email,
+      })
+      .from(spaceMemberships)
+      .innerJoin(users, eq(spaceMemberships.userId, users.id))
+      .innerJoin(spacesTable, and(eq(spacesTable.createdByUserId, users.id), eq(spacesTable.isPersonal, true), isNull(spacesTable.archivedAt)))
+      .where(and(eq(spaceMemberships.spaceId, space.id), ne(spaceMemberships.userId, session.id)))
+      .orderBy(users.email)
+
   // If no accounts, redirect to settings
   if (userAccounts.length === 0) {
     redirect('/settings')
@@ -34,7 +50,24 @@ export default async function AddPage() {
     <AddMovementPage
       accounts={userAccounts}
       transferAccounts={transferAccounts}
-      transferSpaces={availableSpaces.map((s) => ({ id: s.id, name: s.name, emoji: s.emoji, isCurrent: s.id === space.id, hasAccounts: transferAccounts.some((a) => a.spaceId === s.id) }))}
+      transferSpaces={[
+        ...availableSpaces.map((s) => ({
+          id: s.id,
+          name: s.name,
+          emoji: s.emoji,
+          isCurrent: s.id === space.id,
+          hasAccounts: transferAccounts.some((a) => a.spaceId === s.id),
+          requiresAccount: true,
+        })),
+        ...memberPersonalDestinations.map((destination) => ({
+          id: destination.id,
+          name: `${destination.email} · Personal`,
+          emoji: destination.emoji,
+          isCurrent: false,
+          hasAccounts: true,
+          requiresAccount: false,
+        })),
+      ]}
       currentSpaceId={space.id}
       categories={userCategories}
     />

@@ -1,11 +1,14 @@
-import { test, expect, Page, Locator } from '@playwright/test'
+import { test, expect, Page, Locator, Browser } from '@playwright/test'
 import { screenshot, TEST_PASSWORD } from './helpers'
+import { movementLedger } from '../src/lib/domain/movement-ledger'
 import {
+  addUserToSpace,
   countMovementsInSpace,
   createRegularAccount,
   createSpaceForUser,
   getClpAccountBalance,
   getMovementIdByName,
+  getMovementWorkflowState,
   getPersonalSpaceId,
   getTransferIdForMovement,
   getTransferMovementAmounts,
@@ -25,6 +28,39 @@ async function registerUser(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'Crear cuenta' }).click()
   await page.waitForURL('**/', { timeout: 10_000 })
   return email
+}
+
+
+async function registerUserInNewContext(browser: Browser): Promise<string> {
+  const context = await browser.newContext()
+  const page = await context.newPage()
+  const email = await registerUser(page)
+  await context.close()
+  return email
+}
+
+async function login(page: Page, email: string) {
+  await page.context().clearCookies()
+  await page.goto('/login')
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Contraseña').fill(TEST_PASSWORD)
+  await page.getByRole('button', { name: 'Iniciar sesión' }).click()
+  await page.waitForURL('**/', { timeout: 10_000 })
+}
+
+async function recordTransferDirect(spaceId: string, actorUserId: string, params: {
+  fromAccountId: string
+  toAccountId?: string | null
+  destinationSpaceId?: string
+  fromAmount: number
+  toAmount: number
+  fromCurrency: 'CLP' | 'USD'
+  toCurrency: 'CLP' | 'USD'
+  date: string
+  note?: string
+}) {
+  process.env.DATABASE_URL ||= 'postgresql://127.0.0.1:5432/wallit_e2e'
+  return movementLedger.recordTransfer(spaceId, actorUserId, params)
 }
 
 const activeSpaceSelector = (page: Page) => page.getByRole('button', { name: /Space activo:/ })
@@ -66,6 +102,132 @@ async function readSummaryAmount(page: Page, label: 'Ingresos' | 'Gastos') {
 
 test.describe('Inter-Space Transfers', () => {
   test.describe.configure({ timeout: 120_000 })
+
+
+
+  test('creates a transfer from a shared Space to another member Personal Space without exposing personal accounts', async ({ browser, page }) => {
+    const ownerEmail = await registerUser(page)
+    const ownerUserId = await getUserId(ownerEmail)
+    if (!ownerUserId) throw new Error('Owner user not found')
+
+    const memberEmail = await registerUserInNewContext(browser)
+    const memberUserId = await getUserId(memberEmail)
+    if (!memberUserId) throw new Error('Member user not found')
+
+    const memberPersonalSpaceId = await getPersonalSpaceId(memberUserId)
+    const memberPersonalAccountId = await createRegularAccount(memberUserId, {
+      bankName: 'Member Secret Bank',
+      lastFourDigits: '7788',
+      initialBalance: 0,
+      spaceId: memberPersonalSpaceId,
+    })
+
+    const sharedSpaceId = await createSpaceForUser(ownerUserId, 'Shared Member Transfer', '🤝')
+    const sharedAccountId = await createRegularAccount(ownerUserId, {
+      bankName: 'Shared Wallet',
+      lastFourDigits: '8899',
+      initialBalance: 100_000_000,
+      spaceId: sharedSpaceId,
+    })
+    await addUserToSpace(memberUserId, sharedSpaceId)
+
+    await switchSpace(page, 'Shared Member Transfer')
+    await page.goto('/add')
+    await page.getByText('↔️ Transferencia').click()
+    await selectOptionContaining(page.getByLabel('Desde cuenta'), 'Shared Wallet')
+    await selectOptionContaining(page.getByLabel('Space destino'), memberEmail)
+    await expect(page.getByText('Member Secret Bank')).not.toBeVisible({ timeout: 3_000 })
+    await expect(page.getByLabel('Hacia cuenta')).not.toBeVisible({ timeout: 3_000 })
+    await expect(page.getByText(/Cuenta destino pendiente/i)).toBeVisible({ timeout: 10_000 })
+    await page.getByLabel('Monto origen').fill('42000')
+    await page.getByPlaceholder('ej: Pago tarjeta de crédito').fill('Member pending destination')
+    await screenshot(page, 'interspace-member-pending-01-owner-form')
+    await page.getByRole('button', { name: /Crear Transferencia/i }).click()
+    await page.waitForURL('**/', { timeout: 10_000 })
+    await expect(page.getByText(/Transferencia a Personal del receptor · Member pending destination/)).toBeVisible({ timeout: 10_000 })
+
+    const sourceMovement = await getMovementWorkflowState(sharedSpaceId, 'Member pending destination')
+    expect(sourceMovement).toMatchObject({ accountId: sharedAccountId, type: 'expense', needsReview: false, amount: 4_200_000 })
+
+    const destinationMovement = await getMovementWorkflowState(memberPersonalSpaceId, 'Member pending destination')
+    expect(destinationMovement).toMatchObject({ accountId: null, type: 'income', needsReview: true, amount: 4_200_000 })
+
+    await login(page, memberEmail)
+    await switchSpace(page, 'Personal')
+    await expect(page.getByText(/Transferencia desde Shared Member Transfer · Member pending destination/)).toBeVisible({ timeout: 10_000 })
+    await page.getByText(/Transferencia desde Shared Member Transfer · Member pending destination/).first().click()
+    await page.waitForURL('**/edit/**', { timeout: 10_000 })
+    await expect(page.getByText('Editar Transferencia')).toBeVisible({ timeout: 10_000 })
+    await selectOptionContaining(page.getByLabel('Cuenta destino'), 'Member Secret Bank')
+    await screenshot(page, 'interspace-member-pending-02-receiver-confirm')
+    await page.getByRole('button', { name: /Guardar cambios/i }).click()
+    await page.waitForURL('**/', { timeout: 10_000 })
+
+    const confirmedDestination = await getMovementWorkflowState(memberPersonalSpaceId, 'Member pending destination')
+    expect(confirmedDestination).toMatchObject({ accountId: memberPersonalAccountId, type: 'income', needsReview: false, amount: 4_200_000 })
+  })
+
+  test('server rejects forged pending Personal destinations and forged destination accounts', async ({ browser, page }) => {
+    const ownerEmail = await registerUser(page)
+    const ownerUserId = await getUserId(ownerEmail)
+    if (!ownerUserId) throw new Error('Owner user not found')
+
+    const memberEmail = await registerUserInNewContext(browser)
+    const memberUserId = await getUserId(memberEmail)
+    if (!memberUserId) throw new Error('Member user not found')
+
+    const outsiderEmail = await registerUserInNewContext(browser)
+    const outsiderUserId = await getUserId(outsiderEmail)
+    if (!outsiderUserId) throw new Error('Outsider user not found')
+
+    const memberPersonalSpaceId = await getPersonalSpaceId(memberUserId)
+    const memberPersonalAccountId = await createRegularAccount(memberUserId, {
+      bankName: 'Member Private Account',
+      lastFourDigits: '4545',
+      initialBalance: 0,
+      spaceId: memberPersonalSpaceId,
+    })
+    const outsiderPersonalSpaceId = await getPersonalSpaceId(outsiderUserId)
+
+    const sharedSpaceId = await createSpaceForUser(ownerUserId, 'Shared Server Guard', '🛡️')
+    const sharedAccountId = await createRegularAccount(ownerUserId, {
+      bankName: 'Shared Guard Wallet',
+      lastFourDigits: '1212',
+      initialBalance: 100_000_000,
+      spaceId: sharedSpaceId,
+    })
+    await addUserToSpace(memberUserId, sharedSpaceId)
+
+    const arbitraryDestination = await recordTransferDirect(sharedSpaceId, ownerUserId, {
+      fromAccountId: sharedAccountId,
+      toAccountId: null,
+      destinationSpaceId: outsiderPersonalSpaceId,
+      fromAmount: 12_300,
+      toAmount: 12_300,
+      fromCurrency: 'CLP',
+      toCurrency: 'CLP',
+      date: new Date().toISOString().slice(0, 10),
+      note: 'forged outsider destination',
+    })
+
+    expect(arbitraryDestination.success).toBe(false)
+    expect(await getMovementWorkflowState(outsiderPersonalSpaceId, 'forged outsider destination')).toBeNull()
+
+    const forgedAccount = await recordTransferDirect(sharedSpaceId, ownerUserId, {
+      fromAccountId: sharedAccountId,
+      toAccountId: memberPersonalAccountId,
+      destinationSpaceId: memberPersonalSpaceId,
+      fromAmount: 45_600,
+      toAmount: 45_600,
+      fromCurrency: 'CLP',
+      toCurrency: 'CLP',
+      date: new Date().toISOString().slice(0, 10),
+      note: 'forged member account',
+    })
+
+    expect(forgedAccount.success).toBe(false)
+    expect(await getMovementWorkflowState(memberPersonalSpaceId, 'forged member account')).toBeNull()
+  })
 
   test('creates, reports, edits and deletes an Inter-Space Transfer across timelines', async ({ page }) => {
     const email = await registerUser(page)

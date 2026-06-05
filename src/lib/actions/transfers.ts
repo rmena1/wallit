@@ -15,7 +15,7 @@ export type TransferActionResult = {
 
 interface CreateTransferParams {
   fromAccountId: string
-  toAccountId: string
+  toAccountId?: string | null
   destinationSpaceId?: string
   fromAmount: number
   toAmount: number

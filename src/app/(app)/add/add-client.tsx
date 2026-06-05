@@ -11,7 +11,7 @@ import type { Category, Account } from '@/lib/db'
 interface AddMovementPageProps {
   accounts: Account[]
   transferAccounts: Account[]
-  transferSpaces: { id: string; name: string; emoji: string; isCurrent: boolean; hasAccounts: boolean }[]
+  transferSpaces: { id: string; name: string; emoji: string; isCurrent: boolean; hasAccounts: boolean; requiresAccount?: boolean }[]
   currentSpaceId: string
   categories: Category[]
 }
@@ -100,10 +100,12 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
   const fromAccount = accounts.find(a => a.id === fromAccountId)
   const destinationAccounts = transferAccounts.filter(a => a.spaceId === destinationSpaceId)
   const selectedDestinationSpace = transferSpaces.find(s => s.id === destinationSpaceId)
+  const destinationRequiresAccount = selectedDestinationSpace?.requiresAccount !== false
+  const isPendingMemberDestination = !destinationRequiresAccount
   const toAccount = destinationAccounts.find(a => a.id === toAccountId)
   const fromCurrency = fromAccount?.currency || 'CLP'
-  const toCurrency = toAccount?.currency || 'CLP'
-  const currenciesDiffer = fromCurrency !== toCurrency
+  const toCurrency = isPendingMemberDestination ? fromCurrency : (toAccount?.currency || 'CLP')
+  const currenciesDiffer = !isPendingMemberDestination && fromCurrency !== toCurrency
 
   useEffect(() => {
     setToAccountId('')
@@ -183,13 +185,13 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
     if (!fromAccountId) {
       errors.fromAccountId = 'Selecciona cuenta origen'
     }
-    if (!toAccountId) {
+    if (destinationRequiresAccount && !toAccountId) {
       errors.toAccountId = selectedDestinationSpace?.hasAccounts === false ? 'Este Space no tiene cuentas disponibles' : 'Selecciona cuenta destino'
     }
     if (!destinationSpaceId) {
       errors.destinationSpaceId = 'Selecciona Space destino'
     }
-    if (fromAccountId && toAccountId && fromAccountId === toAccountId && destinationSpaceId === currentSpaceId) {
+    if (destinationRequiresAccount && fromAccountId && toAccountId && fromAccountId === toAccountId && destinationSpaceId === currentSpaceId) {
       errors.toAccountId = 'Debe ser diferente a la cuenta origen'
     }
     if (!fromAmount.trim()) {
@@ -240,7 +242,7 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
         
         const result = await recordTransfer({
           fromAccountId,
-          toAccountId,
+          toAccountId: destinationRequiresAccount ? toAccountId : null,
           destinationSpaceId,
           fromAmount: fromCents,
           toAmount: toCents,
@@ -411,8 +413,8 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
                     style={fieldErrors.destinationSpaceId ? selectErrorStyle : selectStyle}
                   >
                     {transferSpaces.map((space) => (
-                      <option key={space.id} value={space.id} disabled={!space.hasAccounts}>
-                        {space.emoji} {space.name}{space.isCurrent ? ' (actual)' : ''}{!space.hasAccounts ? ' — sin cuentas' : ''}
+                      <option key={space.id} value={space.id} disabled={space.requiresAccount !== false && !space.hasAccounts}>
+                        {space.emoji} {space.name}{space.isCurrent ? ' (actual)' : ''}{space.requiresAccount === false ? ' — receptor confirma cuenta' : !space.hasAccounts ? ' — sin cuentas' : ''}
                       </option>
                     ))}
                   </select>
@@ -420,6 +422,14 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
                 </div>
 
                 {/* To Account */}
+                {isPendingMemberDestination ? (
+                  <div style={{
+                    border: '1px solid #1d4ed8', borderRadius: 12, padding: '12px 14px',
+                    backgroundColor: '#111827', color: '#bfdbfe', fontSize: 13, lineHeight: 1.4,
+                  }}>
+                    <strong>Cuenta destino pendiente.</strong> El receptor verá un ingreso pendiente en su Space Personal y elegirá su cuenta al confirmarlo. No se muestran sus cuentas personales.
+                  </div>
+                ) : (
                 <div>
                   <label htmlFor="add-transfer-to-account" style={{ fontSize: 13, color: '#a1a1aa', marginBottom: 6, display: 'block' }}>Hacia cuenta</label>
                   <select 
@@ -447,6 +457,7 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* Amount(s) */}
                 <div style={{ display: 'flex', gap: 12 }}>
