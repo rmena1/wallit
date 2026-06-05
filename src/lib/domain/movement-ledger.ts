@@ -372,9 +372,27 @@ function settlementSafeClassificationError() {
   return 'Receivable settlement expenses only allow name/category review; amount, date, account, currency and workflow type are locked'
 }
 
+function settlementIncomingAccountCorrectionError() {
+  return 'Receivable settlement income only allows destination account correction; amount, date, name, category, currency and workflow type are locked'
+}
+
 function validatesSettlementOutgoingSafeFields(original: Movement, input: ReportableInput): boolean {
   return input.type === 'expense'
     && input.accountId === original.accountId
+    && input.date === original.date
+    && input.amount === original.amount
+    && input.currency === original.currency
+    && (input.amountUsd ?? null) === (original.amountUsd ?? null)
+    && (input.exchangeRate ?? null) === (original.exchangeRate ?? null)
+    && (input.time ?? null) === (original.time ?? null)
+    && !input.emergency
+    && !input.loan
+}
+
+function validatesSettlementIncomingSafeFields(original: Movement, input: ReportableInput): boolean {
+  return input.type === 'income'
+    && input.name.trim() === original.name
+    && (input.categoryId || null) === (original.categoryId ?? null)
     && input.date === original.date
     && input.amount === original.amount
     && input.currency === original.currency
@@ -900,6 +918,25 @@ export const movementLedger = {
     if (settlementMovement) {
       const settlementLink = await getReceivableSettlementMovementLink(original.id)
       if (!settlementLink) return fail('Receivable settlement link not found')
+      if (settlementLink.role === 'incoming') {
+        if (!validatesSettlementIncomingSafeFields(original, input)) return fail(settlementIncomingAccountCorrectionError())
+        const account = await getOwnedAccount(spaceId, input.accountId)
+        if (!account) return fail('Cuenta destino no válida')
+        if (account.currency !== original.currency) return fail('La cuenta destino debe usar la misma moneda del settlement')
+
+        await db.update(movements).set({
+          accountId: account.id,
+          type: 'income',
+          needsReview: false,
+          emergency: false,
+          emergencySettled: false,
+          loan: false,
+          loanSettled: false,
+          updatedAt: new Date(),
+        }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
+
+        return ok()
+      }
       if (settlementLink.role !== 'outgoing') return fail('Receivable settlement operational movements cannot be edited through reportable movement edits')
       if (!validatesSettlementOutgoingSafeFields(original, input)) return fail(settlementSafeClassificationError())
       if (!input.name.trim()) return fail('Name is required')

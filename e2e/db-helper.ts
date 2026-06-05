@@ -163,6 +163,7 @@ export async function getReportTotalsForSpace(spaceId: string): Promise<{ totalI
 
 export async function getMovementWorkflowState(spaceId: string, nameLike: string): Promise<{
   id: string
+  accountId: string | null
   amount: number
   type: 'income' | 'expense'
   needsReview: boolean
@@ -172,6 +173,7 @@ export async function getMovementWorkflowState(spaceId: string, nameLike: string
   const rows = await sql`
     SELECT
       m.id,
+      m.account_id,
       m.amount,
       m.type,
       m.needs_review,
@@ -196,6 +198,7 @@ export async function getMovementWorkflowState(spaceId: string, nameLike: string
   if (!row) return null
   return {
     id: row.id,
+    accountId: row.account_id ?? null,
     amount: Number(row.amount),
     type: row.type,
     needsReview: Boolean(row.needs_review),

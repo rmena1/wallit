@@ -2,6 +2,7 @@ import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount, createMovement, screenshot } from './helpers'
 import {
   countMovementsInSpace,
+  getClpAccountBalance,
   createRegularAccount,
   createSpaceForUser,
   getFirstAccountId,
@@ -345,6 +346,69 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
 
     const payingTotals = await getReportTotalsForSpace(personalSpaceId)
     expect(payingTotals.totalExpense).toBe(26_250_000)
+    const fundedTotals = await getReportTotalsForSpace(casaSpaceId)
+    expect(fundedTotals.totalIncome).toBe(0)
+  })
+
+  test('can correct the incoming account of a cross-space receivable settlement without unlocking settlement fields', async ({ page }) => {
+    const email = await registerUser(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+
+    const personalSpaceId = await getPersonalSpaceId(userId)
+    const casaSpaceId = await createSpaceForUser(userId, 'Casa Cuenta Corrección', '🏠')
+    await createRegularAccount(userId, { bankName: 'Personal Pago Corrección', lastFourDigits: '1200', initialBalance: 100_000_000, spaceId: personalSpaceId })
+    const receivableExpenseAccountId = await createRegularAccount(userId, { bankName: 'Casa Gasto Original', lastFourDigits: '2200', initialBalance: 0, spaceId: casaSpaceId })
+    const wrongCasaAccountId = await createRegularAccount(userId, { bankName: 'Casa Cuenta Errónea', lastFourDigits: '3400', initialBalance: 0, spaceId: casaSpaceId })
+    const correctCasaAccountId = await createRegularAccount(userId, { bankName: 'Casa Cuenta Correcta', lastFourDigits: '5600', initialBalance: 0, spaceId: casaSpaceId })
+    await seedReceivable(userId, receivableExpenseAccountId, 'Arriendo compartido Casa', 12_000_000, casaSpaceId)
+
+    await switchSpace(page, 'Casa Cuenta Corrección')
+    await page.getByRole('button', { name: /Marcar como cobrado Arriendo compartido Casa/i }).click()
+    const paymentDialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
+    await expect(paymentDialog).toBeVisible({ timeout: 5_000 })
+    await paymentDialog.getByText('Pago desde otro Space').click()
+    await paymentDialog.getByRole('combobox', { name: /^Cuenta destino del Space actual$/ }).selectOption(wrongCasaAccountId)
+    await paymentDialog.getByRole('textbox', { name: /^Monto recibido desde otro Space$/ }).fill('120000')
+    await paymentDialog.getByRole('button', { name: /Confirmar/i }).click()
+    await expect(paymentDialog).not.toBeVisible({ timeout: 10_000 })
+
+    await expect.poll(async () => (await getMovementWorkflowState(casaSpaceId, 'Cobro: Arriendo compartido Casa'))?.id ?? null, { timeout: 10_000 }).not.toBeNull()
+    const incomingBefore = await getMovementWorkflowState(casaSpaceId, 'Cobro: Arriendo compartido Casa')
+    expect(incomingBefore).toMatchObject({ accountId: wrongCasaAccountId, type: 'income', receivableSettlementRole: 'incoming', amount: 12_000_000 })
+    expect(await getClpAccountBalance(receivableExpenseAccountId)).toBe(-12_000_000)
+    expect(await getClpAccountBalance(wrongCasaAccountId)).toBe(12_000_000)
+    expect(await getClpAccountBalance(correctCasaAccountId)).toBe(0)
+
+    await page.goto(`/edit/${incomingBefore!.id}`)
+    await expect(page.getByText('Ingreso de settlement por cobrar')).toBeVisible({ timeout: 5_000 })
+    await screenshot(page, 'recv-cross-incoming-account-edit-01-locked-fields')
+
+    const accountSelect = page.locator('select').first()
+    await expect(accountSelect).toBeEnabled()
+    await expect(page.getByRole('textbox', { name: /^Monto$/ })).not.toBeEditable()
+    await expect(page.locator('input[type="date"]')).toBeDisabled()
+    await expect(page.getByRole('button', { name: /Eliminar/i })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Por cobrar/i })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Dividir/i })).toHaveCount(0)
+    await accountSelect.selectOption(correctCasaAccountId)
+    await screenshot(page, 'recv-cross-incoming-account-edit-02-corrected-account')
+
+    await page.getByRole('button', { name: /Guardar cambios/i }).click()
+    await page.waitForURL('**/', { timeout: 10_000 })
+
+    const incomingAfter = await getMovementWorkflowState(casaSpaceId, 'Cobro: Arriendo compartido Casa')
+    expect(incomingAfter).toMatchObject({
+      id: incomingBefore!.id,
+      accountId: correctCasaAccountId,
+      type: 'income',
+      receivableSettlementRole: 'incoming',
+      amount: 12_000_000,
+      needsReview: false,
+    })
+    expect(await getClpAccountBalance(receivableExpenseAccountId)).toBe(-12_000_000)
+    expect(await getClpAccountBalance(wrongCasaAccountId)).toBe(0)
+    expect(await getClpAccountBalance(correctCasaAccountId)).toBe(12_000_000)
     const fundedTotals = await getReportTotalsForSpace(casaSpaceId)
     expect(fundedTotals.totalIncome).toBe(0)
   })
