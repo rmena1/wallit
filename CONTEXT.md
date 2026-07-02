@@ -85,6 +85,8 @@ _Avoid_: Viewer
 - Authentication data still belongs to the **User**: users, sessions, and memberships keep user identity fields. The `userId` removal applies to financial data ownership, not authentication.
 - The selected **Space** scopes the app: dashboard, bank accounts, categories, movements, pending review, review, transfers, reports, receivables, emergency expenses, loans, and settings for financial data all operate inside the selected **Space**.
 - The MVP does not include consolidated reporting or comparisons across multiple **Spaces**.
+- Reportable **Inter-Space Transfer** sides appear in each involved **Space** independently: the source **Space** sees an expense and the destination **Space** sees income.
+- A future consolidated multi-**Space** report must avoid double-counting internal **Inter-Space Transfers** between the consolidated **Spaces**.
 - Automatic imports must resolve a **Space** explicitly before creating movements; if they cannot, they should avoid guessing and use a defined fallback such as the default personal **Space** or a personal inbox.
 - The active **Space** is selected with a cookie. If the cookie is missing, invalid, archived, or points to a **Space** the **User** cannot access, Wallit falls back to the **User**'s default personal **Space**.
 - When Wallit falls back because the previously selected **Space** is no longer available, the app may show a small notification explaining that the **User** was moved back to the personal **Space**.
@@ -97,9 +99,14 @@ _Avoid_: Viewer
 - A **Transfer** root stores only operation identity and linkage metadata; movement-owned facts such as date, name, amount, currency, account, and category live only on the linked **Movements**.
 - A **Transfer** has one outgoing **Movement** and one incoming **Movement**.
 - A **Transfer** can move money between bank accounts inside the same **Space** or across two different **Spaces**.
+- Same-Space **Transfers** are operational and do not count as income or expense in reports.
 - An **Inter-Space Transfer** is still one **Transfer** with exactly two linked **Movements**: the outgoing **Movement** belongs to the source **Space**, and the incoming **Movement** belongs to the destination **Space**.
 - Creating, updating, or deleting an **Inter-Space Transfer** requires the acting **User** to be a **Member** of both involved **Spaces**; **Owner** role is not required.
 - Same-Space **Transfers** and **Inter-Space Transfers** are created through one unified **Transfer** flow; the destination **Space** determines whether the **Transfer** is same-Space or inter-Space.
+- A manually created reportable **Inter-Space Transfer** side is confirmed immediately and must have the classification details required for normal reporting in that **Space**, including a category.
+- During creation, an **Inter-Space Transfer** side with reportability enabled must have a category; disabling reportability for that side removes the category requirement.
+- Wallit does not assign a default category to reportable **Inter-Space Transfer** sides; the **User** must choose the category explicitly.
+- A manually created operational **Inter-Space Transfer** side is confirmed immediately and does not require reporting classification.
 - An **Inter-Space Transfer** starts from a source account in the currently selected active **Space** and selects a destination **Space** plus destination account without requiring the **User** to switch active **Space** first.
 - The source account of an **Inter-Space Transfer** must belong to the active **Space** the **User** is currently viewing.
 - A **Pending Review Movement** is a **Movement** and affects account balance before confirmation.
@@ -114,20 +121,45 @@ _Avoid_: Viewer
 - Deleting a **Movement** must be expressed through a specific domain operation, not a generic public delete: pending movements, reportable movements, transfers, receivables, emergencies, and loans have different deletion rules.
 - Updating a **Movement** must be expressed through a specific domain operation, not a generic public field update. A generic update may exist temporarily as internal implementation during migration, but it must be removed before the Movement Ledger refactor is considered complete.
 - The Movement Ledger seam lives below server actions: UI calls thin server actions, server actions authenticate and parse input, and the Ledger owns domain operations, invariants, and transactions.
-- A **Transfer** is made of **Operational Movements** and does not count as income or expense in reports.
-- An **Inter-Space Transfer** affects balances in both involved **Spaces** but is excluded from income/expense reports in both **Spaces**.
+- An **Inter-Space Transfer** affects balances in both involved **Spaces** and its linked **Movements** are reportable by default: the outgoing **Movement** counts as an expense in the source **Space**, and the incoming **Movement** counts as income in the destination **Space**.
+- Each side of an **Inter-Space Transfer** controls reportability independently; the outgoing **Movement** and incoming **Movement** can each be reportable or operational without forcing the other side to match.
+- Reportability controls whether an **Inter-Space Transfer** side counts in income/expense reports; it never controls whether that side affects the account balance.
+- Changing an **Inter-Space Transfer** side from reportable to operational removes reporting classification from that side when it has no dependent reporting workflows.
+- An **Inter-Space Transfer** side with dependent workflows, such as a **Receivable**, cannot be changed from reportable to operational until those dependencies are explicitly resolved.
+- An **Inter-Space Transfer** with an outgoing side marked as a **Receivable** cannot be changed into a same-Space **Transfer** until that **Receivable** is explicitly resolved or removed.
 - An **Inter-Space Transfer** appears in the movement timeline of both involved **Spaces** so each balance change is explainable.
 - Timeline labels for an **Inter-Space Transfer** include the other **Space**: source side reads as transfer to the destination **Space**, and destination side reads as transfer from the source **Space**.
+- A reportable **Inter-Space Transfer** side counts in reports and cashflow summaries like a normal expense or income while preserving transfer context in timelines and details.
+- Same-Space **Transfers** and operational **Inter-Space Transfer** sides appear as transfer in/out balance movements rather than income or expense.
 - Inter-Space funding summaries, contribution reports, or operational transfer analytics are outside the initial **Inter-Space Transfer** scope.
 - A **Pending Review Movement** can be transformed into an **Inter-Space Transfer** when the imported bank movement represents money moving to another **Space**.
+- Transforming a **Pending Review Movement** into an **Inter-Space Transfer** confirms the transfer immediately; each reportable side must be sufficiently classified, including category selection, during the transformation rather than remaining pending review.
+- Newly created **Inter-Space Transfers** are reportable on both sides: the outgoing side is created as an expense in the source **Space**, and the incoming side is created as income in the destination **Space**.
+- Newly created **Inter-Space Transfers** expose reportability controls during creation, but the default is reportable on both sides: expense in the source **Space** and income in the destination **Space**.
+- Automatically created **Inter-Space Transfers**, including transfers created by Wallit's scheduled import jobs, default to reportable on both sides: expense in the source **Space** and income in the destination **Space**.
+- Automatically created **Inter-Space Transfers** that are reportable but lack required classification enter review instead of being confirmed.
+- An **Inter-Space Transfer** in review is confirmed as one operation when the acting **User** has access to both involved **Spaces**; review should not allow one side to be confirmed while the other remains unresolved.
+- An **Inter-Space Transfer** in review cannot be confirmed unless the acting **User** has access to both involved **Spaces**.
+- Existing **Inter-Space Transfers** created before this rule remain operational unless a **User** explicitly marks either side as reportable.
 - An **Inter-Space Transfer** must have a real destination account in the destination **Space**; Wallit does not create transfers to a Space-level floating balance.
 - Destination **Spaces** without available destination accounts are shown as unavailable choices rather than hidden, so the **User** understands why they cannot transfer there yet.
 - An **Inter-Space Transfer** is edited or deleted as one operation; changing or deleting it from either involved **Space** updates or removes both linked **Movements**.
 - Editing a **Transfer** can change its destination **Space** and destination account when the acting **User** remains a **Member** of the required **Spaces**.
+- Editing an **Inter-Space Transfer** remains an edit of the whole transfer for shared transfer facts such as amount, date, accounts, and destination **Space**.
+- Classification facts for an **Inter-Space Transfer** belong to each side independently, including category, reportability, and receivable status.
+- Changing the destination **Space** of an **Inter-Space Transfer** discards the destination side classification and requires classification for the new destination **Space** when that side remains reportable.
+- Changing the destination **Space** of an **Inter-Space Transfer** does not discard the source side classification when the source **Space** stays the same.
+- Changing an **Inter-Space Transfer** into a same-Space **Transfer** makes the whole **Transfer** operational and removes reporting classification and receivable status from both sides.
+- Changing a same-Space **Transfer** into an **Inter-Space Transfer** applies the **Inter-Space Transfer** default: the outgoing side counts as expense and the incoming side counts as income unless either side is explicitly marked operational during the edit.
 - Editing a **Transfer** can change the source account only within the **Space** that owns the outgoing **Movement**; changing the source **Space** means creating a different **Transfer**.
 - If a **User** loses access to one side of an **Inter-Space Transfer**, the historical **Movement** remains visible in any still-accessible **Space**, but the **User** cannot edit or delete the **Inter-Space Transfer** unless they have access to both involved **Spaces**.
 - An **Inter-Space Transfer** supports different source and destination currencies using the same money-normalization rules as a same-Space **Transfer**.
-- An **Inter-Space Transfer** does not have a category, because it is an operational **Transfer**, not reportable income or expense.
+- A reportable **Inter-Space Transfer** side can be categorized like any other reportable **Movement** in that **Space**.
+- A reportable **Inter-Space Transfer** side cannot be split into multiple reportable movements or categories; it remains one transfer side for reporting.
+- A reportable outgoing **Inter-Space Transfer** side can be marked as a **Receivable** when another party should pay it back.
+- A reportable outgoing **Inter-Space Transfer** side marked as a **Receivable** uses the same debtor, follow-up, and settlement semantics as a normal receivable expense.
+- A reportable incoming **Inter-Space Transfer** side cannot be marked as a **Receivable**.
+- An operational **Inter-Space Transfer** side has no category because it is excluded from income/expense reports.
 - Receivables, emergency expenses, loans, loan paybacks, and similar tracking workflows use **Movements** for balance effects but are excluded from income/expense reports.
 - A **Receivable Settlement Expense** is not a **Transfer**: it is a reportable outgoing **Movement** in the paying **Space** and a receivable-settling payment for the funded **Space**.
 - A **Receivable Settlement Expense** can be created directly from an account in another **Space** or by transforming an existing **Transfer** into the settlement workflow.

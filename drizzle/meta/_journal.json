@@ -57,6 +57,20 @@
       "when": 1780448400000,
       "tag": "0015_investment_account_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780452000000,
+      "tag": "0016_movement_reportability",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1780455600000,
+      "tag": "0017_receivable_settlement_transfer_classification",
+      "breakpoints": true
     }
   ]
 }

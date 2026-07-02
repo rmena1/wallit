@@ -19,6 +19,9 @@ interface PendingTransferMovement {
   amountUsd: number | null
   exchangeRate: number | null
   accountId: string | null
+  categoryId: string | null
+  reportable: boolean
+  receivable: boolean
   needsReview: boolean
   time: string | null
   accountBankName: string | null
@@ -60,6 +63,7 @@ interface Props {
   transferSpaces: { id: string; name: string; emoji: string; isCurrent: boolean; hasAccounts: boolean }[]
   currentSpaceId: string
   categories: Category[]
+  transferCategories: Category[]
 }
 
 const inputStyle: React.CSSProperties = {
@@ -94,7 +98,7 @@ function transferLegAmountLabel(movement: PendingTransferMovement | null | undef
   return formatMovementDisplayAmount(movement.amount, movement.amountUsd, movement.currency)
 }
 
-export function ReviewClient({ movements, accounts, transferAccounts, transferSpaces, currentSpaceId, categories }: Props) {
+export function ReviewClient({ movements, accounts, transferAccounts, transferSpaces, currentSpaceId, categories, transferCategories }: Props) {
   const router = useRouter()
   const [reviewMovements, setReviewMovements] = useState(movements)
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -139,6 +143,18 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
   const [transferToAmount, setTransferToAmount] = useState('')
   const [transferNote, setTransferNote] = useState('')
   const [exchangeRate, setExchangeRate] = useState<number | null>(null)
+  const [pendingSourceReportable, setPendingSourceReportable] = useState(false)
+  const [pendingDestinationReportable, setPendingDestinationReportable] = useState(false)
+  const [pendingSourceCategoryId, setPendingSourceCategoryId] = useState('')
+  const [pendingDestinationCategoryId, setPendingDestinationCategoryId] = useState('')
+  const [pendingSourceReceivable, setPendingSourceReceivable] = useState(false)
+  const [pendingSourceReceivableText, setPendingSourceReceivableText] = useState('')
+  const [transferSourceReportable, setTransferSourceReportable] = useState(false)
+  const [transferDestinationReportable, setTransferDestinationReportable] = useState(false)
+  const [transferSourceCategoryId, setTransferSourceCategoryId] = useState('')
+  const [transferDestinationCategoryId, setTransferDestinationCategoryId] = useState('')
+  const [transferSourceReceivable, setTransferSourceReceivable] = useState(false)
+  const [transferSourceReceivableText, setTransferSourceReceivableText] = useState('')
 
   // Get exchange rate for currency conversion
   useEffect(() => {
@@ -203,6 +219,13 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     setTransferToAccountId('')
     setTransferToAmount('')
     setTransferNote('')
+    const pendingIsInterSpace = m.transferSourceSpaceId !== m.transferDestinationSpaceId
+    setPendingSourceReportable(pendingIsInterSpace ? (m.transferSourceMovement?.reportable ?? true) : false)
+    setPendingDestinationReportable(pendingIsInterSpace ? (m.transferDestinationMovement?.reportable ?? true) : false)
+    setPendingSourceCategoryId(m.transferSourceMovement?.categoryId ?? '')
+    setPendingDestinationCategoryId(m.transferDestinationMovement?.categoryId ?? '')
+    setPendingSourceReceivable(Boolean(m.transferSourceMovement?.receivable))
+    setPendingSourceReceivableText(m.transferSourceMovement?.receivable ? (m.transferSourceMovement.name ?? '') : '')
   }, [currentIndex, reviewMovements, currentSpaceId])
 
   useEffect(() => {
@@ -223,6 +246,7 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
   const fromCurrency = fromAccount?.currency || 'CLP'
   const toCurrencyTransfer = toAccountForTransfer?.currency || 'CLP'
   const currenciesDifferTransfer = fromCurrency !== toCurrencyTransfer
+  const isNewTransferInterSpace = transferDestinationSpaceId !== currentSpaceId
 
   // Auto-calculate transfer toAmount when formAmount or accounts change
   useEffect(() => {
@@ -246,6 +270,17 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     }
   }, [isTransferMode, formAmount, formAmountUsd, transferToAccountId, fromCurrency, toCurrencyTransfer, currenciesDifferTransfer, exchangeRate])
 
+  useEffect(() => {
+    if (!isTransferMode) return
+    const interSpace = transferDestinationSpaceId !== currentSpaceId
+    setTransferSourceReportable(interSpace)
+    setTransferDestinationReportable(interSpace)
+    setTransferSourceCategoryId('')
+    setTransferDestinationCategoryId('')
+    setTransferSourceReceivable(false)
+    setTransferSourceReceivableText('')
+  }, [isTransferMode, transferDestinationSpaceId, currentSpaceId])
+
   function loadMovement(idx: number) {
     const m = reviewMovements[idx]
     if (!m) return
@@ -268,6 +303,13 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     setTransferToAccountId('')
     setTransferToAmount('')
     setTransferNote('')
+    const pendingIsInterSpace = m.transferSourceSpaceId !== m.transferDestinationSpaceId
+    setPendingSourceReportable(pendingIsInterSpace ? (m.transferSourceMovement?.reportable ?? true) : false)
+    setPendingDestinationReportable(pendingIsInterSpace ? (m.transferDestinationMovement?.reportable ?? true) : false)
+    setPendingSourceCategoryId(m.transferSourceMovement?.categoryId ?? '')
+    setPendingDestinationCategoryId(m.transferDestinationMovement?.categoryId ?? '')
+    setPendingSourceReceivable(Boolean(m.transferSourceMovement?.receivable))
+    setPendingSourceReceivableText(m.transferSourceMovement?.receivable ? (m.transferSourceMovement.name ?? '') : '')
   }
 
   function goNext(didConfirm: boolean) {
@@ -284,7 +326,31 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     setError(null)
     try {
       if (current.transferId) {
-        const result = await confirmPendingTransfer(current.transferId)
+        const isInterSpacePending = current.transferSourceSpaceId !== current.transferDestinationSpaceId
+        if (isInterSpacePending && pendingSourceReportable && !pendingSourceCategoryId) {
+          setError('El origen reportable requiere categoría')
+          setLoading(false)
+          return
+        }
+        if (isInterSpacePending && pendingSourceReportable && pendingSourceReceivable && !pendingSourceReceivableText.trim()) {
+          setError('Indica quién debe pagar este gasto')
+          setLoading(false)
+          return
+        }
+        if (isInterSpacePending && pendingDestinationReportable && !pendingDestinationCategoryId) {
+          setError('El destino reportable requiere categoría')
+          setLoading(false)
+          return
+        }
+        const result = await confirmPendingTransfer(current.transferId, {
+          source: {
+            reportable: isInterSpacePending ? pendingSourceReportable : false,
+            categoryId: pendingSourceCategoryId || null,
+            receivable: isInterSpacePending && pendingSourceReportable ? pendingSourceReceivable : false,
+            receivableText: pendingSourceReceivable ? pendingSourceReceivableText.trim() : null,
+          },
+          destination: { reportable: isInterSpacePending ? pendingDestinationReportable : false, categoryId: pendingDestinationCategoryId || null },
+        })
         if (!result.success) {
           setError(result.error || 'Error al aprobar transferencia')
           setLoading(false)
@@ -332,6 +398,21 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
           setLoading(false)
           return
         }
+        if (isNewTransferInterSpace && transferSourceReportable && !transferSourceCategoryId) {
+          setError('El origen reportable requiere categoría')
+          setLoading(false)
+          return
+        }
+        if (isNewTransferInterSpace && transferSourceReportable && transferSourceReceivable && !transferSourceReceivableText.trim()) {
+          setError('Indica quién debe pagar este gasto')
+          setLoading(false)
+          return
+        }
+        if (isNewTransferInterSpace && transferDestinationReportable && !transferDestinationCategoryId) {
+          setError('El destino reportable requiere categoría')
+          setLoading(false)
+          return
+        }
         
         const result = await confirmPendingAsTransfer({
           movementId: current.id,
@@ -353,6 +434,12 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
           toAmount: toAmountCents,
           toCurrency: toCurrencyTransfer,
           note: transferNote.trim() || undefined,
+          sourceReportable: isNewTransferInterSpace ? transferSourceReportable : false,
+          sourceCategoryId: transferSourceReportable ? transferSourceCategoryId || null : null,
+          sourceReceivable: isNewTransferInterSpace && transferSourceReportable ? transferSourceReceivable : false,
+          sourceReceivableText: transferSourceReceivable ? transferSourceReceivableText.trim() : null,
+          destinationReportable: isNewTransferInterSpace ? transferDestinationReportable : false,
+          destinationCategoryId: transferDestinationReportable ? transferDestinationCategoryId || null : null,
         })
         
         if (!result.success) {
@@ -639,6 +726,51 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
                   <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 3 }}>{current!.transferDestinationMovement?.name ?? 'Movimiento destino'}</div>
                 </div>
               </div>
+              {current!.transferSourceSpaceId !== current!.transferDestinationSpaceId ? (
+                <div style={{ border: '1px solid #2a2a2a', borderRadius: 10, padding: 10, backgroundColor: '#151515' }}>
+                  <div style={{ fontSize: 12, color: '#e5e5e5', fontWeight: 700, marginBottom: 8 }}>Reportabilidad</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#e5e5e5', marginBottom: 5 }}>
+                        <input type="checkbox" checked={pendingSourceReportable} onChange={e => { setPendingSourceReportable(e.target.checked); if (!e.target.checked) setPendingSourceReceivable(false) }} style={{ accentColor: '#22c55e' }} />
+                        Origen reportable
+                      </label>
+                      {pendingSourceReportable && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <select aria-label="Categoría origen transferencia" value={pendingSourceCategoryId} onChange={e => setPendingSourceCategoryId(e.target.value)} style={selectStyle}>
+                            <option value="">Categoría origen</option>
+                            {transferCategories.filter(c => c.spaceId === current!.transferSourceSpaceId).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+                          </select>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#d4d4d8' }}>
+                            <input type="checkbox" checked={pendingSourceReceivable} onChange={e => setPendingSourceReceivable(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
+                            Gasto por cobrar
+                          </label>
+                          {pendingSourceReceivable && (
+                            <input aria-label="Persona o deudor" value={pendingSourceReceivableText} onChange={e => setPendingSourceReceivableText(e.target.value)} placeholder="¿Quién lo debe pagar?" style={inputStyle} />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#e5e5e5', marginBottom: 5 }}>
+                        <input type="checkbox" checked={pendingDestinationReportable} onChange={e => setPendingDestinationReportable(e.target.checked)} style={{ accentColor: '#22c55e' }} />
+                        Destino reportable
+                      </label>
+                      {pendingDestinationReportable && (
+                        <select aria-label="Categoría destino transferencia" value={pendingDestinationCategoryId} onChange={e => setPendingDestinationCategoryId(e.target.value)} style={selectStyle}>
+                          <option value="">Categoría destino</option>
+                          {transferCategories.filter(c => c.spaceId === current!.transferDestinationSpaceId).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 10, color: '#a1a1aa', marginTop: 6 }}>Esto no afecta saldos; solo reportes y flujo de caja.</div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: '#a1a1aa', backgroundColor: '#111', border: '1px solid #2a2a2a', borderRadius: 8, padding: '8px 10px' }}>
+                  Transferencia del mismo Space: operacional y fuera de reportes.
+                </div>
+              )}
               {!current!.transferCanReview && (
                 <div style={{ fontSize: 12, color: '#fbbf24', backgroundColor: '#1f1a0b', border: '1px solid #854d0e', borderRadius: 8, padding: '8px 10px' }}>
                   Necesitas acceso a ambos Spaces para revisar esta transferencia.
@@ -807,6 +939,52 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
                     style={inputStyle}
                   />
                 </div>
+
+                {isNewTransferInterSpace ? (
+                  <div style={{ border: '1px solid #2a2a2a', borderRadius: 10, padding: 10, backgroundColor: '#151515' }}>
+                    <div style={{ fontSize: 12, color: '#e5e5e5', fontWeight: 700, marginBottom: 8 }}>Reportabilidad</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                      <div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#e5e5e5', marginBottom: 5 }}>
+                          <input type="checkbox" checked={transferSourceReportable} onChange={e => { setTransferSourceReportable(e.target.checked); if (!e.target.checked) setTransferSourceReceivable(false) }} style={{ accentColor: '#22c55e' }} />
+                          Origen reportable
+                        </label>
+                        {transferSourceReportable && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <select aria-label="Categoría origen transferencia" value={transferSourceCategoryId} onChange={e => setTransferSourceCategoryId(e.target.value)} style={selectStyle}>
+                              <option value="">Categoría origen</option>
+                              {transferCategories.filter(c => c.spaceId === currentSpaceId).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+                            </select>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#d4d4d8' }}>
+                              <input type="checkbox" checked={transferSourceReceivable} onChange={e => setTransferSourceReceivable(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
+                              Gasto por cobrar
+                            </label>
+                            {transferSourceReceivable && (
+                              <input aria-label="Persona o deudor" value={transferSourceReceivableText} onChange={e => setTransferSourceReceivableText(e.target.value)} placeholder="¿Quién lo debe pagar?" style={inputStyle} />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#e5e5e5', marginBottom: 5 }}>
+                          <input type="checkbox" checked={transferDestinationReportable} onChange={e => setTransferDestinationReportable(e.target.checked)} style={{ accentColor: '#22c55e' }} />
+                          Destino reportable
+                        </label>
+                        {transferDestinationReportable && (
+                          <select aria-label="Categoría destino transferencia" value={transferDestinationCategoryId} onChange={e => setTransferDestinationCategoryId(e.target.value)} style={selectStyle}>
+                            <option value="">Categoría destino</option>
+                            {transferCategories.filter(c => c.spaceId === transferDestinationSpaceId).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+                          </select>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 10, color: '#a1a1aa', marginTop: 6 }}>Afecta solo reportes; los saldos se actualizan igual.</div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#a1a1aa', backgroundColor: '#111', border: '1px solid #2a2a2a', borderRadius: 8, padding: '8px 10px' }}>
+                    Transferencia del mismo Space: operacional y fuera de reportes.
+                  </div>
+                )}
               </>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>

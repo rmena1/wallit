@@ -25,8 +25,11 @@ export async function getPendingReviewMovements() {
       currency: movements.currency,
       amountUsd: movements.amountUsd,
       exchangeRate: movements.exchangeRate,
-      categoryId: movements.categoryId,
       accountId: movements.accountId,
+      categoryId: movements.categoryId,
+      reportable: movements.reportable,
+      receivable: movements.receivable,
+      received: movements.received,
       needsReview: movements.needsReview,
       time: movements.time,
       originalName: movements.originalName,
@@ -86,6 +89,9 @@ export async function getPendingReviewMovements() {
       amountUsd: movements.amountUsd,
       exchangeRate: movements.exchangeRate,
       accountId: movements.accountId,
+      categoryId: movements.categoryId,
+      reportable: movements.reportable,
+      receivable: movements.receivable,
       needsReview: movements.needsReview,
       time: movements.time,
       accountBankName: accounts.bankName,
@@ -164,9 +170,9 @@ export async function deletePendingMovement(id: string) {
   return result
 }
 
-export async function confirmPendingTransfer(transferId: string) {
+export async function confirmPendingTransfer(transferId: string, classification?: { source?: { reportable?: boolean; categoryId?: string | null; receivable?: boolean; receivableText?: string | null }; destination?: { reportable?: boolean; categoryId?: string | null; receivable?: boolean } }) {
   const { user: session, space } = await getCurrentSpace()
-  const result = await movementLedger.confirmPendingTransfer(space.id, session.id, transferId)
+  const result = await movementLedger.confirmPendingTransfer(space.id, session.id, transferId, classification)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/review')

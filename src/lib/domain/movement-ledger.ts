@@ -31,6 +31,13 @@ type ReportableInput = MovementInput & {
   loan?: boolean
 }
 
+type TransferSideInput = {
+  reportable?: boolean
+  categoryId?: string | null
+  receivable?: boolean
+  receivableText?: string | null
+}
+
 type TransferInput = {
   fromAccountId: string
   toAccountId?: string | null
@@ -41,6 +48,9 @@ type TransferInput = {
   toCurrency: Currency
   date: string
   note?: string
+  source?: TransferSideInput
+  destination?: TransferSideInput
+  allowIncompleteClassification?: boolean
 }
 
 type TransformToTransferInput = {
@@ -51,6 +61,12 @@ type TransformToTransferInput = {
   toAmount: number
   toCurrency: Currency
   note?: string
+  sourceReportable?: boolean
+  sourceCategoryId?: string | null
+  destinationReportable?: boolean
+  destinationCategoryId?: string | null
+  sourceReceivable?: boolean
+  sourceReceivableText?: string | null
   requirePending?: boolean
 }
 
@@ -354,6 +370,7 @@ async function normalizeTransferLeg(spaceId: string, accountId: string, amount: 
 function reportableResetFields() {
   return {
     needsReview: false,
+    reportable: true,
     receivable: false,
     received: false,
     receivableId: null,
@@ -362,6 +379,85 @@ function reportableResetFields() {
     loan: false,
     loanSettled: false,
     loanId: null,
+  }
+}
+
+function transferSideIsReportable(isInterSpace: boolean, requested?: boolean): boolean {
+  return isInterSpace ? requested !== false : false
+}
+
+function transferSideNeedsReview(reportable: boolean, accountId: string | null | undefined, categoryId: string | null | undefined): boolean {
+  return reportable && (!accountId || !categoryId)
+}
+
+function sideOperationalClearBlocked(movement: Pick<Movement, 'receivable' | 'received' | 'receivableId' | 'emergency' | 'loan' | 'loanId'>): boolean {
+  return Boolean(movement.receivable || movement.received || movement.receivableId || movement.emergency || movement.loan || movement.loanId)
+}
+
+async function transferReceivableDependencyReason(source: Movement, destination: Movement, transferId?: string): Promise<string | null> {
+  if (transferId) {
+    const [consumingSettlement] = await db
+      .select({ id: receivableSettlements.id })
+      .from(receivableSettlements)
+      .where(eq(receivableSettlements.consumedTransferId, transferId))
+      .limit(1)
+    if (consumingSettlement) return 'la transferencia fue usada para saldar un por cobrar'
+  }
+
+  const sides: Array<{ movement: Movement; label: 'origen' | 'destino' }> = [
+    { movement: source, label: 'origen' },
+    { movement: destination, label: 'destino' },
+  ]
+
+  for (const { movement, label } of sides) {
+    if (await getReceivableSettlementByMovementId(movement.id)) {
+      return `el lado ${label} participa en un settlement por cobrar`
+    }
+    if (movement.receivable && await hasReceivablePayments(movement.spaceId, movement.id)) {
+      return `el lado ${label} ya tiene pagos asociados`
+    }
+    if (movement.receivable || movement.received || movement.receivableId) {
+      return `el lado ${label} pertenece a un flujo por cobrar`
+    }
+  }
+
+  return null
+}
+
+async function validateTransferSideCategory(spaceId: string, reportable: boolean, categoryId: string | null | undefined): Promise<string | null> {
+  if (!reportable) return null
+  if (!categoryId) return 'Las transferencias reportables requieren categoría explícita'
+  if (!(await ensureOwnedCategory(spaceId, categoryId))) return 'Categoría inválida para el Space'
+  return null
+}
+
+async function validateTransferSideCategoryIfPresent(spaceId: string, reportable: boolean, categoryId: string | null | undefined): Promise<string | null> {
+  if (!reportable || !categoryId) return null
+  if (!(await ensureOwnedCategory(spaceId, categoryId))) return 'Categoría inválida para el Space'
+  return null
+}
+
+function transferSideReportingFields(reportable: boolean, categoryId: string | null | undefined, needsReview: boolean) {
+  if (!reportable) {
+    return {
+      categoryId: null,
+      needsReview,
+      reportable: false,
+      receivable: false,
+      received: false,
+      receivableId: null,
+      emergency: false,
+      emergencySettled: false,
+      loan: false,
+      loanSettled: false,
+      loanId: null,
+    }
+  }
+
+  return {
+    categoryId: categoryId ?? null,
+    needsReview,
+    reportable: true,
   }
 }
 
@@ -622,7 +718,8 @@ async function deleteReceivableSettlementRecord(spaceId: string, actorUserId: st
             spaceId: lockedSettlement.consumedTransferSourceSpaceId!,
             createdByUserId: lockedSettlement.createdByUserId ?? actorUserId,
             accountId: lockedSettlement.consumedTransferSourceAccountId!,
-            categoryId: null,
+            categoryId: lockedSettlement.consumedTransferSourceCategoryId,
+            reportable: lockedSettlement.consumedTransferSourceReportable ?? false,
             name: lockedSettlement.consumedTransferSourceName!,
             date: lockedSettlement.consumedTransferDate!,
             amount: lockedSettlement.consumedSourceAmount!,
@@ -632,7 +729,7 @@ async function deleteReceivableSettlementRecord(spaceId: string, actorUserId: st
             exchangeRate: lockedSettlement.consumedSourceExchangeRate,
             time: lockedSettlement.consumedTransferSourceTime,
             needsReview: false,
-            receivable: false,
+            receivable: lockedSettlement.consumedTransferSourceReceivable ?? false,
             received: false,
             receivableId: null,
             createdAt: now,
@@ -643,7 +740,8 @@ async function deleteReceivableSettlementRecord(spaceId: string, actorUserId: st
             spaceId: lockedSettlement.consumedTransferDestinationSpaceId!,
             createdByUserId: lockedSettlement.createdByUserId ?? actorUserId,
             accountId: lockedSettlement.consumedTransferDestinationAccountId!,
-            categoryId: null,
+            categoryId: lockedSettlement.consumedTransferDestinationCategoryId,
+            reportable: lockedSettlement.consumedTransferDestinationReportable ?? false,
             name: lockedSettlement.consumedTransferDestinationName!,
             date: lockedSettlement.consumedTransferDate!,
             amount: lockedSettlement.consumedDestinationAmount!,
@@ -653,7 +751,7 @@ async function deleteReceivableSettlementRecord(spaceId: string, actorUserId: st
             exchangeRate: lockedSettlement.consumedDestinationExchangeRate,
             time: lockedSettlement.consumedTransferDestinationTime,
             needsReview: false,
-            receivable: false,
+            receivable: lockedSettlement.consumedTransferDestinationReceivable ?? false,
             received: false,
             receivableId: null,
             createdAt: now,
@@ -850,6 +948,12 @@ async function consumeIncomingTransferForReceivableSettlement(
       consumedTransferDestinationSpaceId: lockedTransfer.destinationSpaceId,
       consumedTransferSourceAccountId: sourceMovement.accountId,
       consumedTransferDestinationAccountId: destinationMovement.accountId,
+      consumedTransferSourceCategoryId: sourceMovement.categoryId,
+      consumedTransferDestinationCategoryId: destinationMovement.categoryId,
+      consumedTransferSourceReportable: sourceMovement.reportable,
+      consumedTransferDestinationReportable: destinationMovement.reportable,
+      consumedTransferSourceReceivable: sourceMovement.receivable,
+      consumedTransferDestinationReceivable: destinationMovement.receivable,
       consumedTransferSourceName: sourceMovement.name,
       consumedTransferDestinationName: destinationMovement.name,
       consumedTransferDate: destinationMovement.date,
@@ -1121,7 +1225,7 @@ export const movementLedger = {
     return ok()
   },
 
-  async confirmPendingTransfer(spaceId: string, actorUserId: string, transferId: string): Promise<LedgerResult> {
+  async confirmPendingTransfer(spaceId: string, actorUserId: string, transferId: string, classification?: { source?: TransferSideInput; destination?: TransferSideInput }): Promise<LedgerResult> {
     const [transfer] = await db.select().from(transfers).where(eq(transfers.id, transferId)).limit(1)
     if (!transfer || (transfer.sourceSpaceId !== spaceId && transfer.destinationSpaceId !== spaceId)) return fail('Transferencia pendiente no encontrada')
 
@@ -1136,12 +1240,42 @@ export const movementLedger = {
     if (!sourceMovement || !destinationMovement || sourceMovement.type !== 'expense' || destinationMovement.type !== 'income') return fail('Transferencia corrupta')
     if (!sourceMovement.accountId || !destinationMovement.accountId) return fail('Selecciona la cuenta destino antes de confirmar esta transferencia')
     if (!sourceMovement.needsReview && !destinationMovement.needsReview) return fail('Transferencia no está pendiente de revisión')
-    if ((transfer.sourceSpaceId === spaceId && !sourceMovement.needsReview) || (transfer.destinationSpaceId === spaceId && !destinationMovement.needsReview)) return fail('Transferencia no está pendiente de revisión en este Space')
     if (hasDependentWorkflow(sourceMovement) || hasDependentWorkflow(destinationMovement)) return fail('Pending transfer has dependent relationships')
 
+    const isInterSpace = transfer.sourceSpaceId !== transfer.destinationSpaceId
+    const sourceReportable = transferSideIsReportable(isInterSpace, classification?.source?.reportable ?? sourceMovement.reportable)
+    const destinationReportable = transferSideIsReportable(isInterSpace, classification?.destination?.reportable ?? destinationMovement.reportable)
+    const sourceCategoryId = sourceReportable
+      ? classification?.source?.categoryId !== undefined ? classification.source.categoryId : sourceMovement.categoryId
+      : null
+    const destinationCategoryId = destinationReportable
+      ? classification?.destination?.categoryId !== undefined ? classification.destination.categoryId : destinationMovement.categoryId
+      : null
+    if (!sourceReportable && sideOperationalClearBlocked(sourceMovement)) return fail('No se puede marcar el lado origen como operacional: tiene dependencias de reporte')
+    if (!destinationReportable && sideOperationalClearBlocked(destinationMovement)) return fail('No se puede marcar el lado destino como operacional: tiene dependencias de reporte')
+    const sourceCategoryError = await validateTransferSideCategory(transfer.sourceSpaceId, sourceReportable, sourceCategoryId)
+    if (sourceCategoryError) return fail(`Origen: ${sourceCategoryError}`)
+    const destinationCategoryError = await validateTransferSideCategory(transfer.destinationSpaceId, destinationReportable, destinationCategoryId)
+    if (destinationCategoryError) return fail(`Destino: ${destinationCategoryError}`)
+    if (classification?.destination?.receivable) return fail('El lado destino de una transferencia no puede ser por cobrar')
+    if (classification?.source?.receivable && !sourceReportable) return fail('Solo una salida reportable puede quedar por cobrar')
+    if (classification?.source?.receivable && !sourceCategoryId) return fail('Un gasto por cobrar requiere categoría')
+    if (classification?.source?.receivable && !classification.source.receivableText?.trim()) return fail('Indica quién debe pagar este gasto')
+
     await db.transaction(async (tx) => {
-      await tx.update(movements).set({ needsReview: false, updatedAt: new Date() })
-        .where(or(eq(movements.id, transfer.sourceMovementId), eq(movements.id, transfer.destinationMovementId)))
+      await tx.update(movements).set({
+        ...transferSideReportingFields(sourceReportable, sourceCategoryId, false),
+        receivable: Boolean(classification?.source?.receivable && sourceReportable),
+        name: classification?.source?.receivableText?.trim() || sourceMovement.name,
+        updatedAt: new Date(),
+      }).where(and(eq(movements.id, transfer.sourceMovementId), eq(movements.spaceId, transfer.sourceSpaceId)))
+      await tx.update(movements).set({
+        ...transferSideReportingFields(destinationReportable, destinationCategoryId, false),
+        receivable: false,
+        received: false,
+        receivableId: null,
+        updatedAt: new Date(),
+      }).where(and(eq(movements.id, transfer.destinationMovementId), eq(movements.spaceId, transfer.destinationSpaceId)))
     })
     return ok({ transferId })
   },
@@ -1188,8 +1322,19 @@ export const movementLedger = {
   async markAsReceivable(spaceId: string, movementId: string, reminderText: string): Promise<LedgerResult> {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
-    if (hasDependentWorkflow(movement) || await movementIsTransfer(movement.id) || await movementIsReceivableSettlement(movement.id) || movement.receivable || movement.emergency || movement.loan) return fail('Movement is already part of another workflow')
+    const transfer = await getTransferRootByMovementId(movement.id)
+    if (transfer) {
+      const isAllowedTransferReceivable = transfer.sourceMovementId === movement.id
+        && transfer.sourceSpaceId !== transfer.destinationSpaceId
+        && movement.type === 'expense'
+        && movement.reportable
+        && !movement.needsReview
+      if (!isAllowedTransferReceivable) return fail('Solo la salida reportable de una transferencia entre Spaces puede ser por cobrar')
+    }
+    if (hasDependentWorkflow(movement) || await movementIsReceivableSettlement(movement.id) || movement.receivable || movement.emergency || movement.loan) return fail('Movement is already part of another workflow')
     if (movement.type !== 'expense') return fail('Only expenses can be marked as receivable')
+    if (!movement.reportable) return fail('Solo movimientos reportables pueden marcarse como por cobrar')
+    if (!movement.categoryId) return fail('Un gasto por cobrar requiere categoría')
     if (!reminderText.trim()) return fail('Reminder text is required')
 
     await db.update(movements).set({
@@ -1530,6 +1675,28 @@ export const movementLedger = {
       note: input.note,
     })
 
+    const isInterSpace = spaceId !== destinationSpaceId
+    const sourceReportable = transferSideIsReportable(isInterSpace, input.source?.reportable)
+    const destinationReportable = transferSideIsReportable(isInterSpace, input.destination?.reportable)
+    const sourceCategoryId = sourceReportable ? input.source?.categoryId ?? null : null
+    const destinationCategoryId = destinationReportable ? input.destination?.categoryId ?? null : null
+    const allowIncompleteClassification = Boolean(input.allowIncompleteClassification)
+    const sourceCategoryError = allowIncompleteClassification
+      ? await validateTransferSideCategoryIfPresent(spaceId, sourceReportable, sourceCategoryId)
+      : await validateTransferSideCategory(spaceId, sourceReportable, sourceCategoryId)
+    if (sourceCategoryError) return fail(`Origen: ${sourceCategoryError}`)
+    if (input.destination?.receivable) return fail('El lado destino de una transferencia no puede ser por cobrar')
+    if (input.source?.receivable && !sourceReportable) return fail('Solo una salida reportable puede quedar por cobrar')
+    if (input.source?.receivable && !sourceCategoryId) return fail('Un gasto por cobrar requiere categoría')
+    if (input.source?.receivable && !input.source.receivableText?.trim()) return fail('Indica quién debe pagar este gasto')
+    const destinationCanRemainIncomplete = allowIncompleteClassification || isPendingMemberDestination
+    const destinationCategoryError = destinationCanRemainIncomplete
+      ? await validateTransferSideCategoryIfPresent(destinationSpaceId, destinationReportable, destinationCategoryId)
+      : await validateTransferSideCategory(destinationSpaceId, destinationReportable, destinationCategoryId)
+    if (destinationCategoryError) return fail(`Destino: ${destinationCategoryError}`)
+    const sourceNeedsReview = transferSideNeedsReview(sourceReportable, fromAccount.id, sourceCategoryId)
+    const destinationNeedsReview = isPendingMemberDestination || transferSideNeedsReview(destinationReportable, toAccount?.id ?? null, destinationCategoryId)
+
     await db.transaction(async (tx) => {
       await tx.insert(movements).values([
         {
@@ -1537,22 +1704,21 @@ export const movementLedger = {
           spaceId,
           createdByUserId: actorUserId,
           accountId: fromAccount.id,
-          categoryId: null,
-          name: names.sourceName,
+          name: input.source?.receivable && input.source.receivableText?.trim() ? input.source.receivableText.trim() : names.sourceName,
           date: input.date,
           amount: fromMoney.amount,
           type: 'expense',
           currency: fromAccount.currency,
           amountUsd: fromMoney.amountUsd,
           exchangeRate: fromMoney.exchangeRate,
-          needsReview: false,
+          ...transferSideReportingFields(sourceReportable, sourceCategoryId, sourceNeedsReview),
+          receivable: Boolean(input.source?.receivable && sourceReportable),
         },
         {
           id: toMovementId,
           spaceId: destinationSpaceId,
           createdByUserId: actorUserId,
           accountId: toAccount?.id ?? null,
-          categoryId: null,
           name: names.destinationName,
           date: input.date,
           amount: toMoney.amount,
@@ -1560,7 +1726,10 @@ export const movementLedger = {
           currency: isPendingMemberDestination ? input.toCurrency : toAccount!.currency,
           amountUsd: toMoney.amountUsd,
           exchangeRate: toMoney.exchangeRate,
-          needsReview: isPendingMemberDestination,
+          ...transferSideReportingFields(destinationReportable, destinationCategoryId, destinationNeedsReview),
+          receivable: false,
+          received: false,
+          receivableId: null,
         },
       ])
       await tx.insert(transfers).values({
@@ -1593,6 +1762,8 @@ export const movementLedger = {
     ])
     if (!sourceSpace || !previousDestinationSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para editar esta transferencia')
     if (!sourceMovement || !destinationMovement || sourceMovement.type !== 'expense' || destinationMovement.type !== 'income') return fail('Transferencia corrupta')
+    const receivableDependency = await transferReceivableDependencyReason(sourceMovement, destinationMovement, transfer.id)
+    if (receivableDependency) return fail(`No se puede editar esta transferencia: ${receivableDependency}. Resuelve o deshaz ese flujo primero.`)
 
     const sourceAccountId = input.fromAccountId || sourceMovement.accountId
     const destinationAccountId = input.toAccountId
@@ -1619,17 +1790,42 @@ export const movementLedger = {
       note: input.note,
     })
 
+    const wasInterSpace = transfer.sourceSpaceId !== transfer.destinationSpaceId
+    const isInterSpace = transfer.sourceSpaceId !== newDestinationSpaceId
+    const destinationSpaceChanged = transfer.destinationSpaceId !== newDestinationSpaceId
+    const sourceReportable = isInterSpace ? input.source?.reportable ?? (wasInterSpace ? sourceMovement.reportable : true) : false
+    const destinationReportable = isInterSpace ? input.destination?.reportable ?? (wasInterSpace && !destinationSpaceChanged ? destinationMovement.reportable : true) : false
+    const sourceCategoryId = sourceReportable
+      ? input.source?.categoryId !== undefined ? input.source.categoryId : sourceMovement.categoryId
+      : null
+    const sourceReceivable = sourceReportable ? (input.source?.receivable ?? sourceMovement.receivable) : false
+    const sourceReceivableName = input.source?.receivableText?.trim() || sourceMovement.name
+    const destinationCategoryId = destinationReportable
+      ? input.destination?.categoryId !== undefined ? input.destination.categoryId : (destinationSpaceChanged ? null : destinationMovement.categoryId)
+      : null
+
+    if (!sourceReportable && sideOperationalClearBlocked(sourceMovement)) return fail('No se puede marcar el lado origen como operacional: tiene dependencias de reporte')
+    if (!destinationReportable && sideOperationalClearBlocked(destinationMovement)) return fail('No se puede marcar el lado destino como operacional: tiene dependencias de reporte')
+    const sourceCategoryError = await validateTransferSideCategory(transfer.sourceSpaceId, sourceReportable, sourceCategoryId)
+    if (sourceCategoryError) return fail(`Origen: ${sourceCategoryError}`)
+    if (input.destination?.receivable) return fail('El lado destino de una transferencia no puede ser por cobrar')
+    if (input.source?.receivable && !sourceReportable) return fail('Solo una salida reportable puede quedar por cobrar')
+    if (sourceReceivable && !sourceCategoryId) return fail('Un gasto por cobrar requiere categoría')
+    if (sourceReceivable && !sourceReceivableName.trim()) return fail('Indica quién debe pagar este gasto')
+    const destinationCategoryError = await validateTransferSideCategory(newDestinationSpaceId, destinationReportable, destinationCategoryId)
+    if (destinationCategoryError) return fail(`Destino: ${destinationCategoryError}`)
+
     await db.transaction(async (tx) => {
       await tx.update(movements).set({
-        name: names.sourceName,
+        name: sourceReceivable ? sourceReceivableName : names.sourceName,
         date: input.date,
         accountId: fromAccount.id,
         amount: fromMoney.amount,
         currency: fromAccount.currency,
         amountUsd: fromMoney.amountUsd,
         exchangeRate: fromMoney.exchangeRate,
-        categoryId: null,
-        needsReview: false,
+        ...transferSideReportingFields(sourceReportable, sourceCategoryId, false),
+        receivable: sourceReceivable,
         updatedAt: new Date(),
       }).where(and(eq(movements.id, sourceMovement.id), eq(movements.spaceId, transfer.sourceSpaceId)))
       await tx.update(movements).set({
@@ -1641,8 +1837,10 @@ export const movementLedger = {
         currency: toAccount.currency,
         amountUsd: toMoney.amountUsd,
         exchangeRate: toMoney.exchangeRate,
-        categoryId: null,
-        needsReview: false,
+        ...transferSideReportingFields(destinationReportable, destinationCategoryId, false),
+        receivable: false,
+        received: false,
+        receivableId: null,
         updatedAt: new Date(),
       }).where(and(eq(movements.id, destinationMovement.id), eq(movements.spaceId, transfer.destinationSpaceId)))
       await tx.update(transfers).set({
@@ -1663,6 +1861,13 @@ export const movementLedger = {
       getMemberSpace(actorUserId, transfer.destinationSpaceId),
     ])
     if (!sourceSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para eliminar esta transferencia')
+    const [sourceMovement, destinationMovement] = await Promise.all([
+      getOwnedMovement(transfer.sourceSpaceId, transfer.sourceMovementId),
+      getOwnedMovement(transfer.destinationSpaceId, transfer.destinationMovementId),
+    ])
+    if (!sourceMovement || !destinationMovement) return fail('Transferencia corrupta')
+    const receivableDependency = await transferReceivableDependencyReason(sourceMovement, destinationMovement, transfer.id)
+    if (receivableDependency) return fail(`No se puede eliminar esta transferencia: ${receivableDependency}. Resuelve o deshaz ese flujo primero.`)
 
     await db.transaction(async (tx) => {
       await tx.delete(transfers).where(eq(transfers.id, transferId))
@@ -1713,20 +1918,34 @@ export const movementLedger = {
       note: input.note,
     })
 
+    const isInterSpace = spaceId !== destinationSpaceId
+    const sourceReportable = transferSideIsReportable(isInterSpace, input.sourceReportable)
+    const destinationReportable = transferSideIsReportable(isInterSpace, input.destinationReportable)
+    const sourceCategoryId = sourceReportable ? input.sourceCategoryId ?? null : null
+    const destinationCategoryId = destinationReportable ? input.destinationCategoryId ?? null : null
+    const sourceCategoryError = await validateTransferSideCategory(spaceId, sourceReportable, sourceCategoryId)
+    if (sourceCategoryError) return fail(`Origen: ${sourceCategoryError}`)
+    const sourceReceivable = Boolean(input.sourceReceivable && sourceReportable)
+    if (input.sourceReceivable && !sourceReportable) return fail('Solo una salida reportable puede quedar por cobrar')
+    if (sourceReceivable && !sourceCategoryId) return fail('Un gasto por cobrar requiere categoría')
+    if (sourceReceivable && !input.sourceReceivableText?.trim()) return fail('Indica quién debe pagar este gasto')
+    const destinationCategoryError = await validateTransferSideCategory(destinationSpaceId, destinationReportable, destinationCategoryId)
+    if (destinationCategoryError) return fail(`Destino: ${destinationCategoryError}`)
+    const sourceNeedsReview = transferSideNeedsReview(sourceReportable, fromAccount.id, sourceCategoryId)
+    const destinationNeedsReview = transferSideNeedsReview(destinationReportable, toAccount.id, destinationCategoryId)
+
     await db.transaction(async (tx) => {
       await tx.update(movements).set({
-        name: names.sourceName,
+        name: sourceReceivable ? input.sourceReceivableText!.trim() : names.sourceName,
         date: input.source.date,
         amount: sourceMoney.amount,
         type: 'expense',
         currency: fromAccount.currency,
         accountId: fromAccount.id,
-        categoryId: null,
         amountUsd: sourceMoney.amountUsd,
         exchangeRate: sourceMoney.exchangeRate,
         time: input.source.time ?? null,
-        needsReview: false,
-        receivable: false,
+        receivable: sourceReceivable,
         received: false,
         receivableId: null,
         emergency: false,
@@ -1734,6 +1953,7 @@ export const movementLedger = {
         loan: false,
         loanSettled: false,
         loanId: null,
+        ...transferSideReportingFields(sourceReportable, sourceCategoryId, sourceNeedsReview),
         updatedAt: new Date(),
       }).where(and(eq(movements.id, input.movementId), eq(movements.spaceId, spaceId)))
       await tx.insert(movements).values({
@@ -1741,7 +1961,6 @@ export const movementLedger = {
         spaceId: destinationSpaceId,
         createdByUserId: actorUserId,
         accountId: toAccount.id,
-        categoryId: null,
         name: names.destinationName,
         date: input.source.date,
         amount: toMoney.amount,
@@ -1750,7 +1969,10 @@ export const movementLedger = {
         amountUsd: toMoney.amountUsd,
         exchangeRate: toMoney.exchangeRate,
         time: input.source.time ?? null,
-        needsReview: false,
+        ...transferSideReportingFields(destinationReportable, destinationCategoryId, destinationNeedsReview),
+        receivable: false,
+        received: false,
+        receivableId: null,
       })
       await tx.insert(transfers).values({
         id: transferId,
@@ -1826,6 +2048,7 @@ export const movementLedger = {
             createdByUserId: actorUserId,
             accountId: fromAccount.id,
             categoryId: null,
+            reportable: false,
             name: `Abono emergencia: pago`,
             date,
             amount: fromMoney!.amount,
@@ -1841,6 +2064,7 @@ export const movementLedger = {
             createdByUserId: actorUserId,
             accountId: toAccount.id,
             categoryId: null,
+            reportable: false,
             name: `Abono emergencia: recibido`,
             date,
             amount: toMoney!.amount,

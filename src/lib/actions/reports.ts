@@ -40,6 +40,23 @@ function buildReportMovementFilters(
   return filters
 }
 
+function buildBalanceMovementFilters(
+  spaceId: string,
+  options: {
+    accountId?: string
+  } = {},
+) {
+  const filters = [
+    sql`${movements.spaceId} = ${spaceId}`,
+    sql`${movements.needsReview} = false`,
+    sql`${movements.accountId} IS NOT NULL`,
+  ]
+
+  if (options.accountId) filters.push(sql`${movements.accountId} = ${options.accountId}`)
+
+  return filters
+}
+
 export async function getReportData(
   startDate: string,
   endDate: string,
@@ -72,12 +89,12 @@ export async function getReportData(
   ]
 
   const balanceFilters = [
-    ...buildReportMovementFilters(space.id, { accountId }),
+    ...buildBalanceMovementFilters(space.id, { accountId }),
     sql`${movements.date} >= ${startDate}`,
     sql`${movements.date} <= ${endDate}`,
   ]
   const balanceBeforeFilters = [
-    ...buildReportMovementFilters(space.id, { accountId }),
+    ...buildBalanceMovementFilters(space.id, { accountId }),
     sql`${movements.date} < ${startDate}`,
   ]
 

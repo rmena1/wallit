@@ -126,6 +126,7 @@ export const movements = pgTable('movements', {
   amount: bigint('amount', { mode: 'number' }).notNull(), // cents — always in CLP
   type: text('type').$type<'income' | 'expense'>().notNull(),
   needsReview: boolean('needs_review').notNull().default(false),
+  reportable: boolean('reportable').notNull().default(true),
   currency: text('currency').$type<'CLP' | 'USD'>().notNull().default('CLP'),
   amountUsd: integer('amount_usd'), // cents, only for USD movements
   exchangeRate: integer('exchange_rate'), // rate * 100 (e.g. 950.50 → 95050)
@@ -149,6 +150,7 @@ export const movements = pgTable('movements', {
   index('idx_movements_category').on(table.categoryId),
   index('idx_movements_account').on(table.accountId),
   index('idx_movements_review').on(table.spaceId, table.needsReview),
+  index('idx_movements_reportable').on(table.spaceId, table.reportable),
 ])
 
 // ============================================================================
@@ -185,6 +187,12 @@ export const receivableSettlements = pgTable('receivable_settlements', {
   consumedTransferDestinationSpaceId: text('consumed_transfer_destination_space_id'),
   consumedTransferSourceAccountId: text('consumed_transfer_source_account_id'),
   consumedTransferDestinationAccountId: text('consumed_transfer_destination_account_id'),
+  consumedTransferSourceCategoryId: text('consumed_transfer_source_category_id'),
+  consumedTransferDestinationCategoryId: text('consumed_transfer_destination_category_id'),
+  consumedTransferSourceReportable: boolean('consumed_transfer_source_reportable'),
+  consumedTransferDestinationReportable: boolean('consumed_transfer_destination_reportable'),
+  consumedTransferSourceReceivable: boolean('consumed_transfer_source_receivable'),
+  consumedTransferDestinationReceivable: boolean('consumed_transfer_destination_receivable'),
   consumedTransferSourceName: text('consumed_transfer_source_name'),
   consumedTransferDestinationName: text('consumed_transfer_destination_name'),
   consumedTransferDate: text('consumed_transfer_date'),

@@ -10,10 +10,12 @@ import {
   getMovementIdByName,
   getMovementWorkflowState,
   getPersonalSpaceId,
+  getReportTotalsForSpace,
   getTransferIdForMovement,
   getTransferMovementAmounts,
   getUserId,
   removeUserFromSpace,
+  seedCategory,
   seedConfirmedWorkflowMovement,
   seedReviewMovement,
   seedUsdReviewMovement,
@@ -58,6 +60,8 @@ async function recordTransferDirect(spaceId: string, actorUserId: string, params
   toCurrency: 'CLP' | 'USD'
   date: string
   note?: string
+  source?: { reportable?: boolean; categoryId?: string | null; receivable?: boolean; receivableText?: string | null }
+  destination?: { reportable?: boolean; categoryId?: string | null }
 }) {
   process.env.DATABASE_URL ||= 'postgresql://127.0.0.1:5432/wallit_e2e'
   return movementLedger.recordTransfer(spaceId, actorUserId, params)
@@ -76,12 +80,18 @@ async function switchSpace(page: Page, name: string) {
 }
 
 async function selectOptionContaining(select: Locator, text: string) {
-  const value = await select.evaluate((element, searchText) => {
+  await expect(select).toBeVisible({ timeout: 10_000 })
+  const value = await expect.poll(async () => select.evaluate((element, searchText) => {
     const option = Array.from((element as HTMLSelectElement).options).find((candidate) =>
       !candidate.disabled && candidate.textContent?.includes(searchText)
     )
     return option?.value ?? null
-  }, text)
+  }, text), { timeout: 10_000 }).not.toBeNull().then(async () => select.evaluate((element, searchText) => {
+    const option = Array.from((element as HTMLSelectElement).options).find((candidate) =>
+      !candidate.disabled && candidate.textContent?.includes(searchText)
+    )
+    return option?.value ?? null
+  }, text))
   if (!value) throw new Error(`No enabled option containing ${text}`)
   await select.selectOption(value)
 }
@@ -140,6 +150,7 @@ test.describe('Inter-Space Transfers', () => {
     await expect(page.getByLabel('Hacia cuenta')).not.toBeVisible({ timeout: 3_000 })
     await expect(page.getByText(/Cuenta destino pendiente/i)).toBeVisible({ timeout: 10_000 })
     await page.getByLabel('Monto origen').fill('42000')
+    await selectOptionContaining(page.getByLabel('Categoría origen'), 'Home')
     await page.getByPlaceholder('ej: Pago tarjeta de crédito').fill('Member pending destination')
     await screenshot(page, 'interspace-member-pending-01-owner-form')
     await page.getByRole('button', { name: /Crear Transferencia/i }).click()
@@ -147,10 +158,10 @@ test.describe('Inter-Space Transfers', () => {
     await expect(page.getByText(/Transferencia a Personal del receptor · Member pending destination/)).toBeVisible({ timeout: 10_000 })
 
     const sourceMovement = await getMovementWorkflowState(sharedSpaceId, 'Member pending destination')
-    expect(sourceMovement).toMatchObject({ accountId: sharedAccountId, type: 'expense', needsReview: false, amount: 4_200_000 })
+    expect(sourceMovement).toMatchObject({ accountId: sharedAccountId, type: 'expense', needsReview: false, reportable: true, amount: 4_200_000 })
 
     const destinationMovement = await getMovementWorkflowState(memberPersonalSpaceId, 'Member pending destination')
-    expect(destinationMovement).toMatchObject({ accountId: null, type: 'income', needsReview: true, amount: 4_200_000 })
+    expect(destinationMovement).toMatchObject({ accountId: null, type: 'income', needsReview: true, reportable: true, amount: 4_200_000 })
 
     await login(page, memberEmail)
     await switchSpace(page, 'Personal')
@@ -159,12 +170,13 @@ test.describe('Inter-Space Transfers', () => {
     await page.waitForURL('**/edit/**', { timeout: 10_000 })
     await expect(page.getByText('Editar Transferencia')).toBeVisible({ timeout: 10_000 })
     await selectOptionContaining(page.getByLabel('Cuenta destino'), 'Member Secret Bank')
+    await selectOptionContaining(page.getByLabel('Categoría destino transferencia'), 'Home')
     await screenshot(page, 'interspace-member-pending-02-receiver-confirm')
     await page.getByRole('button', { name: /Guardar cambios/i }).click()
     await page.waitForURL('**/', { timeout: 10_000 })
 
     const confirmedDestination = await getMovementWorkflowState(memberPersonalSpaceId, 'Member pending destination')
-    expect(confirmedDestination).toMatchObject({ accountId: memberPersonalAccountId, type: 'income', needsReview: false, amount: 4_200_000 })
+    expect(confirmedDestination).toMatchObject({ accountId: memberPersonalAccountId, type: 'income', needsReview: false, reportable: true, amount: 4_200_000 })
   })
 
   test('server rejects forged pending Personal destinations and forged destination accounts', async ({ browser, page }) => {
@@ -229,6 +241,47 @@ test.describe('Inter-Space Transfers', () => {
     expect(await getMovementWorkflowState(memberPersonalSpaceId, 'forged member account')).toBeNull()
   })
 
+  test('ledger requires explicit categories for reportable Inter-Space Transfer sides', async ({ page }) => {
+    const email = await registerUser(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found')
+
+    const personalSpaceId = await getPersonalSpaceId(userId)
+    const casaSpaceId = await createSpaceForUser(userId, 'Casa Ledger Rule', '🏠')
+    const personalAccountId = await createRegularAccount(userId, { bankName: 'Ledger Personal', lastFourDigits: '1010', initialBalance: 100_000_000, spaceId: personalSpaceId })
+    const casaAccountId = await createRegularAccount(userId, { bankName: 'Ledger Casa', lastFourDigits: '2020', initialBalance: 0, spaceId: casaSpaceId })
+    const personalCategoryId = await seedCategory(userId, { name: 'Ledger gasto', emoji: '🧾', spaceId: personalSpaceId })
+    const casaCategoryId = await seedCategory(userId, { name: 'Ledger ingreso', emoji: '💰', spaceId: casaSpaceId })
+
+    const missingCategories = await recordTransferDirect(personalSpaceId, userId, {
+      fromAccountId: personalAccountId,
+      toAccountId: casaAccountId,
+      destinationSpaceId: casaSpaceId,
+      fromAmount: 10_000,
+      toAmount: 10_000,
+      fromCurrency: 'CLP',
+      toCurrency: 'CLP',
+      date: new Date().toISOString().slice(0, 10),
+      note: 'Sin categorías ledger',
+    })
+    expect(missingCategories).toMatchObject({ success: false })
+
+    const classified = await recordTransferDirect(personalSpaceId, userId, {
+      fromAccountId: personalAccountId,
+      toAccountId: casaAccountId,
+      destinationSpaceId: casaSpaceId,
+      fromAmount: 10_000,
+      toAmount: 10_000,
+      fromCurrency: 'CLP',
+      toCurrency: 'CLP',
+      date: new Date().toISOString().slice(0, 10),
+      note: 'Con categorías ledger',
+      source: { reportable: true, categoryId: personalCategoryId },
+      destination: { reportable: true, categoryId: casaCategoryId },
+    })
+    expect(classified).toMatchObject({ success: true })
+  })
+
   test('creates, reports, edits and deletes an Inter-Space Transfer across timelines', async ({ page }) => {
     const email = await registerUser(page)
     const userId = await getUserId(email)
@@ -252,6 +305,8 @@ test.describe('Inter-Space Transfers', () => {
     await selectOptionContaining(page.getByLabel('Space destino'), 'Casa')
     await selectOptionContaining(page.getByLabel('Hacia cuenta'), 'BCI Casa')
     await page.getByLabel('Monto origen').fill('50000')
+    await selectOptionContaining(page.getByLabel('Categoría origen'), 'Home')
+    await selectOptionContaining(page.getByLabel('Categoría destino'), 'Salary')
     await page.getByPlaceholder('ej: Pago tarjeta de crédito').fill('Arriendo mayo')
     await screenshot(page, 'interspace-02-personal-to-casa-filled')
 
@@ -270,18 +325,21 @@ test.describe('Inter-Space Transfers', () => {
     await seedConfirmedWorkflowMovement(userId, personalAccountId, { name: 'Personal report expense', clpAmount: 1_000_000, type: 'expense', spaceId: personalSpaceId })
     await seedConfirmedWorkflowMovement(userId, casaAccountId, { name: 'Casa report expense', clpAmount: 2_000_000, type: 'expense', spaceId: casaSpaceId })
 
+    expect(await getReportTotalsForSpace(personalSpaceId)).toMatchObject({ totalExpense: 6_000_000, count: 2 })
+    expect(await getReportTotalsForSpace(casaSpaceId)).toMatchObject({ totalIncome: 5_000_000, totalExpense: 2_000_000, count: 2 })
+
     await switchSpace(page, 'Personal')
     await page.goto('/reports')
     await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: 10_000 })
-    await expect.poll(() => readSummaryAmount(page, 'Gastos'), { timeout: 10_000 }).toContain('$10.000')
-    await screenshot(page, 'interspace-05-personal-reports-exclude-transfer')
+    await expect.poll(() => readSummaryAmount(page, 'Gastos'), { timeout: 10_000 }).toContain('$60.000')
+    await screenshot(page, 'interspace-05-personal-reports-include-transfer')
 
     await switchSpace(page, 'Casa')
     await page.goto('/reports')
     await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: 10_000 })
-    await expect.poll(() => readSummaryAmount(page, 'Ingresos'), { timeout: 10_000 }).toContain('$0')
+    await expect.poll(() => readSummaryAmount(page, 'Ingresos'), { timeout: 10_000 }).toContain('$50.000')
     await expect.poll(() => readSummaryAmount(page, 'Gastos'), { timeout: 10_000 }).toContain('$20.000')
-    await screenshot(page, 'interspace-06-casa-reports-exclude-transfer')
+    await screenshot(page, 'interspace-06-casa-reports-include-transfer')
 
     await switchSpace(page, 'Personal')
     await page.getByText(/Transferencia a Casa · Arriendo mayo/).first().click()
@@ -289,6 +347,7 @@ test.describe('Inter-Space Transfers', () => {
     await expect(page.getByText('Editar Transferencia')).toBeVisible({ timeout: 10_000 })
     await selectOptionContaining(page.getByLabel('Space destino'), 'Fondo')
     await selectOptionContaining(page.getByLabel('Cuenta destino'), 'BCI Fondo')
+    await selectOptionContaining(page.getByLabel('Categoría destino transferencia'), 'Salary')
     await screenshot(page, 'interspace-07-edit-destination-space')
     await page.getByRole('button', { name: /Guardar cambios/i }).click()
     await page.waitForURL('**/', { timeout: 10_000 })
@@ -313,6 +372,45 @@ test.describe('Inter-Space Transfers', () => {
     expect(await countMovementsInSpace(fondoSpaceId, 'Arriendo mayo')).toBe(0)
   })
 
+  test('allows one Inter-Space side to be operational while balances still move', async ({ page }) => {
+    const email = await registerUser(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found')
+
+    const personalSpaceId = await getPersonalSpaceId(userId)
+    const casaSpaceId = await createSpaceForUser(userId, 'Casa Operacional', '🏠')
+    const personalAccountId = await createRegularAccount(userId, { bankName: 'BCI Personal Op', lastFourDigits: '1122', initialBalance: 100_000_000, spaceId: personalSpaceId })
+    const casaAccountId = await createRegularAccount(userId, { bankName: 'BCI Casa Op', lastFourDigits: '3344', initialBalance: 0, spaceId: casaSpaceId })
+
+    await page.goto('/add')
+    await page.getByText('↔️ Transferencia').click()
+    await selectOptionContaining(page.getByLabel('Desde cuenta'), 'BCI Personal Op')
+    await selectOptionContaining(page.getByLabel('Space destino'), 'Casa Operacional')
+    await selectOptionContaining(page.getByLabel('Hacia cuenta'), 'BCI Casa Op')
+    await page.getByLabel('Monto origen').fill('30000')
+    await selectOptionContaining(page.getByLabel('Categoría origen'), 'Home')
+    await page.getByLabel('Destino en reportes').uncheck()
+    await page.getByPlaceholder('ej: Pago tarjeta de crédito').fill('Aporte operacional destino')
+    await screenshot(page, 'interspace-operational-side-01-form')
+    await page.getByRole('button', { name: /Crear Transferencia/i }).click()
+    await page.waitForURL('**/', { timeout: 10_000 })
+
+    expect(await getClpAccountBalance(personalAccountId)).toBe(97_000_000)
+    expect(await getClpAccountBalance(casaAccountId)).toBe(3_000_000)
+    expect(await getReportTotalsForSpace(personalSpaceId)).toMatchObject({ totalExpense: 3_000_000, count: 1 })
+    expect(await getReportTotalsForSpace(casaSpaceId)).toMatchObject({ totalIncome: 0, count: 0 })
+
+    const sourceMovement = await getMovementWorkflowState(personalSpaceId, 'Aporte operacional destino')
+    expect(sourceMovement).toMatchObject({ type: 'expense', needsReview: false, reportable: true })
+    const destinationMovement = await getMovementWorkflowState(casaSpaceId, 'Aporte operacional destino')
+    expect(destinationMovement).toMatchObject({ type: 'income', needsReview: false, reportable: false, categoryId: null })
+    await switchSpace(page, 'Casa Operacional')
+    const operationalTimelineItem = page.getByRole('button', { name: /Editar movimiento/ }).filter({ hasText: /Transferencia desde Personal · Aporte operacional destino/ }).first()
+    await expect(operationalTimelineItem).toBeVisible({ timeout: 10_000 })
+    await expect(operationalTimelineItem).toContainText('operacional')
+    await screenshot(page, 'interspace-operational-side-02-timeline')
+  })
+
   test('transforms a pending review movement into an Inter-Space Transfer', async ({ page }) => {
     const email = await registerUser(page)
     const userId = await getUserId(email)
@@ -329,15 +427,23 @@ test.describe('Inter-Space Transfers', () => {
     await page.getByText('↔️ Transfer').click()
     await selectOptionContaining(page.getByLabel('Space destino'), 'Casa Review')
     await selectOptionContaining(page.getByLabel('Hacia cuenta (destino)'), 'Review Casa')
+    await selectOptionContaining(page.getByLabel('Categoría origen transferencia'), 'Home')
+    await selectOptionContaining(page.getByLabel('Categoría destino transferencia'), 'Salary')
     await page.getByPlaceholder('ej: Pago tarjeta de crédito').fill('Fondo común')
     await screenshot(page, 'interspace-review-01-transform-form')
-    await page.getByRole('button', { name: /Crear Transfer/i }).click({ force: true })
+    const createTransferButton = page.getByRole('button', { name: /Crear Transfer/i })
+    await createTransferButton.scrollIntoViewIfNeeded()
+    await createTransferButton.evaluate((button) => (button as HTMLButtonElement).click())
     await expect(page.getByText(/Revisión completada|No hay movimientos pendientes/)).toBeVisible({ timeout: 10_000 })
 
     await page.goto('/')
     await expect(page.getByText(/Transferencia a Casa Review · Fondo común/)).toBeVisible({ timeout: 10_000 })
+    const sourceMovement = await getMovementWorkflowState(personalSpaceId, 'Fondo común')
+    expect(sourceMovement).toMatchObject({ type: 'expense', needsReview: false, reportable: true })
     await switchSpace(page, 'Casa Review')
     await expect(page.getByText(/Transferencia desde Personal · Fondo común/)).toBeVisible({ timeout: 10_000 })
+    const destinationMovement = await getMovementWorkflowState(casaSpaceId, 'Fondo común')
+    expect(destinationMovement).toMatchObject({ type: 'income', needsReview: false, reportable: true })
     await screenshot(page, 'interspace-review-02-destination-timeline')
   })
 
@@ -357,6 +463,8 @@ test.describe('Inter-Space Transfers', () => {
     await selectOptionContaining(page.getByLabel('Space destino'), 'Casa Lost')
     await selectOptionContaining(page.getByLabel('Hacia cuenta'), 'Secret Casa Bank')
     await page.getByLabel('Monto origen').fill('25000')
+    await selectOptionContaining(page.getByLabel('Categoría origen'), 'Home')
+    await selectOptionContaining(page.getByLabel('Categoría destino'), 'Salary')
     await page.getByPlaceholder('ej: Pago tarjeta de crédito').fill('Lost access audit')
     await page.getByRole('button', { name: /Crear Transferencia/i }).click()
     await page.waitForURL('**/', { timeout: 10_000 })

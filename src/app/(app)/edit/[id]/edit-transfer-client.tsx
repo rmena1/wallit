@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { updateTransfer, deleteTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { parseMoney } from '@/lib/utils'
-import type { Account } from '@/lib/db'
+import type { Account, Category } from '@/lib/db'
 
 interface TransferMovement {
   id: string
@@ -21,6 +21,9 @@ interface TransferMovement {
   accountLastFour: string | null
   accountCurrency: 'CLP' | 'USD' | null
   accountEmoji: string | null
+  categoryId: string | null
+  reportable: boolean
+  receivable: boolean
 }
 
 interface TransferData {
@@ -37,6 +40,7 @@ interface Props {
   accounts: Account[]
   transferAccounts: Account[]
   transferSpaces: { id: string; name: string; emoji: string; isCurrent: boolean; hasAccounts: boolean }[]
+  transferCategories: Category[]
 }
 
 const inputStyle: React.CSSProperties = {
@@ -64,7 +68,7 @@ function extractTransferNote(name: string): string {
   return name.includes(' · ') ? name.split(' · ').slice(1).join(' · ') : ''
 }
 
-export function EditTransferClient({ transfer, accounts, transferAccounts, transferSpaces }: Props) {
+export function EditTransferClient({ transfer, accounts, transferAccounts, transferSpaces, transferCategories }: Props) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -72,6 +76,12 @@ export function EditTransferClient({ transfer, accounts, transferAccounts, trans
   const [formFromAccountId, setFormFromAccountId] = useState(transfer.fromMovement.accountId ?? '')
   const [formDestinationSpaceId, setFormDestinationSpaceId] = useState(transfer.destinationSpaceId)
   const [formToAccountId, setFormToAccountId] = useState(transfer.toMovement.accountId ?? '')
+  const [sourceReportable, setSourceReportable] = useState(transfer.sourceSpaceId !== transfer.destinationSpaceId ? transfer.fromMovement.reportable : false)
+  const [destinationReportable, setDestinationReportable] = useState(transfer.sourceSpaceId !== transfer.destinationSpaceId ? transfer.toMovement.reportable : false)
+  const [sourceCategoryId, setSourceCategoryId] = useState(transfer.fromMovement.categoryId ?? '')
+  const [destinationCategoryId, setDestinationCategoryId] = useState(transfer.toMovement.categoryId ?? '')
+  const [sourceReceivable, setSourceReceivable] = useState(Boolean(transfer.fromMovement.receivable))
+  const [sourceReceivableText, setSourceReceivableText] = useState(transfer.fromMovement.receivable ? transfer.fromMovement.name : '')
   const sourceAccounts = transferAccounts.filter(a => a.spaceId === transfer.sourceSpaceId)
   const destinationAccounts = transferAccounts.filter(a => a.spaceId === formDestinationSpaceId)
   const selectedDestinationSpace = transferSpaces.find(s => s.id === formDestinationSpaceId)
@@ -81,6 +91,9 @@ export function EditTransferClient({ transfer, accounts, transferAccounts, trans
   const fromCurrency = fromAccount?.currency || transfer.fromMovement.accountCurrency || transfer.fromMovement.currency
   const toCurrency = toAccount?.currency || transfer.toMovement.accountCurrency || transfer.toMovement.currency
   const currenciesDiffer = fromCurrency !== toCurrency
+  const isInterSpaceTransfer = transfer.sourceSpaceId !== formDestinationSpaceId
+  const sourceTransferCategories = transferCategories.filter(c => c.spaceId === transfer.sourceSpaceId)
+  const destinationTransferCategories = transferCategories.filter(c => c.spaceId === formDestinationSpaceId)
 
   // Form state
   const [formDate, setFormDate] = useState(transfer.fromMovement.date)
@@ -100,8 +113,24 @@ export function EditTransferClient({ transfer, accounts, transferAccounts, trans
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   useEffect(() => {
-    if (formDestinationSpaceId !== transfer.destinationSpaceId) setFormToAccountId('')
+    if (formDestinationSpaceId !== transfer.destinationSpaceId) {
+      setFormToAccountId('')
+      setDestinationCategoryId('')
+    }
   }, [formDestinationSpaceId, transfer.destinationSpaceId])
+
+  useEffect(() => {
+    if (!isInterSpaceTransfer) {
+      setSourceReportable(false)
+      setDestinationReportable(false)
+      setSourceCategoryId('')
+      setDestinationCategoryId('')
+      setSourceReceivable(false)
+    } else if (transfer.sourceSpaceId === transfer.destinationSpaceId) {
+      setSourceReportable(true)
+      setDestinationReportable(true)
+    }
+  }, [isInterSpaceTransfer, transfer.sourceSpaceId, transfer.destinationSpaceId])
 
   // Get exchange rate
   useEffect(() => {
@@ -143,6 +172,21 @@ export function EditTransferClient({ transfer, accounts, transferAccounts, trans
         setLoading(false)
         return
       }
+      if (isInterSpaceTransfer && sourceReportable && !sourceCategoryId) {
+        setError('El origen reportable requiere categoría')
+        setLoading(false)
+        return
+      }
+      if (isInterSpaceTransfer && sourceReportable && sourceReceivable && !sourceReceivableText.trim()) {
+        setError('Indica quién debe pagar este gasto')
+        setLoading(false)
+        return
+      }
+      if (isInterSpaceTransfer && destinationReportable && !destinationCategoryId) {
+        setError('El destino reportable requiere categoría')
+        setLoading(false)
+        return
+      }
       if (!formFromAccountId || !formToAccountId) {
         setError(selectedDestinationSpace?.hasAccounts === false ? 'El Space destino no tiene cuentas disponibles' : 'Selecciona las cuentas de la transferencia')
         setLoading(false)
@@ -150,6 +194,16 @@ export function EditTransferClient({ transfer, accounts, transferAccounts, trans
       }
       if (formFromAccountId === formToAccountId && transfer.sourceSpaceId === formDestinationSpaceId) {
         setError('Las cuentas deben ser diferentes')
+        setLoading(false)
+        return
+      }
+      if (isInterSpaceTransfer && sourceReportable && !sourceCategoryId) {
+        setError('El origen reportable requiere categoría')
+        setLoading(false)
+        return
+      }
+      if (isInterSpaceTransfer && destinationReportable && !destinationCategoryId) {
+        setError('El destino reportable requiere categoría')
         setLoading(false)
         return
       }
@@ -164,6 +218,13 @@ export function EditTransferClient({ transfer, accounts, transferAccounts, trans
         toCurrency,
         date: formDate,
         note: formNote.trim() || undefined,
+        source: {
+          reportable: isInterSpaceTransfer ? sourceReportable : false,
+          categoryId: sourceReportable ? sourceCategoryId || null : null,
+          receivable: isInterSpaceTransfer && sourceReportable ? sourceReceivable : false,
+          receivableText: sourceReceivable ? sourceReceivableText.trim() : null,
+        },
+        destination: { reportable: isInterSpaceTransfer ? destinationReportable : false, categoryId: destinationReportable ? destinationCategoryId || null : null },
       })
 
       if (!result.success) {
@@ -313,6 +374,53 @@ export function EditTransferClient({ transfer, accounts, transferAccounts, trans
               </div>
             )}
 
+            {isInterSpaceTransfer ? (
+              <div style={{ border: '1px solid #2a2a2a', borderRadius: 12, padding: 12, backgroundColor: '#151515' }}>
+                <div style={{ fontSize: 13, color: '#e5e5e5', fontWeight: 700, marginBottom: 8 }}>Clasificación para reportes</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#e5e5e5', marginBottom: 6 }}>
+                      <input type="checkbox" checked={sourceReportable} onChange={e => { setSourceReportable(e.target.checked); if (!e.target.checked) setSourceReceivable(false) }} disabled={!transfer.canEdit || transfer.fromMovement.receivable} style={{ accentColor: '#22c55e' }} />
+                      Contar como gasto
+                    </label>
+                    {transfer.fromMovement.receivable && <div style={{ fontSize: 11, color: '#fbbf24', marginBottom: 6 }}>No se puede apagar: tiene por cobrar asociado.</div>}
+                    {sourceReportable && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <select aria-label="Categoría origen transferencia" value={sourceCategoryId} onChange={e => setSourceCategoryId(e.target.value)} style={selectStyle} disabled={!transfer.canEdit}>
+                          <option value="">Categoría origen</option>
+                          {sourceTransferCategories.map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+                        </select>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#d4d4d8' }}>
+                          <input type="checkbox" checked={sourceReceivable} onChange={e => setSourceReceivable(e.target.checked)} disabled={!transfer.canEdit || transfer.fromMovement.receivable} style={{ accentColor: '#f59e0b' }} />
+                          Gasto por cobrar
+                        </label>
+                        {sourceReceivable && (
+                          <input aria-label="Persona o deudor" value={sourceReceivableText} onChange={e => setSourceReceivableText(e.target.value)} placeholder="¿Quién lo debe pagar?" style={inputStyle} disabled={!transfer.canEdit || transfer.fromMovement.receivable} />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#e5e5e5', marginBottom: 6 }}>
+                      <input type="checkbox" checked={destinationReportable} onChange={e => setDestinationReportable(e.target.checked)} disabled={!transfer.canEdit} style={{ accentColor: '#22c55e' }} />
+                      Contar como ingreso
+                    </label>
+                    {destinationReportable && (
+                      <select aria-label="Categoría destino transferencia" value={destinationCategoryId} onChange={e => setDestinationCategoryId(e.target.value)} style={selectStyle} disabled={!transfer.canEdit}>
+                        <option value="">Categoría destino</option>
+                        {destinationTransferCategories.map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+                      </select>
+                    )}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: '#a1a1aa', marginTop: 8 }}>Siempre afecta balances; estos controles solo cambian reportes.</div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: '#a1a1aa', backgroundColor: '#111', border: '1px solid #2a2a2a', borderRadius: 10, padding: '10px 12px' }}>
+                Transferencia dentro del mismo Space: operacional y fuera de reportes.
+              </div>
+            )}
+
             {/* Date */}
             <div>
               <label style={labelStyle}>Fecha</label>
@@ -334,6 +442,7 @@ export function EditTransferClient({ transfer, accounts, transferAccounts, trans
                 style={inputStyle}
               />
             </div>
+
           </div>
         </div>
 

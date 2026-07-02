@@ -48,6 +48,7 @@ export default async function Home() {
         amountUsd: movements.amountUsd,
         exchangeRate: movements.exchangeRate,
         type: movements.type,
+        reportable: movements.reportable,
         createdAt: movements.createdAt,
         updatedAt: movements.updatedAt,
         categoryName: categories.name,

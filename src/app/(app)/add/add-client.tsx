@@ -14,6 +14,7 @@ interface AddMovementPageProps {
   transferSpaces: { id: string; name: string; emoji: string; isCurrent: boolean; hasAccounts: boolean; requiresAccount?: boolean }[]
   currentSpaceId: string
   categories: Category[]
+  transferCategories: Category[]
 }
 
 const inputStyle: React.CSSProperties = {
@@ -62,11 +63,14 @@ interface FieldErrors {
   fromAmount?: string
   toAmount?: string
   date?: string
+  sourceCategoryId?: string
+  destinationCategoryId?: string
+  receivableText?: string
 }
 
 type MovementType = 'expense' | 'income' | 'transfer'
 
-export function AddMovementPage({ accounts, transferAccounts, transferSpaces, currentSpaceId, categories }: AddMovementPageProps) {
+export function AddMovementPage({ accounts, transferAccounts, transferSpaces, currentSpaceId, categories, transferCategories }: AddMovementPageProps) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -94,6 +98,12 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
   const [fromAmount, setFromAmount] = useState('')
   const [toAmount, setToAmount] = useState('')
   const [note, setNote] = useState('')
+  const [sourceReportable, setSourceReportable] = useState(true)
+  const [destinationReportable, setDestinationReportable] = useState(true)
+  const [sourceCategoryId, setSourceCategoryId] = useState('')
+  const [destinationCategoryId, setDestinationCategoryId] = useState('')
+  const [sourceReceivable, setSourceReceivable] = useState(false)
+  const [receivableText, setReceivableText] = useState('')
   const [exchangeRate, setExchangeRate] = useState<number | null>(null)
 
   // Get currencies for selected accounts
@@ -106,10 +116,32 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
   const fromCurrency = fromAccount?.currency || 'CLP'
   const toCurrency = isPendingMemberDestination ? fromCurrency : (toAccount?.currency || 'CLP')
   const currenciesDiffer = !isPendingMemberDestination && fromCurrency !== toCurrency
+  const isInterSpaceTransfer = destinationSpaceId !== currentSpaceId
+  const sourceTransferCategories = transferCategories.filter(c => c.spaceId === currentSpaceId)
+  const destinationTransferCategories = transferCategories.filter(c => c.spaceId === destinationSpaceId)
 
   useEffect(() => {
     setToAccountId('')
+    setDestinationCategoryId('')
   }, [destinationSpaceId])
+
+  useEffect(() => {
+    if (!isInterSpaceTransfer) {
+      setSourceReportable(false)
+      setDestinationReportable(false)
+      setSourceCategoryId('')
+      setDestinationCategoryId('')
+      setSourceReceivable(false)
+      setReceivableText('')
+    } else {
+      setSourceReportable(prev => prev || true)
+      setDestinationReportable(prev => prev || true)
+    }
+  }, [isInterSpaceTransfer])
+
+  useEffect(() => {
+    if (!sourceReportable) { setSourceReceivable(false); setReceivableText('') }
+  }, [sourceReportable])
 
   useEffect(() => {
     if (type !== 'expense' && emergency) setEmergency(false)
@@ -174,7 +206,6 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
     if (!date) {
       errors.date = 'Selecciona una fecha'
     }
-    
     setFieldErrors(errors)
     return Object.keys(errors).length === 0
   }
@@ -213,6 +244,15 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
     if (!date) {
       errors.date = 'Selecciona una fecha'
     }
+    if (isInterSpaceTransfer && sourceReportable && !sourceCategoryId) {
+      errors.sourceCategoryId = 'El origen reportable requiere categoría'
+    }
+    if (isInterSpaceTransfer && destinationRequiresAccount && destinationReportable && !destinationCategoryId) {
+      errors.destinationCategoryId = 'El destino reportable requiere categoría'
+    }
+    if (isInterSpaceTransfer && sourceReportable && sourceReceivable && !receivableText.trim()) {
+      errors.receivableText = 'Indica quién debe pagar este gasto'
+    }
     
     setFieldErrors(errors)
     return Object.keys(errors).length === 0
@@ -250,6 +290,13 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
           toCurrency,
           date,
           note: note.trim() || undefined,
+          source: {
+            reportable: isInterSpaceTransfer ? sourceReportable : false,
+            categoryId: sourceReportable ? sourceCategoryId || null : null,
+            receivable: isInterSpaceTransfer && sourceReportable && sourceReceivable,
+            receivableText: sourceReceivable ? receivableText.trim() : null,
+          },
+          destination: { reportable: isInterSpaceTransfer ? destinationReportable : false, categoryId: destinationReportable ? destinationCategoryId || null : null },
         })
         
         if (!result.success) {
@@ -522,6 +569,56 @@ export function AddMovementPage({ accounts, transferAccounts, transferSpaces, cu
                   <div style={{ fontSize: 12, color: '#a1a1aa', marginTop: -8 }}>
                     💱 Tipo de cambio: 1 USD = {(exchangeRate / 100).toFixed(2)} CLP
                     <span style={{ color: '#9ca3af' }}> (puedes ajustar el monto destino)</span>
+                  </div>
+                )}
+
+                {isInterSpaceTransfer ? (
+                  <div style={{ border: '1px solid #2a2a2a', borderRadius: 12, padding: 12, backgroundColor: '#151515' }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#e5e5e5', marginBottom: 8 }}>Reportabilidad</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#e5e5e5', marginBottom: 6 }}>
+                          <input type="checkbox" checked={sourceReportable} onChange={e => { setSourceReportable(e.target.checked); clearFieldError('sourceCategoryId') }} style={{ accentColor: '#22c55e' }} />
+                          Origen en reportes
+                        </label>
+                        {sourceReportable && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <select aria-label="Categoría origen" value={sourceCategoryId} onChange={e => { setSourceCategoryId(e.target.value); clearFieldError('sourceCategoryId') }} style={fieldErrors.sourceCategoryId ? selectErrorStyle : selectStyle}>
+                              <option value="">Categoría origen</option>
+                              {sourceTransferCategories.map(cat => <option key={cat.id} value={cat.id}>{cat.emoji} {cat.name}</option>)}
+                            </select>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#d4d4d8' }}>
+                              <input type="checkbox" checked={sourceReceivable} onChange={e => setSourceReceivable(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
+                              Gasto por cobrar
+                            </label>
+                            {sourceReceivable && (
+                              <input aria-label="Persona o deudor" value={receivableText} onChange={e => { setReceivableText(e.target.value); clearFieldError('receivableText') }} placeholder="¿Quién lo debe pagar?" style={fieldErrors.receivableText ? inputErrorStyle : inputStyle} />
+                            )}
+                          </div>
+                        )}
+                        {fieldErrors.sourceCategoryId && <div style={errorTextStyle}>{fieldErrors.sourceCategoryId}</div>}
+                        {fieldErrors.receivableText && <div style={errorTextStyle}>{fieldErrors.receivableText}</div>}
+                      </div>
+                      <div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#e5e5e5', marginBottom: 6 }}>
+                          <input type="checkbox" checked={destinationReportable} onChange={e => { setDestinationReportable(e.target.checked); clearFieldError('destinationCategoryId') }} style={{ accentColor: '#22c55e' }} />
+                          Destino en reportes
+                        </label>
+                        {destinationReportable && destinationRequiresAccount && (
+                          <select aria-label="Categoría destino" value={destinationCategoryId} onChange={e => { setDestinationCategoryId(e.target.value); clearFieldError('destinationCategoryId') }} style={fieldErrors.destinationCategoryId ? selectErrorStyle : selectStyle}>
+                            <option value="">Categoría destino</option>
+                            {destinationTransferCategories.map(cat => <option key={cat.id} value={cat.id}>{cat.emoji} {cat.name}</option>)}
+                          </select>
+                        )}
+                        {destinationReportable && !destinationRequiresAccount && <div style={{ fontSize: 12, color: '#a1a1aa' }}>El receptor clasificará el destino en revisión.</div>}
+                        {fieldErrors.destinationCategoryId && <div style={errorTextStyle}>{fieldErrors.destinationCategoryId}</div>}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: '#a1a1aa', marginTop: 8 }}>Afecta solo reportes y flujo de caja; los saldos se actualizan igual.</div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#a1a1aa', backgroundColor: '#111', border: '1px solid #2a2a2a', borderRadius: 10, padding: '10px 12px' }}>
+                    Transferencia dentro del mismo Space: operacional, no aparece en reportes.
                   </div>
                 )}
 

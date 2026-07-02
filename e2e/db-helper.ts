@@ -54,6 +54,24 @@ export async function createSpaceForUser(userId: string, name: string, emoji = '
     INSERT INTO space_memberships (id, space_id, user_id, role, created_at)
     VALUES (${testId('sm')}, ${id}, ${userId}, 'owner', ${now})
   `
+
+  // Mirror the production createSpace action: new Spaces start with a copy
+  // of the owner's Personal categories so reportable inter-space sides can
+  // be explicitly classified in E2E flows that bypass server actions.
+  const personalSpaceId = await getPersonalSpaceId(userId)
+  const sourceCategories = await sql`
+    SELECT name, emoji
+    FROM categories
+    WHERE space_id = ${personalSpaceId}
+    ORDER BY name
+  `
+  for (const category of sourceCategories) {
+    await sql`
+      INSERT INTO categories (id, space_id, created_by_user_id, name, emoji, created_at, updated_at)
+      VALUES (${testId('cat')}, ${id}, ${userId}, ${category.name}, ${category.emoji}, ${now}, ${now})
+    `
+  }
+
   return id
 }
 
@@ -144,15 +162,12 @@ export async function getReportTotalsForSpace(spaceId: string): Promise<{ totalI
     FROM movements m
     WHERE m.space_id = ${spaceId}
       AND m.needs_review = false
+      AND m.reportable = true
       AND (m.receivable = false OR m.receivable IS NULL)
       AND m.receivable_id IS NULL
       AND (m.emergency = false OR m.emergency IS NULL)
       AND (m.loan = false OR m.loan IS NULL)
       AND m.loan_id IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM transfers t
-        WHERE t.source_movement_id = m.id OR t.destination_movement_id = m.id
-      )
   `
   return {
     totalIncome: Number(rows[0]?.total_income ?? 0),
@@ -167,6 +182,8 @@ export async function getMovementWorkflowState(spaceId: string, nameLike: string
   amount: number
   type: 'income' | 'expense'
   needsReview: boolean
+  reportable: boolean
+  categoryId: string | null
   receivableId: string | null
   receivableSettlementRole: 'receivable' | 'outgoing' | 'incoming' | null
 } | null> {
@@ -177,6 +194,8 @@ export async function getMovementWorkflowState(spaceId: string, nameLike: string
       m.amount,
       m.type,
       m.needs_review,
+      m.reportable,
+      m.category_id,
       m.receivable_id,
       CASE
         WHEN rs.receivable_id = m.id THEN 'receivable'
@@ -202,6 +221,8 @@ export async function getMovementWorkflowState(spaceId: string, nameLike: string
     amount: Number(row.amount),
     type: row.type,
     needsReview: Boolean(row.needs_review),
+    reportable: Boolean(row.reportable),
+    categoryId: row.category_id ?? null,
     receivableId: row.receivable_id ?? null,
     receivableSettlementRole: row.receivable_settlement_role ?? null,
   }
@@ -349,7 +370,7 @@ export async function seedTransferMovement(userId: string, accountId: string, op
   await sql`
     INSERT INTO movements (
       id, space_id, created_by_user_id, account_id, name, date, amount, type,
-      needs_review, currency, receivable, received,
+      needs_review, reportable, currency, receivable, received,
       created_at, updated_at
     )
     VALUES (
@@ -362,6 +383,7 @@ export async function seedTransferMovement(userId: string, accountId: string, op
       ${opts.amount},
       ${opts.type},
       false,
+      false,
       'CLP',
       false,
       false,
@@ -373,7 +395,7 @@ export async function seedTransferMovement(userId: string, accountId: string, op
   await sql`
     INSERT INTO movements (
       id, space_id, created_by_user_id, account_id, name, date, amount, type,
-      needs_review, currency, receivable, received,
+      needs_review, reportable, currency, receivable, received,
       created_at, updated_at
     )
     VALUES (
@@ -385,6 +407,7 @@ export async function seedTransferMovement(userId: string, accountId: string, op
       ${opts.date},
       ${opts.amount},
       ${pairType},
+      false,
       false,
       'CLP',
       false,
@@ -417,11 +440,11 @@ export async function seedPendingTransfer(userId: string, sourceAccountId: strin
   await sql`
     INSERT INTO movements (
       id, space_id, created_by_user_id, account_id, name, date, amount, type,
-      needs_review, currency, receivable, received, created_at, updated_at
+      needs_review, reportable, currency, receivable, received, created_at, updated_at
     )
     VALUES
-      (${sourceMovementId}, ${spaceId}, ${userId}, ${sourceAccountId}, ${`${name} salida`}, ${date}, ${opts.amount}, 'expense', true, 'CLP', false, false, ${now}, ${now}),
-      (${destinationMovementId}, ${spaceId}, ${userId}, ${destinationAccountId}, ${`${name} entrada`}, ${date}, ${opts.amount}, 'income', true, 'CLP', false, false, ${now}, ${now})
+      (${sourceMovementId}, ${spaceId}, ${userId}, ${sourceAccountId}, ${`${name} salida`}, ${date}, ${opts.amount}, 'expense', true, false, 'CLP', false, false, ${now}, ${now}),
+      (${destinationMovementId}, ${spaceId}, ${userId}, ${destinationAccountId}, ${`${name} entrada`}, ${date}, ${opts.amount}, 'income', true, false, 'CLP', false, false, ${now}, ${now})
   `
 
   await sql`
@@ -746,11 +769,11 @@ export async function seedInterspaceTransfer(userId: string, opts: {
   await sql`
     INSERT INTO movements (
       id, space_id, created_by_user_id, account_id, name, date, amount, type,
-      needs_review, currency, receivable, received, created_at, updated_at
+      needs_review, reportable, currency, receivable, received, created_at, updated_at
     )
     VALUES
-      (${sourceMovementId}, ${opts.sourceSpaceId}, ${userId}, ${opts.sourceAccountId}, ${`Transferencia a ${destinationSpaceName}${note}`}, ${date}, ${opts.amount}, 'expense', false, 'CLP', false, false, ${now}, ${now}),
-      (${destinationMovementId}, ${opts.destinationSpaceId}, ${userId}, ${opts.destinationAccountId}, ${`Transferencia desde ${sourceSpaceName}${note}`}, ${date}, ${opts.amount}, 'income', false, 'CLP', false, false, ${now}, ${now})
+      (${sourceMovementId}, ${opts.sourceSpaceId}, ${userId}, ${opts.sourceAccountId}, ${`Transferencia a ${destinationSpaceName}${note}`}, ${date}, ${opts.amount}, 'expense', false, false, 'CLP', false, false, ${now}, ${now}),
+      (${destinationMovementId}, ${opts.destinationSpaceId}, ${userId}, ${opts.destinationAccountId}, ${`Transferencia desde ${sourceSpaceName}${note}`}, ${date}, ${opts.amount}, 'income', false, false, 'CLP', false, false, ${now}, ${now})
   `
 
   await sql`

@@ -13,11 +13,13 @@ export default async function AddPage() {
     .where(eq(accounts.spaceId, space.id))
     .orderBy(accounts.bankName)
 
-  const userCategories = await db
+  const allCategories = await db
     .select()
     .from(categories)
-    .where(eq(categories.spaceId, space.id))
+    .where(sql`${categories.spaceId} IN (${sql.join(availableSpaces.map((s) => sql`${s.id}`), sql`, `)})`)
     .orderBy(categories.name)
+
+  const userCategories = allCategories.filter((category) => category.spaceId === space.id)
 
   const transferAccounts = await db
     .select()
@@ -70,6 +72,7 @@ export default async function AddPage() {
       ]}
       currentSpaceId={space.id}
       categories={userCategories}
+      transferCategories={allCategories}
     />
   )
 }

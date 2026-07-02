@@ -20,6 +20,7 @@ interface MovementWithCategory {
   amountUsd: number | null
   exchangeRate: number | null
   type: 'income' | 'expense'
+  reportable: boolean
   createdAt: string  // ISO string (serialized from Date for client component)
   updatedAt: string  // ISO string (serialized from Date for client component)
   categoryName: string | null
@@ -196,6 +197,11 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
             )}
             {isTransfer && m.transferOtherSpaceName && (
               <span style={{ color: '#60a5fa' }}> · {m.type === 'expense' ? 'a' : 'desde'} {m.transferOtherSpaceName}</span>
+            )}
+            {isTransfer && (
+              <span style={{ color: m.reportable ? '#22c55e' : '#a1a1aa' }}>
+                {' '}· {m.reportable ? `${m.type === 'expense' ? 'gasto' : 'ingreso'} reportable${m.categoryName ? ` · ${m.categoryName}` : ''}` : 'operacional'}
+              </span>
             )}
             {m.accountBankName && (
               <span style={{ color: isTransfer ? '#60a5fa' : m.accountColor || undefined }}> · {m.accountEmoji || ''} {m.accountBankName} ···{m.accountLastFour}</span>

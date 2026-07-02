@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount, createMovement, screenshot } from './helpers'
+import { movementLedger } from '../src/lib/domain/movement-ledger'
 import {
   countMovementsInSpace,
   getClpAccountBalance,
@@ -19,6 +20,8 @@ import {
   seedReceivable,
   seedUnlinkedIncome,
 } from './db-helper'
+
+process.env.DATABASE_URL ||= 'postgresql://127.0.0.1:5432/wallit_e2e'
 
 async function registerUser(page: Page): Promise<string> {
   const email = `e2e-recv-adv-${Date.now()}-${Math.random().toString(36).slice(2, 5)}@wallit.app`
@@ -48,7 +51,7 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     // (Consolidated from edit-movement.spec.ts)
     await registerAndLogin(page)
     await ensureAccount(page)
-    await createMovement(page, { name: 'Cena con amigos', amount: '40000' })
+    await createMovement(page, { name: 'Cena con amigos', amount: '40000', categoryName: 'Home' })
 
     // 1. Navigate to home and verify movement exists
     await page.goto('/')
@@ -453,6 +456,71 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     expect(amounts?.sourceAmount).toBe(25_000_000)
     expect(amounts?.destinationAmount).toBe(25_000_000)
     expect(await countMovementsInSpace(personalSpaceId, 'Cena pagada por Casa')).toBe(1)
+
+    const blockedUpdate = await movementLedger.updateTransfer(casaSpaceId, userId, transfer.transferId, {
+      fromAccountId: personalAccountId,
+      toAccountId: casaAccountId,
+      destinationSpaceId: casaSpaceId,
+      fromAmount: 25_000_000,
+      toAmount: 25_000_000,
+      fromCurrency: 'CLP',
+      toCurrency: 'CLP',
+      date: new Date().toISOString().slice(0, 10),
+      note: 'mutación bloqueada',
+      source: { reportable: false },
+      destination: { reportable: false },
+    })
+    expect(blockedUpdate.success).toBe(false)
+    expect(blockedUpdate.error).toContain('por cobrar')
+
+    const blockedDelete = await movementLedger.deleteTransfer(casaSpaceId, userId, transfer.transferId)
+    expect(blockedDelete.success).toBe(false)
+    expect(blockedDelete.error).toContain('por cobrar')
+  })
+
+  test('undoing a full transfer settlement restores transfer reportability and categories', async ({ page }) => {
+    const email = await registerUser(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+
+    const personalSpaceId = await getPersonalSpaceId(userId)
+    const casaSpaceId = await createSpaceForUser(userId, 'Casa Restore Cobro', '🏠')
+    const personalAccountId = await createRegularAccount(userId, { bankName: 'Restore Personal', lastFourDigits: '3131', initialBalance: 100_000_000, spaceId: personalSpaceId })
+    const casaAccountId = await createRegularAccount(userId, { bankName: 'Restore Casa', lastFourDigits: '4242', initialBalance: 0, spaceId: casaSpaceId })
+    const personalCategoryId = await seedCategory(userId, { name: 'Restore gasto', emoji: '🧾', spaceId: personalSpaceId })
+    const casaCategoryId = await seedCategory(userId, { name: 'Restore ingreso', emoji: '💰', spaceId: casaSpaceId })
+    const receivableId = await seedReceivable(userId, casaAccountId, 'Cena restore completa', 30_000_000, casaSpaceId)
+
+    const createdTransfer = await movementLedger.recordTransfer(personalSpaceId, userId, {
+      fromAccountId: personalAccountId,
+      toAccountId: casaAccountId,
+      destinationSpaceId: casaSpaceId,
+      fromAmount: 30_000_000,
+      toAmount: 30_000_000,
+      fromCurrency: 'CLP',
+      toCurrency: 'CLP',
+      date: new Date().toISOString().slice(0, 10),
+      note: 'Restore clasificada',
+      source: { reportable: true, categoryId: personalCategoryId },
+      destination: { reportable: true, categoryId: casaCategoryId },
+    })
+    expect(createdTransfer.success).toBe(true)
+
+    const destinationMovementId = await getMovementIdByName(casaSpaceId, 'Restore clasificada')
+    if (!destinationMovementId) throw new Error('Destination movement not found')
+    const settled = await movementLedger.settleReceivableWithExistingMovement(casaSpaceId, userId, receivableId, destinationMovementId)
+    expect(settled.success).toBe(true)
+    expect(await getTransferMovementAmounts(createdTransfer.transferId!)).toBeNull()
+
+    const settlementOutgoingId = await getMovementIdByName(personalSpaceId, 'Cena restore completa')
+    if (!settlementOutgoingId) throw new Error('Settlement outgoing movement not found')
+    const undone = await movementLedger.deletePendingMovement(personalSpaceId, userId, settlementOutgoingId)
+    expect(undone.success).toBe(true)
+
+    const restoredSource = await getMovementWorkflowState(personalSpaceId, 'Restore clasificada')
+    const restoredDestination = await getMovementWorkflowState(casaSpaceId, 'Restore clasificada')
+    expect(restoredSource).toMatchObject({ reportable: true, categoryId: personalCategoryId, type: 'expense', needsReview: false })
+    expect(restoredDestination).toMatchObject({ reportable: true, categoryId: casaCategoryId, type: 'income', needsReview: false })
   })
 
   test('mark as received with new income (cash)', async ({ page }) => {

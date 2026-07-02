@@ -13,6 +13,13 @@ export type TransferActionResult = {
   transferId?: string
 }
 
+export type TransferSideClassificationInput = {
+  reportable?: boolean
+  categoryId?: string | null
+  receivable?: boolean
+  receivableText?: string | null
+}
+
 interface CreateTransferParams {
   fromAccountId: string
   toAccountId?: string | null
@@ -23,6 +30,8 @@ interface CreateTransferParams {
   toCurrency: 'CLP' | 'USD'
   date: string
   note?: string
+  source?: TransferSideClassificationInput
+  destination?: TransferSideClassificationInput
 }
 
 function revalidateTransferPaths() {
@@ -34,6 +43,15 @@ function revalidateTransferPaths() {
 
 export async function recordTransfer(params: CreateTransferParams): Promise<TransferActionResult> {
   const { user: session, space } = await getCurrentSpace()
+  const destinationSpaceId = params.destinationSpaceId || space.id
+  const isInterSpace = destinationSpaceId !== space.id
+  if (isInterSpace) {
+    const sourceReportable = params.source?.reportable !== false
+    const destinationReportable = params.destination?.reportable !== false
+    if (sourceReportable && !params.source?.categoryId) return { success: false, error: 'El origen reportable requiere categoría' }
+    if (sourceReportable && params.source?.receivable && !params.source.receivableText?.trim()) return { success: false, error: 'Indica quién debe pagar este gasto' }
+    if (params.toAccountId && destinationReportable && !params.destination?.categoryId) return { success: false, error: 'El destino reportable requiere categoría' }
+  }
   const result = await movementLedger.recordTransfer(space.id, session.id, params)
   if (result.success) revalidateTransferPaths()
   return result
@@ -91,6 +109,9 @@ export async function getTransferByMovementId(movementId: string) {
       accountLastFour: accounts.lastFourDigits,
       accountCurrency: accounts.currency,
       accountEmoji: accounts.emoji,
+      categoryId: movements.categoryId,
+      reportable: movements.reportable,
+      receivable: movements.receivable,
     })
     .from(movements)
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, movements.spaceId)))
@@ -152,10 +173,25 @@ interface TransformToTransferParams {
   toAmount: number
   toCurrency: 'CLP' | 'USD'
   note?: string
+  sourceReportable?: boolean
+  sourceCategoryId?: string | null
+  sourceReceivable?: boolean
+  sourceReceivableText?: string | null
+  destinationReportable?: boolean
+  destinationCategoryId?: string | null
 }
 
 export async function transformToTransfer(params: TransformToTransferParams): Promise<TransferActionResult> {
   const { user: session, space } = await getCurrentSpace()
+  const destinationSpaceId = params.destinationSpaceId || space.id
+  const isInterSpace = destinationSpaceId !== space.id
+  if (isInterSpace) {
+    const sourceReportable = params.sourceReportable !== false
+    const destinationReportable = params.destinationReportable !== false
+    if (sourceReportable && !params.sourceCategoryId) return { success: false, error: 'El origen reportable requiere categoría' }
+    if (sourceReportable && params.sourceReceivable && !params.sourceReceivableText?.trim()) return { success: false, error: 'Indica quién debe pagar este gasto' }
+    if (destinationReportable && !params.destinationCategoryId) return { success: false, error: 'El destino reportable requiere categoría' }
+  }
   const result = await movementLedger.transformToTransfer(space.id, session.id, {
     ...params,
     source: {
@@ -169,6 +205,15 @@ export async function transformToTransfer(params: TransformToTransferParams): Pr
 
 export async function confirmPendingAsTransfer(params: TransformToTransferParams): Promise<TransferActionResult> {
   const { user: session, space } = await getCurrentSpace()
+  const destinationSpaceId = params.destinationSpaceId || space.id
+  const isInterSpace = destinationSpaceId !== space.id
+  if (isInterSpace) {
+    const sourceReportable = params.sourceReportable !== false
+    const destinationReportable = params.destinationReportable !== false
+    if (sourceReportable && !params.sourceCategoryId) return { success: false, error: 'El origen reportable requiere categoría' }
+    if (sourceReportable && params.sourceReceivable && !params.sourceReceivableText?.trim()) return { success: false, error: 'Indica quién debe pagar este gasto' }
+    if (destinationReportable && !params.destinationCategoryId) return { success: false, error: 'El destino reportable requiere categoría' }
+  }
   const result = await movementLedger.confirmPendingAsTransfer(space.id, session.id, {
     ...params,
     source: {
