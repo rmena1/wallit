@@ -98,6 +98,36 @@ async function selectOptionContaining(select: Locator, text: string) {
   await select.selectOption(value)
 }
 
+async function openCategoryFilter(page: Page) {
+  const trigger = page.getByTestId('reports-category-filter-trigger')
+  await trigger.click()
+  await expect(page.getByTestId('reports-category-filter-panel')).toBeVisible({ timeout: REPORT_TIMEOUT })
+}
+
+async function setCategorySelection(page: Page, selection: string[] | 'all') {
+  const selectedNames = selection === 'all' ? null : new Set(selection)
+  await openCategoryFilter(page)
+
+  const options = page.getByTestId('reports-category-filter-option')
+  const count = await options.count()
+
+  for (let index = 0; index < count; index += 1) {
+    const option = options.nth(index)
+    const name = await option.getAttribute('data-category-name')
+    if (!name) continue
+
+    const checkbox = option.locator('input[type="checkbox"]')
+    const shouldBeChecked = selectedNames === null || selectedNames.has(name)
+    const isChecked = await checkbox.isChecked()
+
+    if (isChecked !== shouldBeChecked) {
+      await checkbox.click()
+    }
+  }
+
+  await page.getByTestId('reports-category-filter-trigger').click()
+}
+
 async function openReports(page: Page) {
   await page.goto('/reports')
   await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: REPORT_TIMEOUT })
@@ -447,7 +477,7 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     }, { timeout: REPORT_TIMEOUT }).toBe(150_000)
     await screenshot(page, 'reports-balance-01-all-accounts')
 
-    const accountSelect = page.locator('select').nth(1)
+    const accountSelect = page.locator('select').first()
     await selectOptionContaining(accountSelect, 'BCI')
     await expect.poll(async () => {
       const chart = await readBalanceChart(page)
@@ -535,10 +565,11 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     await selectPreset(page, 'Mes')
     await expectMovementCount(page, 4)
 
-    const categorySelect = page.locator('select').first()
-    await selectOptionContaining(categorySelect, 'Comida')
+    await setCategorySelection(page, ['Comida'])
+    await expect(page.getByTestId('reports-category-filter-trigger')).toContainText('Comida')
     await expectMovementCount(page, 2)
     await expect(page.getByText('Sin ingresos en este período')).toBeVisible()
+    await screenshot(page, 'reports-category-multiselect-01-comida-only')
 
     await openCategorySheet(page, 'Comida')
     await expect(page.getByText('Desayuno')).toBeVisible()
@@ -546,10 +577,23 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     await expect(page.getByText('Uber')).toHaveCount(0)
     await closeCategorySheet(page)
 
-    await categorySelect.selectOption('')
+    await setCategorySelection(page, ['Comida', 'Transporte'])
+    await expect(page.getByTestId('reports-category-filter-trigger')).toContainText('2 categorías')
+    await expectMovementCount(page, 3)
+    await expect(categoryRow(page, 'Comida')).toBeVisible()
+    await expect(categoryRow(page, 'Transporte')).toBeVisible()
+    await screenshot(page, 'reports-category-multiselect-02-two-categories')
+
+    await setCategorySelection(page, [])
+    await expect(page.getByTestId('reports-category-filter-trigger')).toContainText('Sin categorías')
+    await expect(page.getByText('Sin datos en este período')).toBeVisible({ timeout: REPORT_TIMEOUT })
+    await screenshot(page, 'reports-category-multiselect-03-none-selected')
+
+    await setCategorySelection(page, 'all')
+    await expect(page.getByTestId('reports-category-filter-trigger')).toContainText('Todas las categorías')
     await expectMovementCount(page, 4)
 
-    const accountSelect = page.locator('select').nth(1)
+    const accountSelect = page.locator('select').first()
     await selectOptionContaining(accountSelect, 'Santander')
     await expectMovementCount(page, 1)
     await expect(page.getByText('Sin ingresos en este período')).toBeVisible()
@@ -586,11 +630,10 @@ test.describe('Reports — Advanced Calendar & Filters', () => {
     await expect(page.getByRole('heading', { name: '📈 Ingresos' })).toBeVisible()
     await expect(page.getByText('Sin ingresos en este período')).toBeVisible()
 
-    const categorySelect = page.locator('select').first()
-    await selectOptionContaining(categorySelect, 'Entretenimiento')
+    await setCategorySelection(page, ['Entretenimiento'])
     await expect(page.getByText('Sin datos en este período')).toBeVisible({ timeout: REPORT_TIMEOUT })
 
-    await categorySelect.selectOption('')
+    await setCategorySelection(page, 'all')
     await expectMovementCount(page, 2)
     await expect(page.getByText('Sin ingresos en este período')).toBeVisible()
 

@@ -413,12 +413,18 @@ interface ReportsPageProps {
 
 type CategorySpendingItem = ReportData['categorySpending'][number]
 
+function arraysEqual(a: string[], b: string[]) {
+  return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
 export function ReportsPage({ initialData, initialStartDate, initialEndDate }: ReportsPageProps) {
   const [periodSelection, setPeriodSelection] = useState<PeriodSelection>(() =>
     inferInitialPeriodSelection(initialStartDate, initialEndDate)
   )
   const [showPicker, setShowPicker] = useState(false)
-  const [categoryId, setCategoryId] = useState('')
+  const [showCategoryFilter, setShowCategoryFilter] = useState(false)
+  const [knownCategoryIds, setKnownCategoryIds] = useState<string[]>(() => initialData.categories.map(category => category.id))
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>(() => initialData.categories.map(category => category.id))
   const [accountId, setAccountId] = useState('')
   const [data, setData] = useState<ReportData | null>(initialData)
   const [loading, setLoading] = useState(false)
@@ -489,9 +495,26 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
     const loadData = async () => {
       setLoading(true)
       try {
-        const nextData = await getReportData(startDate, endDate, categoryId || undefined, accountId || undefined)
+        const allKnownCategoriesSelected = knownCategoryIds.length === selectedCategoryIds.length
+          && knownCategoryIds.every(categoryId => selectedCategoryIds.includes(categoryId))
+        const categoryFilterIds = allKnownCategoriesSelected
+          ? undefined
+          : selectedCategoryIds
+        const nextData = await getReportData(startDate, endDate, categoryFilterIds, accountId || undefined)
         if (cancelled) return
+        const nextCategoryIds = nextData.categories.map(category => category.id)
         setData(nextData)
+        setKnownCategoryIds(currentKnownIds => arraysEqual(currentKnownIds, nextCategoryIds) ? currentKnownIds : nextCategoryIds)
+        setSelectedCategoryIds(currentSelectedIds => {
+          const hadEveryKnownCategorySelected = knownCategoryIds.every(categoryId => currentSelectedIds.includes(categoryId))
+          if (hadEveryKnownCategorySelected) {
+            return arraysEqual(currentSelectedIds, nextCategoryIds) ? currentSelectedIds : nextCategoryIds
+          }
+
+          const nextCategoryIdSet = new Set(nextCategoryIds)
+          const reconciledCategoryIds = currentSelectedIds.filter(categoryId => nextCategoryIdSet.has(categoryId))
+          return arraysEqual(currentSelectedIds, reconciledCategoryIds) ? currentSelectedIds : reconciledCategoryIds
+        })
       } catch (error) {
         if (cancelled) return
         console.error(error)
@@ -506,7 +529,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
     return () => {
       cancelled = true
     }
-  }, [startDate, endDate, categoryId, accountId])
+  }, [startDate, endDate, selectedCategoryIds, knownCategoryIds, accountId])
 
   const closeCategorySheet = useCallback(() => {
     setSelectedCategory(null)
@@ -592,6 +615,34 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
       }
     })
   }
+
+  const allKnownCategoriesSelected = knownCategoryIds.length === selectedCategoryIds.length
+    && knownCategoryIds.every(categoryId => selectedCategoryIds.includes(categoryId))
+  const selectedCategoryCount = selectedCategoryIds.length
+  const categoryFilterLabel = useMemo(() => {
+    if (!data || data.categories.length === 0 || allKnownCategoriesSelected) {
+      return 'Todas las categorías'
+    }
+
+    if (selectedCategoryCount === 0) {
+      return 'Sin categorías'
+    }
+
+    if (selectedCategoryCount === 1) {
+      const selectedId = selectedCategoryIds[0]
+      const selected = data.categories.find(category => category.id === selectedId)
+      return selected ? `${selected.emoji} ${selected.name}` : '1 categoría'
+    }
+
+    return `${selectedCategoryCount} categorías`
+  }, [allKnownCategoriesSelected, data, selectedCategoryCount, selectedCategoryIds])
+
+  const toggleCategory = useCallback((categoryId: string) => {
+    setSelectedCategoryIds(current => current.includes(categoryId)
+      ? current.filter(id => id !== categoryId)
+      : [...current, categoryId]
+    )
+  }, [])
 
   const expenseChart = useMemo(() =>
     data ? buildExpenseChart(data.dailyData, startDate, endDate) : { data: [], trendTotal: null },
@@ -758,13 +809,94 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
 
         {/* Category & Account Filters */}
         {data && (
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            <select value={categoryId} onChange={e => setCategoryId(e.target.value)} style={selectStyle}>
-              <option value="">Todas las categorías</option>
-              {data.categories.map(c => (
-                <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
-              ))}
-            </select>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 8, marginBottom: 16, alignItems: 'start' }}>
+            <div style={{ position: 'relative', minWidth: 0 }}>
+              <button
+                type="button"
+                data-testid="reports-category-filter-trigger"
+                data-all-categories-selected={allKnownCategoriesSelected ? 'true' : 'false'}
+                data-selected-category-count={selectedCategoryCount}
+                aria-expanded={showCategoryFilter}
+                aria-controls="reports-category-filter-panel"
+                onClick={() => setShowCategoryFilter(current => !current)}
+                style={{
+                  ...selectStyle,
+                  width: '100%',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  minHeight: 36,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {categoryFilterLabel}
+              </button>
+
+              {showCategoryFilter && (
+                <div
+                  id="reports-category-filter-panel"
+                  data-testid="reports-category-filter-panel"
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    left: 0,
+                    right: 0,
+                    zIndex: 20,
+                    backgroundColor: '#18181b',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: 14,
+                    boxShadow: '0 16px 36px rgba(0,0,0,0.35)',
+                    padding: 10,
+                    maxHeight: 280,
+                    overflowY: 'auto',
+                  }}
+                >
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#a1a1aa', margin: '2px 2px 8px' }}>
+                    Categorías seleccionadas
+                  </div>
+                  {data.categories.length === 0 ? (
+                    <div style={{ fontSize: 13, color: '#71717a', padding: '10px 2px' }}>
+                      No hay categorías creadas
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {data.categories.map(category => {
+                        const checked = selectedCategoryIds.includes(category.id)
+                        return (
+                          <label
+                            key={category.id}
+                            data-testid="reports-category-filter-option"
+                            data-category-name={category.name}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              minHeight: 34,
+                              padding: '7px 8px',
+                              borderRadius: 10,
+                              cursor: 'pointer',
+                              backgroundColor: checked ? '#22c55e18' : 'transparent',
+                              color: checked ? '#e5e5e5' : '#a1a1aa',
+                              fontSize: 13,
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleCategory(category.id)}
+                              style={{ accentColor: '#22c55e' }}
+                            />
+                            <span style={{ fontSize: 15 }}>{category.emoji}</span>
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{category.name}</span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <select value={accountId} onChange={e => setAccountId(e.target.value)} style={selectStyle}>
               <option value="">Todas las cuentas</option>
               {data.accounts.map(a => (

@@ -1,7 +1,7 @@
 'use server'
 
 import { db, movements, categories, accounts } from '@/lib/db'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { reportableMovementSqlFilters } from '@/lib/domain/reporting'
@@ -29,13 +29,19 @@ function buildReportMovementFilters(
   spaceId: string,
   options: {
     accountId?: string
-    categoryId?: string
+    categoryIds?: string[]
   } = {},
 ) {
   const filters = reportableMovementSqlFilters(spaceId)
 
   if (options.accountId) filters.push(sql`${movements.accountId} = ${options.accountId}`)
-  if (options.categoryId) filters.push(sql`${movements.categoryId} = ${options.categoryId}`)
+  if (options.categoryIds) {
+    if (options.categoryIds.length === 0) {
+      filters.push(sql`1 = 0`)
+    } else {
+      filters.push(inArray(movements.categoryId, options.categoryIds))
+    }
+  }
 
   return filters
 }
@@ -60,7 +66,7 @@ function buildBalanceMovementFilters(
 export async function getReportData(
   startDate: string,
   endDate: string,
-  categoryId?: string,
+  categoryIds?: string[],
   accountId?: string,
 ): Promise<ReportData> {
   const { user: session, space } = await getCurrentSpace()
@@ -83,7 +89,7 @@ export async function getReportData(
   }
 
   const reportFilters = [
-    ...buildReportMovementFilters(space.id, { accountId, categoryId }),
+    ...buildReportMovementFilters(space.id, { accountId, categoryIds }),
     sql`${movements.date} >= ${startDate}`,
     sql`${movements.date} <= ${endDate}`,
   ]
