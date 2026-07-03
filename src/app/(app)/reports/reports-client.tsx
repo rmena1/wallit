@@ -644,6 +644,16 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
     )
   }, [])
 
+  const toggleAllCategories = useCallback(() => {
+    setSelectedCategoryIds(current => {
+      const nextAllCategoryIds = data?.categories.map(category => category.id) ?? []
+      const hasEveryCategorySelected = nextAllCategoryIds.length === current.length
+        && nextAllCategoryIds.every(categoryId => current.includes(categoryId))
+
+      return hasEveryCategorySelected ? [] : nextAllCategoryIds
+    })
+  }, [data?.categories])
+
   const expenseChart = useMemo(() =>
     data ? buildExpenseChart(data.dailyData, startDate, endDate) : { data: [], trendTotal: null },
     [data, startDate, endDate])
@@ -861,6 +871,34 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <button
+                        type="button"
+                        data-testid="reports-category-filter-toggle-all"
+                        data-all-categories-selected={allKnownCategoriesSelected ? 'true' : 'false'}
+                        onClick={toggleAllCategories}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 8,
+                          minHeight: 34,
+                          padding: '7px 8px',
+                          marginBottom: 4,
+                          borderRadius: 10,
+                          border: '1px solid #2a2a2a',
+                          cursor: 'pointer',
+                          backgroundColor: '#111',
+                          color: '#d4d4d8',
+                          fontSize: 13,
+                          fontWeight: 600,
+                          textAlign: 'left',
+                        }}
+                      >
+                        <span>{allKnownCategoriesSelected ? 'Deseleccionar todas' : 'Seleccionar todas'}</span>
+                        <span style={{ color: '#71717a', fontSize: 12 }}>
+                          {selectedCategoryCount}/{data.categories.length}
+                        </span>
+                      </button>
                       {data.categories.map(category => {
                         const checked = selectedCategoryIds.includes(category.id)
                         return (
