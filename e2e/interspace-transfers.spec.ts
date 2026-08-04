@@ -17,6 +17,7 @@ import {
   removeUserFromSpace,
   seedCategory,
   seedConfirmedWorkflowMovement,
+  seedReceivable,
   seedReviewMovement,
   seedUsdReviewMovement,
   seedUsdToClpRate,
@@ -280,6 +281,98 @@ test.describe('Inter-Space Transfers', () => {
       destination: { reportable: true, categoryId: casaCategoryId },
     })
     expect(classified).toMatchObject({ success: true })
+  })
+
+  test('shows a receivable Inter-Space Transfer with the receivable style and payment action', async ({ page }) => {
+    const email = await registerUser(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found')
+
+    const personalSpaceId = await getPersonalSpaceId(userId)
+    const casaSpaceId = await createSpaceForUser(userId, 'Casa UI Cobro', '🏠')
+    const personalAccountId = await createRegularAccount(userId, {
+      bankName: 'UI Personal',
+      lastFourDigits: '3030',
+      initialBalance: 100_000_000,
+      spaceId: personalSpaceId,
+    })
+    const casaAccountId = await createRegularAccount(userId, {
+      bankName: 'UI Casa',
+      lastFourDigits: '4040',
+      initialBalance: 0,
+      spaceId: casaSpaceId,
+    })
+    const personalCategoryId = await seedCategory(userId, {
+      name: 'UI gasto',
+      emoji: '🧾',
+      spaceId: personalSpaceId,
+    })
+    const casaCategoryId = await seedCategory(userId, {
+      name: 'UI ingreso',
+      emoji: '💰',
+      spaceId: casaSpaceId,
+    })
+    await seedReceivable(userId, personalAccountId, 'Cobro normal UI', 1_000_000, personalSpaceId)
+
+    const transfer = await recordTransferDirect(personalSpaceId, userId, {
+      fromAccountId: personalAccountId,
+      toAccountId: casaAccountId,
+      destinationSpaceId: casaSpaceId,
+      fromAmount: 20_000,
+      toAmount: 20_000,
+      fromCurrency: 'CLP',
+      toCurrency: 'CLP',
+      date: new Date().toISOString().slice(0, 10),
+      note: 'Transfer por cobrar UI',
+      source: {
+        reportable: true,
+        categoryId: personalCategoryId,
+        receivable: true,
+        receivableText: 'Cobrar transferencia UI',
+      },
+      destination: { reportable: true, categoryId: casaCategoryId },
+    })
+    expect(transfer).toMatchObject({ success: true })
+
+    await page.goto('/')
+    const normalCard = page.getByRole('button', { name: /Editar movimiento Cobro normal UI/i })
+    const transferCard = page.getByRole('button', { name: /Editar movimiento Cobrar transferencia UI/i })
+    await expect(normalCard).toBeVisible({ timeout: 10_000 })
+    await expect(transferCard).toBeVisible({ timeout: 10_000 })
+
+    await expect(page.getByRole('button', {
+      name: /Marcar como cobrado Cobrar transferencia UI/i,
+    })).toBeVisible()
+
+    const normalCardContainer = normalCard.locator('..').locator('..')
+    const transferCardContainer = transferCard.locator('..').locator('..')
+    const normalStyle = await normalCardContainer.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return { backgroundColor: style.backgroundColor, borderColor: style.borderColor }
+    })
+    const transferStyle = await transferCardContainer.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return { backgroundColor: style.backgroundColor, borderColor: style.borderColor }
+    })
+    expect(transferStyle).toEqual(normalStyle)
+
+    const transferIcon = transferCard.getByText('↔️', { exact: true })
+    await expect(transferIcon).toBeVisible()
+    const paymentAction = page.getByRole('button', {
+      name: /Marcar como cobrado Cobrar transferencia UI/i,
+    })
+    const [actionBox, iconBox] = await Promise.all([paymentAction.boundingBox(), transferIcon.boundingBox()])
+    expect(actionBox).not.toBeNull()
+    expect(iconBox).not.toBeNull()
+    expect(actionBox!.x + actionBox!.width).toBeLessThan(iconBox!.x)
+
+    await paymentAction.click()
+    const paymentDialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
+    await expect(paymentDialog).toBeVisible()
+    await paymentDialog.getByRole('button', { name: /Confirmar/i }).click()
+    await expect(paymentDialog).not.toBeVisible({ timeout: 10_000 })
+    await expect(paymentAction).not.toBeVisible()
+    await expect(transferCardContainer.getByText('✓', { exact: true })).toBeVisible()
   })
 
   test('creates, reports, edits and deletes an Inter-Space Transfer across timelines', async ({ page }) => {
