@@ -150,7 +150,7 @@ Hoy `markAsReceivable()` rechaza cualquier transfer side por `await movementIsTr
   - no tiene dependencias previas;
   - no está ya `receivable`, `emergency` o `loan`.
 
-El settlement/cobranza posterior debe usar los mismos flujos actuales de receivables; no crear flujo especial por venir de transferencia.
+El settlement/cobranza posterior reutiliza la relación de `receivable_settlements`, pero debe preservar la semántica de transferencia: el monto que salda un receivable originado en el source side de una Inter-Space Transfer se materializa como otra Inter-Space Transfer pendiente de revisión, no como un gasto independiente.
 
 ### 6. Split: seguir prohibido para transfer sides
 

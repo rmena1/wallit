@@ -114,6 +114,7 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
   const current = reviewMovements[currentIndex] as PendingMovement | undefined
   const isExistingPendingTransfer = Boolean(current?.transferId)
   const isReceivableSettlementExpense = current?.receivableSettlementRole === 'outgoing'
+  const isReceivableSettlementTransfer = isExistingPendingTransfer && isReceivableSettlementExpense
   const pendingTransferNeedsAccess = isExistingPendingTransfer && current?.transferCanReview === false
   const [formName, setFormName] = useState(current?.name ?? '')
   const [formDate, setFormDate] = useState(current?.date ?? '')
@@ -332,12 +333,12 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
           setLoading(false)
           return
         }
-        if (isInterSpacePending && pendingSourceReportable && pendingSourceReceivable && !pendingSourceReceivableText.trim()) {
+        if (isInterSpacePending && !isReceivableSettlementTransfer && pendingSourceReportable && pendingSourceReceivable && !pendingSourceReceivableText.trim()) {
           setError('Indica quién debe pagar este gasto')
           setLoading(false)
           return
         }
-        if (isInterSpacePending && pendingDestinationReportable && !pendingDestinationCategoryId) {
+        if (isInterSpacePending && !isReceivableSettlementTransfer && pendingDestinationReportable && !pendingDestinationCategoryId) {
           setError('El destino reportable requiere categoría')
           setLoading(false)
           return
@@ -346,10 +347,13 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
           source: {
             reportable: isInterSpacePending ? pendingSourceReportable : false,
             categoryId: pendingSourceCategoryId || null,
-            receivable: isInterSpacePending && pendingSourceReportable ? pendingSourceReceivable : false,
-            receivableText: pendingSourceReceivable ? pendingSourceReceivableText.trim() : null,
+            receivable: isInterSpacePending && !isReceivableSettlementTransfer && pendingSourceReportable ? pendingSourceReceivable : false,
+            receivableText: !isReceivableSettlementTransfer && pendingSourceReceivable ? pendingSourceReceivableText.trim() : null,
           },
-          destination: { reportable: isInterSpacePending ? pendingDestinationReportable : false, categoryId: pendingDestinationCategoryId || null },
+          destination: {
+            reportable: isInterSpacePending && !isReceivableSettlementTransfer ? pendingDestinationReportable : false,
+            categoryId: !isReceivableSettlementTransfer ? pendingDestinationCategoryId || null : null,
+          },
         })
         if (!result.success) {
           setError(result.error || 'Error al aprobar transferencia')
@@ -726,6 +730,15 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
                   <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 3 }}>{current!.transferDestinationMovement?.name ?? 'Movimiento destino'}</div>
                 </div>
               </div>
+              {isReceivableSettlementTransfer && (
+                <div style={{
+                  fontSize: 12, lineHeight: 1.45, color: '#bfdbfe',
+                  backgroundColor: '#172554', border: '1px solid #1d4ed8',
+                  borderRadius: 8, padding: '8px 10px',
+                }}>
+                  Esta transferencia salda un por cobrar. Decide si la salida cuenta como gasto; la entrada permanece operacional.
+                </div>
+              )}
               {current!.transferSourceSpaceId !== current!.transferDestinationSpaceId ? (
                 <div style={{ border: '1px solid #2a2a2a', borderRadius: 10, padding: 10, backgroundColor: '#151515' }}>
                   <div style={{ fontSize: 12, color: '#e5e5e5', fontWeight: 700, marginBottom: 8 }}>Reportabilidad</div>
@@ -741,22 +754,26 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
                             <option value="">Categoría origen</option>
                             {transferCategories.filter(c => c.spaceId === current!.transferSourceSpaceId).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
                           </select>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#d4d4d8' }}>
-                            <input type="checkbox" checked={pendingSourceReceivable} onChange={e => setPendingSourceReceivable(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
-                            Gasto por cobrar
-                          </label>
-                          {pendingSourceReceivable && (
-                            <input aria-label="Persona o deudor" value={pendingSourceReceivableText} onChange={e => setPendingSourceReceivableText(e.target.value)} placeholder="¿Quién lo debe pagar?" style={inputStyle} />
+                          {!isReceivableSettlementTransfer && (
+                            <>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#d4d4d8' }}>
+                                <input type="checkbox" checked={pendingSourceReceivable} onChange={e => setPendingSourceReceivable(e.target.checked)} style={{ accentColor: '#f59e0b' }} />
+                                Gasto por cobrar
+                              </label>
+                              {pendingSourceReceivable && (
+                                <input aria-label="Persona o deudor" value={pendingSourceReceivableText} onChange={e => setPendingSourceReceivableText(e.target.value)} placeholder="¿Quién lo debe pagar?" style={inputStyle} />
+                              )}
+                            </>
                           )}
                         </div>
                       )}
                     </div>
                     <div>
                       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#e5e5e5', marginBottom: 5 }}>
-                        <input type="checkbox" checked={pendingDestinationReportable} onChange={e => setPendingDestinationReportable(e.target.checked)} style={{ accentColor: '#22c55e' }} />
-                        Destino reportable
+                        <input type="checkbox" checked={isReceivableSettlementTransfer ? false : pendingDestinationReportable} disabled={isReceivableSettlementTransfer} onChange={e => setPendingDestinationReportable(e.target.checked)} style={{ accentColor: '#22c55e' }} />
+                        {isReceivableSettlementTransfer ? 'Destino operacional' : 'Destino reportable'}
                       </label>
-                      {pendingDestinationReportable && (
+                      {!isReceivableSettlementTransfer && pendingDestinationReportable && (
                         <select aria-label="Categoría destino transferencia" value={pendingDestinationCategoryId} onChange={e => setPendingDestinationCategoryId(e.target.value)} style={selectStyle}>
                           <option value="">Categoría destino</option>
                           {transferCategories.filter(c => c.spaceId === current!.transferDestinationSpaceId).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}

@@ -11,6 +11,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
+    "test:unit": "node --test --experimental-strip-types test/*.test.mjs",
     "e2e:db:prepare": "node scripts/prepare-e2e-db.mjs",
     "e2e:server": "npm run e2e:db:prepare && next dev --port 3001",
     "e2e": "playwright test"

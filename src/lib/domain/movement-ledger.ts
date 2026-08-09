@@ -2,6 +2,7 @@ import { and, eq, isNull, or, sql } from 'drizzle-orm'
 import { accounts, categories, db, emergencyPayments, movements, receivableSettlements, spaces, spaceMemberships, transfers, type Account, type Movement, type ReceivableSettlement, type Space, type Transfer } from '@/lib/db'
 import { convertUsdToClp, getUsdToClpRate } from '@/lib/exchange-rate'
 import { formatCurrency, generateId } from '@/lib/utils'
+import { isInterSpaceTransferSourceMovement } from './receivable-settlement-policy'
 
 export type LedgerResult = { success: boolean; error?: string; transferId?: string; settlementId?: string; remaining?: number; settled?: boolean; totalPaid?: number }
 export type Currency = 'CLP' | 'USD'
@@ -218,8 +219,24 @@ async function getReceivableSettlementByReceivableId(receivableId: string): Prom
   return settlement ?? null
 }
 
+async function getReceivableSettlementByTransferRoot(transfer: Transfer): Promise<ReceivableSettlement | null> {
+  const [settlement] = await db
+    .select()
+    .from(receivableSettlements)
+    .where(and(
+      eq(receivableSettlements.outgoingMovementId, transfer.sourceMovementId),
+      eq(receivableSettlements.incomingMovementId, transfer.destinationMovementId),
+    ))
+    .limit(1)
+  return settlement ?? null
+}
+
 async function movementIsTransfer(movementId: string): Promise<boolean> {
   return Boolean(await getTransferRootByMovementId(movementId))
+}
+
+async function movementIsInterSpaceTransferSource(movementId: string): Promise<boolean> {
+  return isInterSpaceTransferSourceMovement(await getTransferRootByMovementId(movementId), movementId)
 }
 
 async function movementIsReceivableSettlement(movementId: string): Promise<boolean> {
@@ -800,6 +817,7 @@ async function consumeIncomingTransferForReceivableSettlement(
     getMemberSpace(actorUserId, transfer.destinationSpaceId),
   ])
   if (!sourceSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para usar esta transferencia')
+  const settlesTransferReceivable = await movementIsInterSpaceTransferSource(receivableId)
 
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:receivable-settlement:${spaceId}:${receivableId}`}, 0))`)
@@ -871,6 +889,7 @@ async function consumeIncomingTransferForReceivableSettlement(
     const settlementId = generateId()
     const outgoingMovementId = generateId()
     const incomingMovementId = generateId()
+    const settlementTransferId = settlesTransferReceivable ? generateId() : null
 
     await tx.insert(movements).values([
       {
@@ -909,6 +928,7 @@ async function consumeIncomingTransferForReceivableSettlement(
         exchangeRate: destinationMovement.exchangeRate,
         time: destinationMovement.time,
         needsReview: false,
+        reportable: settlesTransferReceivable ? false : true,
         receivable: false,
         received: false,
         receivableId,
@@ -916,6 +936,19 @@ async function consumeIncomingTransferForReceivableSettlement(
         updatedAt: now,
       },
     ])
+
+    if (settlementTransferId) {
+      await tx.insert(transfers).values({
+        id: settlementTransferId,
+        sourceSpaceId: lockedTransfer.sourceSpaceId,
+        destinationSpaceId: spaceId,
+        sourceMovementId: outgoingMovementId,
+        destinationMovementId: incomingMovementId,
+        createdByUserId: actorUserId,
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
 
     if (fullyConsumed) {
       await tx.delete(transfers).where(eq(transfers.id, lockedTransfer.id))
@@ -972,7 +1005,7 @@ async function consumeIncomingTransferForReceivableSettlement(
       updatedAt: now,
     })
 
-    return ok({ settlementId })
+    return ok({ settlementId, transferId: settlementTransferId ?? undefined })
   })
 }
 
@@ -1229,30 +1262,36 @@ export const movementLedger = {
     const [transfer] = await db.select().from(transfers).where(eq(transfers.id, transferId)).limit(1)
     if (!transfer || (transfer.sourceSpaceId !== spaceId && transfer.destinationSpaceId !== spaceId)) return fail('Transferencia pendiente no encontrada')
 
-    const [sourceSpace, destinationSpace, sourceMovement, destinationMovement] = await Promise.all([
+    const [sourceSpace, destinationSpace, sourceMovement, destinationMovement, receivableSettlement] = await Promise.all([
       getMemberSpace(actorUserId, transfer.sourceSpaceId),
       getMemberSpace(actorUserId, transfer.destinationSpaceId),
       getOwnedMovement(transfer.sourceSpaceId, transfer.sourceMovementId),
       getOwnedMovement(transfer.destinationSpaceId, transfer.destinationMovementId),
+      getReceivableSettlementByTransferRoot(transfer),
     ])
 
     if (!sourceSpace || !destinationSpace) return fail('Necesitas acceso a ambos Spaces para revisar esta transferencia')
     if (!sourceMovement || !destinationMovement || sourceMovement.type !== 'expense' || destinationMovement.type !== 'income') return fail('Transferencia corrupta')
     if (!sourceMovement.accountId || !destinationMovement.accountId) return fail('Selecciona la cuenta destino antes de confirmar esta transferencia')
     if (!sourceMovement.needsReview && !destinationMovement.needsReview) return fail('Transferencia no está pendiente de revisión')
-    if (hasDependentWorkflow(sourceMovement) || hasDependentWorkflow(destinationMovement)) return fail('Pending transfer has dependent relationships')
+    if ((hasDependentWorkflow(sourceMovement) || hasDependentWorkflow(destinationMovement)) && !receivableSettlement) return fail('Pending transfer has dependent relationships')
 
     const isInterSpace = transfer.sourceSpaceId !== transfer.destinationSpaceId
+    const isReceivableSettlementTransfer = Boolean(receivableSettlement)
     const sourceReportable = transferSideIsReportable(isInterSpace, classification?.source?.reportable ?? sourceMovement.reportable)
-    const destinationReportable = transferSideIsReportable(isInterSpace, classification?.destination?.reportable ?? destinationMovement.reportable)
+    const destinationReportable = isReceivableSettlementTransfer
+      ? false
+      : transferSideIsReportable(isInterSpace, classification?.destination?.reportable ?? destinationMovement.reportable)
     const sourceCategoryId = sourceReportable
       ? classification?.source?.categoryId !== undefined ? classification.source.categoryId : sourceMovement.categoryId
       : null
     const destinationCategoryId = destinationReportable
       ? classification?.destination?.categoryId !== undefined ? classification.destination.categoryId : destinationMovement.categoryId
       : null
+    if (isReceivableSettlementTransfer && classification?.destination?.reportable) return fail('La entrada que salda el por cobrar debe permanecer operacional')
+    if (isReceivableSettlementTransfer && classification?.source?.receivable) return fail('Una transferencia que salda un por cobrar no puede crear otro por cobrar')
     if (!sourceReportable && sideOperationalClearBlocked(sourceMovement)) return fail('No se puede marcar el lado origen como operacional: tiene dependencias de reporte')
-    if (!destinationReportable && sideOperationalClearBlocked(destinationMovement)) return fail('No se puede marcar el lado destino como operacional: tiene dependencias de reporte')
+    if (!destinationReportable && !isReceivableSettlementTransfer && sideOperationalClearBlocked(destinationMovement)) return fail('No se puede marcar el lado destino como operacional: tiene dependencias de reporte')
     const sourceCategoryError = await validateTransferSideCategory(transfer.sourceSpaceId, sourceReportable, sourceCategoryId)
     if (sourceCategoryError) return fail(`Origen: ${sourceCategoryError}`)
     const destinationCategoryError = await validateTransferSideCategory(transfer.destinationSpaceId, destinationReportable, destinationCategoryId)
@@ -1265,17 +1304,29 @@ export const movementLedger = {
     await db.transaction(async (tx) => {
       await tx.update(movements).set({
         ...transferSideReportingFields(sourceReportable, sourceCategoryId, false),
-        receivable: Boolean(classification?.source?.receivable && sourceReportable),
-        name: classification?.source?.receivableText?.trim() || sourceMovement.name,
+        receivable: Boolean(!isReceivableSettlementTransfer && classification?.source?.receivable && sourceReportable),
+        name: isReceivableSettlementTransfer
+          ? sourceMovement.name
+          : classification?.source?.receivableText?.trim() || sourceMovement.name,
         updatedAt: new Date(),
       }).where(and(eq(movements.id, transfer.sourceMovementId), eq(movements.spaceId, transfer.sourceSpaceId)))
-      await tx.update(movements).set({
-        ...transferSideReportingFields(destinationReportable, destinationCategoryId, false),
-        receivable: false,
-        received: false,
-        receivableId: null,
-        updatedAt: new Date(),
-      }).where(and(eq(movements.id, transfer.destinationMovementId), eq(movements.spaceId, transfer.destinationSpaceId)))
+      await tx.update(movements).set(isReceivableSettlementTransfer
+        ? {
+            categoryId: null,
+            needsReview: false,
+            reportable: false,
+            receivable: false,
+            received: false,
+            updatedAt: new Date(),
+          }
+        : {
+            ...transferSideReportingFields(destinationReportable, destinationCategoryId, false),
+            receivable: false,
+            received: false,
+            receivableId: null,
+            updatedAt: new Date(),
+          }
+      ).where(and(eq(movements.id, transfer.destinationMovementId), eq(movements.spaceId, transfer.destinationSpaceId)))
     })
     return ok({ transferId })
   },
@@ -1285,6 +1336,8 @@ export const movementLedger = {
     const [transfer] = await db.select().from(transfers).where(eq(transfers.id, transferId)).limit(1)
     if (!transfer || (transfer.sourceSpaceId !== spaceId && transfer.destinationSpaceId !== spaceId)) return fail('Transferencia pendiente no encontrada')
     if (await transferIsEmergencySettlement(transferId)) return fail('Esta transferencia está vinculada a un abono de emergencia y no se puede eliminar desde revisión')
+    const receivableSettlement = await getReceivableSettlementByTransferRoot(transfer)
+    if (receivableSettlement) return deleteReceivableSettlementRecord(spaceId, actorUserId, receivableSettlement.id)
 
     const [sourceSpace, destinationSpace, sourceMovement, destinationMovement] = await Promise.all([
       getMemberSpace(actorUserId, transfer.sourceSpaceId),
@@ -1432,6 +1485,7 @@ export const movementLedger = {
     if (!receivable.receivable) return fail('Movement is not receivable')
     if (receivable.received) return fail('Receivable already received')
     if (await getReceivableSettlementByReceivableId(receivableId)) return fail('Receivable already has a settlement')
+    const settlesTransferReceivable = await movementIsInterSpaceTransferSource(receivableId)
 
     const [fundedSpace, payingSpace, sourceAccount, destinationAccount] = await Promise.all([
       getMemberSpace(actorUserId, spaceId),
@@ -1480,6 +1534,7 @@ export const movementLedger = {
       const settlementId = generateId()
       const outgoingMovementId = generateId()
       const incomingMovementId = generateId()
+      const settlementTransferId = settlesTransferReceivable ? generateId() : null
 
       await tx.insert(movements).values([
         {
@@ -1516,6 +1571,7 @@ export const movementLedger = {
           amountUsd: destinationMoney.amountUsd,
           exchangeRate: destinationMoney.exchangeRate,
           needsReview: false,
+          reportable: settlesTransferReceivable ? false : true,
           receivable: false,
           received: false,
           receivableId,
@@ -1523,6 +1579,18 @@ export const movementLedger = {
           updatedAt: now,
         },
       ])
+      if (settlementTransferId) {
+        await tx.insert(transfers).values({
+          id: settlementTransferId,
+          sourceSpaceId: input.payingSpaceId,
+          destinationSpaceId: spaceId,
+          sourceMovementId: outgoingMovementId,
+          destinationMovementId: incomingMovementId,
+          createdByUserId: actorUserId,
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
       await tx.update(movements).set({ received: true, updatedAt: now })
         .where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId)))
       await tx.insert(receivableSettlements).values({
@@ -1537,7 +1605,7 @@ export const movementLedger = {
         updatedAt: now,
       })
 
-      return ok({ settlementId })
+      return ok({ settlementId, transferId: settlementTransferId ?? undefined })
     })
   },
 
