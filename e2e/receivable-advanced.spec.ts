@@ -416,7 +416,7 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     expect(fundedTotals.totalIncome).toBe(0)
   })
 
-  test('settles receivable by consuming part of an incoming Inter-Space Transfer', async ({ page }) => {
+  test('reuses an incoming Inter-Space Transfer remainder across multiple receivables', async ({ page }) => {
     const email = await registerUser(page)
     const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
@@ -426,6 +426,7 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     const personalAccountId = await createRegularAccount(userId, { bankName: 'Personal Origen', lastFourDigits: '5656', initialBalance: 100_000_000, spaceId: personalSpaceId })
     const casaAccountId = await createRegularAccount(userId, { bankName: 'Casa Destino', lastFourDigits: '7878', initialBalance: 0, spaceId: casaSpaceId })
     await seedReceivable(userId, casaAccountId, 'Cena pagada por Casa', 25_000_000, casaSpaceId)
+    await seedReceivable(userId, casaAccountId, 'Almuerzo pagado por Casa', 10_000_000, casaSpaceId)
     const transfer = await seedInterspaceTransfer(userId, {
       sourceSpaceId: personalSpaceId,
       destinationSpaceId: casaSpaceId,
@@ -457,12 +458,32 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     expect(amounts?.destinationAmount).toBe(25_000_000)
     expect(await countMovementsInSpace(personalSpaceId, 'Cena pagada por Casa')).toBe(1)
 
+    await page.getByRole('button', { name: /Marcar como cobrado Almuerzo pagado por Casa/i }).click()
+    const secondPaymentDialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
+    await expect(secondPaymentDialog).toBeVisible({ timeout: 5_000 })
+    await secondPaymentDialog.getByRole('button', { name: /Vincular existente/i }).click()
+    const remainderCandidate = secondPaymentDialog.getByRole('radio', { name: /Transferencia desde Personal/ })
+    await expect(remainderCandidate).toBeVisible({ timeout: 10_000 })
+    await expect(secondPaymentDialog.getByText(/Disponible \$250\.000/)).toBeVisible()
+    await screenshot(page, 'recv-cross-transfer-03-remainder-candidate')
+
+    await remainderCandidate.click()
+    await secondPaymentDialog.getByRole('button', { name: /Confirmar/i }).click()
+    await expect(secondPaymentDialog).not.toBeVisible({ timeout: 10_000 })
+
+    await expect.poll(async () => (await getTransferMovementAmounts(transfer.transferId))?.sourceAmount).toBe(15_000_000)
+    const amountsAfterSecondSettlement = await getTransferMovementAmounts(transfer.transferId)
+    expect(amountsAfterSecondSettlement?.sourceAmount).toBe(15_000_000)
+    expect(amountsAfterSecondSettlement?.destinationAmount).toBe(15_000_000)
+    expect(await countMovementsInSpace(personalSpaceId, 'Almuerzo pagado por Casa')).toBe(1)
+    await screenshot(page, 'recv-cross-transfer-04-second-settlement')
+
     const blockedUpdate = await movementLedger.updateTransfer(casaSpaceId, userId, transfer.transferId, {
       fromAccountId: personalAccountId,
       toAccountId: casaAccountId,
       destinationSpaceId: casaSpaceId,
-      fromAmount: 25_000_000,
-      toAmount: 25_000_000,
+      fromAmount: 15_000_000,
+      toAmount: 15_000_000,
       fromCurrency: 'CLP',
       toCurrency: 'CLP',
       date: new Date().toISOString().slice(0, 10),
