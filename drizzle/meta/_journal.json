@@ -71,6 +71,13 @@
       "when": 1780455600000,
       "tag": "0017_receivable_settlement_transfer_classification",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788310800000,
+      "tag": "0018_usd_money_invariant",
+      "breakpoints": true
     }
   ]
 }

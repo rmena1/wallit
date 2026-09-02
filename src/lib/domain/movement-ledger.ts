@@ -2,6 +2,7 @@ import { and, eq, isNull, or, sql } from 'drizzle-orm'
 import { accounts, categories, db, emergencyPayments, movements, receivableSettlements, spaces, spaceMemberships, transfers, type Account, type Movement, type ReceivableSettlement, type Space, type Transfer } from '@/lib/db'
 import { convertUsdToClp, getUsdToClpRate } from '@/lib/exchange-rate'
 import { formatCurrency, generateId } from '@/lib/utils'
+import { validateUsdClpAmounts } from '@/lib/domain/money'
 
 export type LedgerResult = { success: boolean; error?: string; transferId?: string; settlementId?: string; remaining?: number; settled?: boolean; totalPaid?: number }
 export type Currency = 'CLP' | 'USD'
@@ -303,11 +304,8 @@ async function normalizeMoney(spaceId: string, input: Pick<MovementInput, 'amoun
       }
 
       if (amountUsd != null && exchangeRate != null) {
-        const expectedClp = Math.round(amountUsd * exchangeRate / 100)
-        const roundingTolerance = Math.max(1, Math.ceil(exchangeRate / 200))
-        if (Math.abs(expectedClp - amount) > roundingTolerance) {
-          return { error: 'Monto CLP, monto USD y tipo de cambio no coinciden' }
-        }
+        const validation = validateUsdClpAmounts({ amount, amountUsd, exchangeRate })
+        if (!validation.valid) return { error: validation.error! }
         return { amount, amountUsd, exchangeRate, account }
       }
 

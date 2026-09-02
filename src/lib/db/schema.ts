@@ -1,4 +1,5 @@
-import { pgTable, text, integer, bigint, boolean, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core'
+import { pgTable, text, integer, bigint, boolean, timestamp, index, uniqueIndex, check } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
 
 // ============================================================================
 // USERS
@@ -135,6 +136,8 @@ export const movements = pgTable('movements', {
   receivableId: text('receivable_id'), // links income payment to original receivable expense
   time: text('time'), // HH:MM format, nullable
   originalName: text('original_name'), // original name from bank email
+  sourceEmailProvider: text('source_email_provider'), // importing bank/provider, only for email imports
+  sourceEmailId: text('source_email_id'), // normalized RFC Message-ID for retry-safe imports
   // Emergency expense fields
   emergency: boolean('emergency').notNull().default(false),
   emergencySettled: boolean('emergency_settled').notNull().default(false),
@@ -151,6 +154,30 @@ export const movements = pgTable('movements', {
   index('idx_movements_account').on(table.accountId),
   index('idx_movements_review').on(table.spaceId, table.needsReview),
   index('idx_movements_reportable').on(table.spaceId, table.reportable),
+  uniqueIndex('idx_movements_source_email')
+    .on(table.createdByUserId, table.sourceEmailProvider, table.sourceEmailId)
+    .where(sql`${table.sourceEmailId} IS NOT NULL`),
+  check('movements_usd_money_consistency', sql`
+    ${table.currency} <> 'USD'
+    OR (
+      ${table.amount} > 0
+      AND ${table.amountUsd} IS NOT NULL AND ${table.amountUsd} > 0
+      AND ${table.exchangeRate} IS NOT NULL AND ${table.exchangeRate} > 0
+      AND ABS(${table.amount}::numeric - ROUND(${table.amountUsd}::numeric * ${table.exchangeRate}::numeric / 100)) <= 1000
+    )
+  `),
+  check('movements_source_email_identity_complete', sql`
+    (${table.sourceEmailProvider} IS NULL AND ${table.sourceEmailId} IS NULL)
+    OR (
+      ${table.createdByUserId} IS NOT NULL
+      AND ${table.sourceEmailProvider} IS NOT NULL
+      AND ${table.sourceEmailProvider} = LOWER(BTRIM(${table.sourceEmailProvider}))
+      AND LENGTH(${table.sourceEmailProvider}) > 0
+      AND ${table.sourceEmailId} IS NOT NULL
+      AND ${table.sourceEmailId} = BTRIM(${table.sourceEmailId})
+      AND LENGTH(${table.sourceEmailId}) > 0
+    )
+  `),
 ])
 
 // ============================================================================
