@@ -3,7 +3,8 @@ import type { NextRequest } from 'next/server'
 
 // Routes that don't require authentication
 const publicRoutes = ['/login', '/register', '/forgot-password']
-const authenticatedApiRoutes = ['/api/import/email']
+// These APIs authenticate themselves or are used by Railway before traffic is switched.
+const middlewareExemptApiRoutes = ['/api/health', '/api/import/email']
 
 // Routes that should redirect to home if already authenticated
 const authRoutes = ['/login', '/register', '/forgot-password']
@@ -41,7 +42,7 @@ export function middleware(request: NextRequest) {
   // If accessing protected routes while not authenticated, redirect to login
   if (!isAuthenticated
     && !publicRoutes.some(route => pathname.startsWith(route))
-    && !authenticatedApiRoutes.some(route => pathname === route)) {
+    && !middlewareExemptApiRoutes.some(route => pathname === route)) {
     return applySecurityHeaders(NextResponse.redirect(new URL('/login', request.url)))
   }
   
