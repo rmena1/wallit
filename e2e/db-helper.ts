@@ -604,6 +604,7 @@ export async function seedUsdReviewMovement(userId: string, accountId: string | 
   clpAmount: number
   usdAmount: number
   exchangeRate: number
+  categoryId?: string | null
   type?: 'income' | 'expense'
   spaceId?: string
 }): Promise<string> {
@@ -613,7 +614,7 @@ export async function seedUsdReviewMovement(userId: string, accountId: string | 
   const spaceId = await resolveSpaceId(userId, opts.spaceId)
   await sql`
     INSERT INTO movements (
-      id, space_id, created_by_user_id, account_id, name, date, amount, type,
+      id, space_id, created_by_user_id, category_id, account_id, name, date, amount, type,
       needs_review, currency, amount_usd, exchange_rate,
       receivable, received, created_at, updated_at
     )
@@ -621,6 +622,7 @@ export async function seedUsdReviewMovement(userId: string, accountId: string | 
       ${id},
       ${spaceId},
       ${userId},
+      ${opts.categoryId ?? null},
       ${accountId},
       ${name},
       ${today},

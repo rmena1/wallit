@@ -18,6 +18,7 @@ import {
   seedCategory,
   seedInterspaceTransfer,
   seedReceivable,
+  seedUsdReviewMovement,
   seedUnlinkedIncome,
 } from './db-helper'
 
@@ -46,6 +47,55 @@ async function switchSpace(page: Page, name: string) {
 }
 
 test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
+  test('settles an imported-style USD receivable into a CLP account at the $10 tolerance boundary', async ({ page }) => {
+    const email = await registerUser(page)
+    await ensureAccount(page)
+
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const accountId = await getFirstAccountId(userId)
+    const categoryId = await seedCategory(userId, { name: 'Suscripciones importadas', emoji: '🤖' })
+    const amountUsd = 18_219
+    const exchangeRate = 93_577
+    const expectedClp = Math.round(amountUsd * exchangeRate / 100)
+    await seedUsdReviewMovement(userId, accountId, 'TS: OpenAI - ChatGPT importado', {
+      clpAmount: expectedClp + 1_000,
+      usdAmount: amountUsd,
+      exchangeRate,
+      categoryId,
+    })
+
+    await page.goto('/review')
+    await expect(page.getByText('TS: OpenAI - ChatGPT importado')).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByLabel('Monto USD')).toHaveValue('182.19')
+    await screenshot(page, 'usd-import-receivable-01-review')
+
+    await page.getByRole('button', { name: /Cobrar/i }).click()
+    await page.locator('input[placeholder="Texto del recordatorio..."]').fill('Cobro importado en USD')
+    await page.locator('div[style*="position: fixed"]').getByRole('button', { name: 'Confirmar' }).click()
+
+    await page.goto('/')
+    await page.getByRole('button', { name: /Por cobrar/i }).click()
+    await expect(page.getByText('Cobro importado en USD')).toBeVisible({ timeout: 5_000 })
+    await screenshot(page, 'usd-import-receivable-02-pending')
+
+    await page.getByRole('button', { name: /Marcar como cobrado Cobro importado en USD/i }).click()
+    const paymentDialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
+    await expect(paymentDialog).toBeVisible()
+    // Selecting an account is essential: cash settlement does not create the
+    // income movement whose USD triple originally triggered this bug.
+    const accountRadio = paymentDialog.locator(`input[name="paymentAccount"][value="${accountId}"]`)
+    await accountRadio.evaluate((element: HTMLInputElement) => element.click())
+    await expect(accountRadio).toBeChecked()
+    await screenshot(page, 'usd-import-receivable-03-settlement')
+    await paymentDialog.getByRole('button', { name: /Confirmar/i }).click()
+
+    await expect(page.getByText('Cobro importado en USD')).not.toBeVisible({ timeout: 5_000 })
+    await page.getByRole('button', { name: /Por cobrar/i }).click()
+    await expect(page.getByText('Cobro: Cobro importado en USD')).toBeVisible({ timeout: 5_000 })
+    await screenshot(page, 'usd-import-receivable-04-paid')
+  })
+
   test('mark existing movement as receivable from edit page and verify on home', async ({ page }) => {
     // This test covers the UI flow of marking a regular movement as receivable
     // (Consolidated from edit-movement.spec.ts)

@@ -5,6 +5,8 @@ import { join } from 'node:path'
 
 const DEFAULT_DATABASE_URL = 'postgresql://127.0.0.1:5432/wallit_e2e'
 const databaseUrl = process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL
+const importToken = process.env.WALLIT_IMPORT_TOKEN ?? 'wallit-e2e-import-token'
+process.env.WALLIT_IMPORT_TOKEN = importToken
 const cachedLdPathFile = join(homedir(), '.cache/wallit-playwright-libs/LD_LIBRARY_PATH')
 
 if (existsSync(cachedLdPathFile)) {
@@ -26,6 +28,7 @@ export default defineConfig({
     reuseExistingServer: false,
     env: {
       DATABASE_URL: databaseUrl,
+      WALLIT_IMPORT_TOKEN: importToken,
       LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? '',
     },
   },

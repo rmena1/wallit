@@ -160,7 +160,9 @@ test.describe('USD Movements — Complete Flow', () => {
 
     await page.goto('/reports')
     await expect(page.getByRole('banner').getByText('Reportes')).toBeVisible({ timeout: 5000 })
-    await page.locator('select').nth(1).selectOption(usdAccountId)
+    await page.locator('select').filter({
+      has: page.locator(`option[value="${usdAccountId}"]`),
+    }).selectOption(usdAccountId)
 
     await expect(page.locator('main')).toContainText('US$100,00', { timeout: 10000 })
     await expect(page.locator('main')).toContainText('US$25,00')
