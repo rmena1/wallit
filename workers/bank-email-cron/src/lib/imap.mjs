@@ -10,7 +10,7 @@ export class ImapClient {
       host: config.gmail.host,
       port: config.gmail.port,
       tls: config.gmail.tls,
-      tlsOptions: { rejectUnauthorized: true },
+      tlsOptions: { rejectUnauthorized: config.gmail.tlsRejectUnauthorized },
     });
   }
 
