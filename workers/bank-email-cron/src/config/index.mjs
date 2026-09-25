@@ -62,9 +62,10 @@ export const config = {
   
   openai: {
     apiKey: getEnv('OPENAI_API_KEY'),
+    baseUrl: getEnv('OPENAI_BASE_URL', 'https://api.openai.com'),
     model: getEnv('OPENAI_MODEL', 'gpt-6-luna'),
     reasoningEffort: getEnv('OPENAI_REASONING_EFFORT', 'medium'),
-    timeoutMs: parsePositiveInt(getEnv('LUNA_TIMEOUT_MS', '30000'), 'LUNA_TIMEOUT_MS'),
+    timeoutMs: parsePositiveInt(getEnv('LUNA_TIMEOUT_MS', '60000'), 'LUNA_TIMEOUT_MS'),
   },
   
   category: {

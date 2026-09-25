@@ -135,7 +135,7 @@ describe('Classifier Luna API', () => {
 
     try {
       globalThis.fetch = mock.fn(async (url, options) => {
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           capturedRequestBody = JSON.parse(options.body);
           return {
             ok: true,
@@ -205,7 +205,7 @@ describe('Classifier Luna API', () => {
 
     try {
       globalThis.fetch = mock.fn(async (url, options) => {
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           return {
             ok: true,
             json: async () => ({
@@ -251,7 +251,7 @@ describe('Classifier Luna API', () => {
         if (url.includes('typesafe.ai')) {
           throw new Error('Jev unavailable');
         }
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           return {
             ok: false,
             status: 400,
@@ -288,7 +288,7 @@ describe('Classifier Luna API', () => {
 
     try {
       globalThis.fetch = mock.fn(async (url, options) => {
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           return {
             ok: true,
             json: async () => ({
@@ -318,7 +318,7 @@ describe('Classifier Luna API', () => {
 
     try {
       globalThis.fetch = mock.fn(async (url, options) => {
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           return {
             ok: true,
             json: async () => ({
@@ -358,7 +358,7 @@ describe('Classifier Luna API', () => {
 
     try {
       globalThis.fetch = mock.fn(async (url, options) => {
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           return {
             ok: true,
             json: async () => ({
@@ -401,7 +401,7 @@ describe('Classifier Luna API', () => {
 
     try {
       globalThis.fetch = mock.fn(async (url, options) => {
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           return {
             ok: true,
             json: async () => ({
@@ -444,7 +444,7 @@ describe('Classifier Luna API', () => {
         if (url.includes('typesafe.ai')) {
           throw new Error('Jev unavailable');
         }
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           return {
             ok: true,
             json: async () => ({
@@ -498,7 +498,7 @@ describe('Classifier Error Handling', () => {
         if (url.includes('typesafe.ai')) {
           throw new Error('Jev unavailable');
         }
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           const error = new Error('fetch failed');
           error.cause = {
             code: 'ETIMEDOUT',
@@ -539,7 +539,7 @@ describe('Classifier Error Handling', () => {
         if (url.includes('typesafe.ai')) {
           throw new Error('Jev unavailable');
         }
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           const rootCause = {
             code: 'ECONNRESET',
             message: 'Socket hang up',
@@ -591,7 +591,7 @@ describe('Classifier Retry Logic', () => {
         
         attemptCount++;
         
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           if (attemptCount < 2) {
             const error = new Error('fetch failed');
             error.cause = {
@@ -636,6 +636,103 @@ describe('Classifier Retry Logic', () => {
     }
   });
 
+  test('AbortError is treated as transient and triggers retry', async () => {
+    const originalFetch = globalThis.fetch;
+    let attemptCount = 0;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        
+        attemptCount++;
+        
+        if (url.includes('api.openai.com')) {
+          if (attemptCount < 2) {
+            const error = new Error('The operation was aborted');
+            error.name = 'AbortError';
+            error.code = 'ABORT_ERR';
+            throw error;
+          }
+          
+          return {
+            ok: true,
+            json: async () => ({
+              output: [
+                {
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify({ choice: 'transaction', confidence: 0.95 }),
+                    },
+                  ],
+                },
+              ],
+            }),
+          };
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      const result = await isTransaction({
+        subject: 'Test transaction',
+        from: 'test@example.com',
+        textBody: 'Test body',
+      });
+
+      assert.strictEqual(result, true, 'Should succeed after retry');
+      assert.ok(attemptCount >= 2, 'Should have retried after AbortError');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('fetch failed TypeError with cause enriches error message', async () => {
+    const originalFetch = globalThis.fetch;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        
+        if (url.includes('api.openai.com')) {
+          const error = new TypeError('fetch failed');
+          error.cause = {
+            code: 'ECONNRESET',
+            message: 'socket hang up',
+          };
+          throw error;
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      await assert.rejects(
+        async () => {
+          await isTransaction({
+            subject: 'Test',
+            from: 'test@example.com',
+            textBody: 'Test',
+          });
+        },
+        (error) => {
+          assert.ok(error.message.includes('ECONNRESET'), 'Should include cause code in message');
+          assert.ok(error.message.includes('socket hang up'), 'Should include cause message');
+          return true;
+        },
+        'Should enrich TypeError fetch failed with cause details'
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test('HTTP 429 triggers retry', async () => {
     const originalFetch = globalThis.fetch;
     let attemptCount = 0;
@@ -648,7 +745,7 @@ describe('Classifier Retry Logic', () => {
         
         attemptCount++;
         
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           if (attemptCount < 2) {
             return {
               ok: false,
@@ -705,7 +802,7 @@ describe('Classifier Retry Logic', () => {
         
         attemptCount++;
         
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           if (attemptCount < 2) {
             return {
               ok: false,
@@ -761,7 +858,7 @@ describe('Classifier Retry Logic', () => {
           throw new Error('Jev unavailable');
         }
         
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           attemptCount++;
           return {
             ok: false,
@@ -811,7 +908,7 @@ describe('Classifier Retry Logic', () => {
           throw new Error('Jev unavailable');
         }
         
-        if (url === 'https://api.openai.com/v1/responses') {
+        if (url.includes('api.openai.com')) {
           lunaAttemptCount++;
           const error = new Error('fetch failed');
           error.cause = {
@@ -846,4 +943,4 @@ describe('Classifier Retry Logic', () => {
       globalThis.fetch = originalFetch;
     }
   });
-  });
+});
