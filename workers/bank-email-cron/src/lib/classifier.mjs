@@ -35,12 +35,13 @@ async function callJev(prompt, state, timeoutMs) {
       },
       body: JSON.stringify({
         model: prompt.model,
-        questions: [{
-          id: prompt.question_id,
-          type: prompt.type,
-          instructions: prompt.instructions,
-          criteria: prompt.criteria,
-        }],
+        questions: {
+          [prompt.question_id]: {
+            type: prompt.type,
+            instructions: prompt.instructions,
+            criteria: prompt.criteria,
+          },
+        },
         state,
       }),
       signal: controller.signal,
