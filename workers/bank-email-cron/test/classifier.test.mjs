@@ -943,4 +943,139 @@ describe('Classifier Retry Logic', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test('bare fetch failed without cause is treated as transient', async () => {
+    const originalFetch = globalThis.fetch;
+    let attemptCount = 0;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        
+        attemptCount++;
+        
+        if (url.includes('api.openai.com')) {
+          if (attemptCount < 2) {
+            const error = new TypeError('fetch failed');
+            throw error;
+          }
+          
+          return {
+            ok: true,
+            json: async () => ({
+              output: [
+                {
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify({ choice: 'transaction', confidence: 0.95 }),
+                    },
+                  ],
+                },
+              ],
+            }),
+          };
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      const result = await isTransaction({
+        subject: 'Test transaction',
+        from: 'test@example.com',
+        textBody: 'Test body',
+      });
+
+      assert.strictEqual(result, true, 'Should succeed after retry');
+      assert.ok(attemptCount >= 2, 'Should have retried bare fetch failed');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('error messages include service context tags', async () => {
+    const originalFetch = globalThis.fetch;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai') || url.includes('/v1/systemone')) {
+          const error = new TypeError('fetch failed');
+          throw error;
+        }
+        if (url.includes('api.openai.com')) {
+          const error = new TypeError('fetch failed');
+          throw error;
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      await assert.rejects(
+        async () => {
+          await isTransaction({
+            subject: 'Test',
+            from: 'test@example.com',
+            textBody: 'Test',
+          });
+        },
+        (error) => {
+          const hasJevContext = error.message.includes('TypeSafe POST') || error.message.includes('Jev API call');
+          const hasLunaContext = error.message.includes('OpenAI POST') || error.message.includes('Luna API call');
+          assert.ok(
+            hasJevContext || hasLunaContext,
+            `Error message should include service context (TypeSafe/Jev or OpenAI/Luna), got: ${error.message}`
+          );
+          return true;
+        },
+        'Should include service context in error'
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('OpenAI error messages include service context', async () => {
+    const originalFetch = globalThis.fetch;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        
+        if (url.includes('api.openai.com')) {
+          const error = new TypeError('fetch failed');
+          throw error;
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      await assert.rejects(
+        async () => {
+          await isTransaction({
+            subject: 'Test',
+            from: 'test@example.com',
+            textBody: 'Test',
+          });
+        },
+        (error) => {
+          assert.ok(
+            error.message.includes('OpenAI POST') || error.message.includes('Luna API call'),
+            `Error message should include OpenAI context, got: ${error.message}`
+          );
+          return true;
+        },
+        'Should include OpenAI service context in error'
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

@@ -25,6 +25,10 @@ function truncateBody(body, maxChars = 8000) {
 function enrichError(error, context) {
   const parts = [context];
   
+  if (error.message) {
+    parts.push(error.message);
+  }
+  
   if (error.cause) {
     const causeChain = [];
     let current = error.cause;
@@ -78,7 +82,7 @@ function isTransientError(error, response) {
     return true;
   }
   
-  if (error.message?.includes('fetch failed') && error.cause) {
+  if (error.message?.includes('fetch failed')) {
     return true;
   }
   
@@ -120,25 +124,31 @@ async function callJev(prompt, state, timeoutMs) {
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       
       try {
-        const response = await fetch(`${config.typesafe.baseUrl}/v1/systemone`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${config.typesafe.apiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: prompt.model,
-            questions: {
-              [prompt.question_id]: {
-                type: prompt.type,
-                instructions: prompt.instructions,
-                criteria: prompt.criteria,
-              },
+        let response;
+        try {
+          response = await fetch(`${config.typesafe.baseUrl}/v1/systemone`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${config.typesafe.apiKey}`,
+              'Content-Type': 'application/json',
             },
-            state,
-          }),
-          signal: controller.signal,
-        });
+            body: JSON.stringify({
+              model: prompt.model,
+              questions: {
+                [prompt.question_id]: {
+                  type: prompt.type,
+                  instructions: prompt.instructions,
+                  criteria: prompt.criteria,
+                },
+              },
+              state,
+            }),
+            signal: controller.signal,
+          });
+        } catch (error) {
+          clearTimeout(timeout);
+          throw enrichError(error, `TypeSafe POST ${config.typesafe.baseUrl}/v1/systemone failed`);
+        }
 
         clearTimeout(timeout);
 
@@ -185,37 +195,43 @@ async function callLuna(prompt, state, timeoutMs) {
         
         const url = `${config.openai.baseUrl}/v1/responses`;
         
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${config.openai.apiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: config.openai.model,
-            reasoning: {
-              effort: config.openai.reasoningEffort,
+        let response;
+        try {
+          response = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${config.openai.apiKey}`,
+              'Content-Type': 'application/json',
             },
-            input: `${systemPrompt}\n\n${userPrompt}`,
-            text: {
-              format: {
-                type: 'json_schema',
-                name: 'transaction_classification',
-                schema: {
-                  type: 'object',
-                  properties: {
-                    choice: { type: 'string' },
-                    confidence: { type: 'number' },
-                  },
-                  required: ['choice', 'confidence'],
-                  additionalProperties: false,
-                },
-                strict: true,
+            body: JSON.stringify({
+              model: config.openai.model,
+              reasoning: {
+                effort: config.openai.reasoningEffort,
               },
-            },
-          }),
-          signal: controller.signal,
-        });
+              input: `${systemPrompt}\n\n${userPrompt}`,
+              text: {
+                format: {
+                  type: 'json_schema',
+                  name: 'transaction_classification',
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      choice: { type: 'string' },
+                      confidence: { type: 'number' },
+                    },
+                    required: ['choice', 'confidence'],
+                    additionalProperties: false,
+                  },
+                  strict: true,
+                },
+              },
+            }),
+            signal: controller.signal,
+          });
+        } catch (error) {
+          clearTimeout(timeout);
+          throw enrichError(error, `OpenAI POST ${url} failed`);
+        }
 
         clearTimeout(timeout);
 
@@ -304,21 +320,7 @@ async function callLuna(prompt, state, timeoutMs) {
         return JSON.parse(content);
       } catch (error) {
         clearTimeout(timeout);
-        
-        const enriched = enrichError(error, `Luna fetch to ${config.openai.baseUrl}/v1/responses`);
-        
-        console.error('Luna API call failed:', {
-          message: enriched.message,
-          errorName: error.name,
-          errorCode: error.code,
-          causeCode: error.cause?.code,
-          causeMessage: error.cause?.message,
-          url: `${config.openai.baseUrl}/v1/responses`,
-          method: 'POST',
-          timeout: timeoutMs,
-        });
-        
-        throw enriched;
+        throw error;
       }
     },
     { maxRetries: 2, baseDelayMs: 500, context: 'Luna API call' }
@@ -330,7 +332,21 @@ async function classifyWithFallback(prompt, state, jevTimeoutMs, lunaTimeoutMs) 
     return await callJev(prompt, state, jevTimeoutMs);
   } catch (error) {
     console.warn('Jev classification failed, falling back to Luna:', error.message);
-    return await callLuna(prompt, state, lunaTimeoutMs);
+    try {
+      return await callLuna(prompt, state, lunaTimeoutMs);
+    } catch (lunaError) {
+      console.error('Luna API call failed:', {
+        message: lunaError.message,
+        errorName: lunaError.name,
+        errorCode: lunaError.code,
+        causeCode: lunaError.cause?.code,
+        causeMessage: lunaError.cause?.message,
+        url: `${config.openai.baseUrl}/v1/responses`,
+        method: 'POST',
+        timeout: lunaTimeoutMs,
+      });
+      throw lunaError;
+    }
   }
 }
 

@@ -342,3 +342,133 @@ Número tarjeta crédito ****1164`,
     assert.strictEqual(result.amountUsd, 9999);
   });
 });
+
+describe('Import Client Error Handling', () => {
+  test('importToWallit retries on bare fetch failed', async (t) => {
+    const originalFetch = globalThis.fetch;
+    let attemptCount = 0;
+    
+    try {
+      globalThis.fetch = async (url, options) => {
+        attemptCount++;
+        
+        if (attemptCount < 2) {
+          const error = new TypeError('fetch failed');
+          throw error;
+        }
+        
+        return {
+          ok: true,
+          json: async () => ({ success: true, movementId: 'test-123' }),
+        };
+      };
+
+      const { importToWallit } = await import('../src/lib/import-client.mjs');
+      
+      const payload = {
+        kind: 'movement',
+        userId: 'test-user',
+        accountId: 'test-account',
+        name: 'Test',
+        originalName: 'Test',
+        date: '2026-09-25',
+        type: 'expense',
+        currency: 'CLP',
+        amount: 100000,
+      };
+      
+      const result = await importToWallit(payload);
+      
+      assert.strictEqual(result.success, true);
+      assert.ok(attemptCount >= 2, 'Should have retried after fetch failed');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('importToWallit enriches error with service context', async (t) => {
+    const originalFetch = globalThis.fetch;
+    
+    try {
+      globalThis.fetch = async (url, options) => {
+        const error = new TypeError('fetch failed');
+        throw error;
+      };
+
+      const { importToWallit } = await import('../src/lib/import-client.mjs');
+      
+      const payload = {
+        kind: 'movement',
+        userId: 'test-user',
+        accountId: 'test-account',
+        name: 'Test',
+        originalName: 'Test',
+        date: '2026-09-25',
+        type: 'expense',
+        currency: 'CLP',
+        amount: 100000,
+      };
+      
+      await assert.rejects(
+        async () => {
+          await importToWallit(payload);
+        },
+        (error) => {
+          assert.ok(
+            error.message.includes('Wallit import'),
+            `Error should include Wallit context, got: ${error.message}`
+          );
+          return true;
+        }
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('importToWallit retries on network errors with cause', async (t) => {
+    const originalFetch = globalThis.fetch;
+    let attemptCount = 0;
+    
+    try {
+      globalThis.fetch = async (url, options) => {
+        attemptCount++;
+        
+        if (attemptCount < 2) {
+          const error = new TypeError('fetch failed');
+          error.cause = {
+            code: 'ECONNRESET',
+            message: 'socket hang up',
+          };
+          throw error;
+        }
+        
+        return {
+          ok: true,
+          json: async () => ({ success: true, movementId: 'test-456' }),
+        };
+      };
+
+      const { importToWallit } = await import('../src/lib/import-client.mjs');
+      
+      const payload = {
+        kind: 'movement',
+        userId: 'test-user',
+        accountId: 'test-account',
+        name: 'Test',
+        originalName: 'Test',
+        date: '2026-09-25',
+        type: 'expense',
+        currency: 'CLP',
+        amount: 100000,
+      };
+      
+      const result = await importToWallit(payload);
+      
+      assert.strictEqual(result.success, true);
+      assert.ok(attemptCount >= 2, 'Should have retried on ECONNRESET');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
