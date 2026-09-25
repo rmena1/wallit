@@ -15,6 +15,7 @@ import {
   logProcessing,
   sql,
 } from './lib/database.mjs';
+import { getAccountSpace, isCategoryInAccountSpace } from './lib/../data/space-mappings.mjs';
 
 async function parseEmail(email) {
   const provider = getProviderFromEmail(email.from);
@@ -84,6 +85,7 @@ async function processEmail(email, cursor) {
 
     try {
       parsed.accountId = resolveAccount(parsed);
+      logEntry.accountId = parsed.accountId;
     } catch (error) {
       logEntry.decision = 'account_unresolved';
       logEntry.errorMessage = error.message;
@@ -92,11 +94,25 @@ async function processEmail(email, cursor) {
       return { success: false, error: error.message, advance: false };
     }
 
-    console.error(`[UID ${email.uid}] Step: before chooseCategory`);
-    const categoryId = await chooseCategory(email, parsed.originalName);
-    console.error(`[UID ${email.uid}] Step: after chooseCategory (categoryId=${categoryId})`);
+    const accountSpace = getAccountSpace(parsed.accountId);
+    console.error(`[UID ${email.uid}] Resolved account ${parsed.accountId} in space ${accountSpace}`);
 
-    const payload = buildImportPayload(parsed, categoryId, email.messageId);
+    console.error(`[UID ${email.uid}] Step: before chooseCategory`);
+    const categoryId = await chooseCategory(email, parsed.originalName, parsed.accountId);
+    console.error(`[UID ${email.uid}] Step: after chooseCategory (categoryId=${categoryId})`);
+    
+    logEntry.categoryId = categoryId;
+
+    let validatedCategoryId = categoryId;
+    if (categoryId && !isCategoryInAccountSpace(categoryId, parsed.accountId)) {
+      console.warn(
+        `[UID ${email.uid}] Defensive guard: category ${categoryId} does not belong to account ${parsed.accountId} space, setting to null`
+      );
+      validatedCategoryId = null;
+      logEntry.categoryId = null;
+    }
+
+    const payload = buildImportPayload(parsed, validatedCategoryId, email.messageId);
     
     console.error(`[UID ${email.uid}] Step: before import`);
     const importResult = await importToWallit(payload);
@@ -127,6 +143,12 @@ async function processEmail(email, cursor) {
     
     logEntry.decision = 'error';
     logEntry.errorMessage = error.message;
+    
+    if (logEntry.accountId) {
+      const accountSpace = getAccountSpace(logEntry.accountId);
+      console.error(`[UID ${email.uid}] Error context: accountId=${logEntry.accountId}, accountSpace=${accountSpace}, categoryId=${logEntry.categoryId || 'null'}`);
+    }
+    
     await logProcessing(logEntry);
     console.error(`UID ${email.uid}: processing failed, stopping (will retry next cron):`, error.message);
     return { success: false, error: error.message, advance: false };

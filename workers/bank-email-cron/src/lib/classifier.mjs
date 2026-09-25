@@ -2,18 +2,22 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { config } from '../config/index.mjs';
+import { getAccountSpace, getCategorySpace } from '../data/space-mappings.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let txFilterPrompt;
-let categoryChoicePrompt;
+let categoryChoicePromptPersonal;
+let categoryChoicePromptCasa;
 
 async function loadPrompts() {
   if (!txFilterPrompt) {
     const txPath = join(__dirname, '../../prompts/best-tx-filter.json');
-    const catPath = join(__dirname, '../../prompts/best-category-choice.json');
+    const catPathPersonal = join(__dirname, '../../prompts/best-category-choice.json');
+    const catPathCasa = join(__dirname, '../../prompts/best-category-choice-casa.json');
     txFilterPrompt = JSON.parse(await readFile(txPath, 'utf8'));
-    categoryChoicePrompt = JSON.parse(await readFile(catPath, 'utf8'));
+    categoryChoicePromptPersonal = JSON.parse(await readFile(catPathPersonal, 'utf8'));
+    categoryChoicePromptCasa = JSON.parse(await readFile(catPathCasa, 'utf8'));
   }
 }
 
@@ -369,8 +373,14 @@ export async function isTransaction(email) {
   return result.choice === 'transaction';
 }
 
-export async function chooseCategory(email, merchant) {
+export async function chooseCategory(email, merchant, accountId = null) {
   await loadPrompts();
+  
+  const accountSpace = accountId ? getAccountSpace(accountId) : null;
+  
+  const categoryChoicePrompt = accountSpace === 'ms2yt6sp7kwmn11qrupu3'
+    ? categoryChoicePromptCasa
+    : categoryChoicePromptPersonal;
   
   const state = {
     subject: email.subject,
@@ -394,6 +404,12 @@ export async function chooseCategory(email, merchant) {
 
   if (result.confidence < config.category.minConfidence) {
     console.log(`Category confidence ${result.confidence} below threshold ${config.category.minConfidence}, skipping`);
+    return null;
+  }
+
+  const categorySpace = getCategorySpace(result.choice);
+  if (accountId && categorySpace && accountSpace !== categorySpace) {
+    console.warn(`Category ${result.choice} space (${categorySpace}) does not match account ${accountId} space (${accountSpace}), returning null`);
     return null;
   }
 
