@@ -6,6 +6,7 @@
   "description": "Railway cron worker that imports bank email transactions into Wallit",
   "main": "src/index.mjs",
   "scripts": {
+    "build": "echo 'no build'",
     "start": "node src/index.mjs",
     "test": "node run-tests.mjs",
     "test:watch": "node --test --watch test/*.test.mjs"
