@@ -72,6 +72,7 @@ export async function createProcessingLog() {
       decision TEXT NOT NULL,
       provider TEXT,
       parser_succeeded BOOLEAN,
+      account_id TEXT,
       category_id TEXT,
       import_success BOOLEAN,
       import_duplicate BOOLEAN,
@@ -83,18 +84,31 @@ export async function createProcessingLog() {
     CREATE INDEX IF NOT EXISTS idx_processing_log_message_id 
     ON bank_email_processing_log(message_id)
   `;
+  
+  await sql`
+    DO $$ 
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'bank_email_processing_log' 
+        AND column_name = 'account_id'
+      ) THEN
+        ALTER TABLE bank_email_processing_log ADD COLUMN account_id TEXT;
+      END IF;
+    END $$;
+  `;
 }
 
 export async function logProcessing(entry) {
   await sql`
     INSERT INTO bank_email_processing_log (
       uid, message_id, from_address, subject, decision, 
-      provider, parser_succeeded, category_id, 
+      provider, parser_succeeded, account_id, category_id, 
       import_success, import_duplicate, error_message
     ) VALUES (
       ${entry.uid}, ${entry.messageId}, ${entry.from}, ${entry.subject},
       ${entry.decision}, ${entry.provider || null}, ${entry.parserSucceeded || false},
-      ${entry.categoryId || null}, ${entry.importSuccess || false},
+      ${entry.accountId || null}, ${entry.categoryId || null}, ${entry.importSuccess || false},
       ${entry.importDuplicate || false}, ${entry.errorMessage || null}
     )
   `;
