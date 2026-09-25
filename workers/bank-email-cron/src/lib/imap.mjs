@@ -1,6 +1,7 @@
 import Imap from 'imap';
 import { simpleParser } from 'mailparser';
 import { config } from '../config/index.mjs';
+import { PROVIDER_FROM_ALLOWLIST } from './account-resolver.mjs';
 
 export class ImapClient {
   constructor() {
@@ -37,7 +38,16 @@ export class ImapClient {
 
   async searchBySenderSince(senders, sinceDate) {
     return new Promise((resolve, reject) => {
-      const criteria = [['OR', ...senders.map(from => ['FROM', from])]];
+      let fromCriteria;
+      if (senders.length === 1) {
+        fromCriteria = ['FROM', senders[0]];
+      } else if (senders.length === 2) {
+        fromCriteria = ['OR', ['FROM', senders[0]], ['FROM', senders[1]]];
+      } else {
+        fromCriteria = ['OR', ['FROM', senders[0]], ['OR', ['FROM', senders[1]], ['FROM', senders[2]]]];
+      }
+      
+      const criteria = [fromCriteria];
       
       if (sinceDate) {
         criteria.push(['SINCE', sinceDate]);
@@ -91,13 +101,9 @@ export class ImapClient {
   }
 
   async fetchMessagesSince(lastUid, initialUid, lookbackDays) {
-    const allowedSenders = [
-      'contacto@bci.cl',
-      'no-reply@tenpo.cl',
-      'info@mercadopago.com',
-    ];
+    const allowedSenders = Object.keys(PROVIDER_FROM_ALLOWLIST);
 
-    console.log(`[IMAP] Searching for messages from allowed senders (lastUid: ${lastUid})`);
+    console.log(`[IMAP] Searching for messages from allowed senders: ${allowedSenders.join(', ')} (lastUid: ${lastUid})`);
 
     let sinceDate = null;
     if (lastUid === 0 && lookbackDays > 0) {

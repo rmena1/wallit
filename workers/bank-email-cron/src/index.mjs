@@ -110,17 +110,7 @@ async function processEmail(email, cursor) {
     logEntry.decision = 'error';
     logEntry.errorMessage = error.message;
     await logProcessing(logEntry);
-    
-    const isClassifyError = error.message.includes('Jev API error') || 
-                           error.message.includes('Luna API error') ||
-                           error.message.includes('Luna fallback unavailable');
-    
-    if (isClassifyError) {
-      console.error(`UID ${email.uid}: classifier API error (non-actionable), advancing cursor:`, error.message);
-      return { success: true, skip: true, advance: true };
-    }
-    
-    console.error(`UID ${email.uid}: processing failed, stopping:`, error);
+    console.error(`UID ${email.uid}: processing failed, stopping (will retry next cron):`, error.message);
     return { success: false, error: error.message, advance: false };
   }
 }
