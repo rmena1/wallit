@@ -35,12 +35,29 @@ export class ImapClient {
     });
   }
 
-  async fetchMessagesSince(uid) {
-    const fetchQuery = uid > 0 ? `${uid + 1}:*` : '1:*';
-    
+  async searchBySenderSince(senders, sinceDate) {
+    return new Promise((resolve, reject) => {
+      const criteria = [['OR', ...senders.map(from => ['FROM', from])]];
+      
+      if (sinceDate) {
+        criteria.push(['SINCE', sinceDate]);
+      }
+
+      this.imap.search(criteria, (err, uids) => {
+        if (err) reject(err);
+        else resolve(uids || []);
+      });
+    });
+  }
+
+  async fetchMessagesByUid(uids) {
+    if (uids.length === 0) {
+      return [];
+    }
+
     return new Promise((resolve, reject) => {
       const messages = [];
-      const fetch = this.imap.seq.fetch(fetchQuery, {
+      const fetch = this.imap.fetch(uids, {
         bodies: '',
         struct: true,
       });
@@ -73,6 +90,38 @@ export class ImapClient {
     });
   }
 
+  async fetchMessagesSince(lastUid, initialUid, lookbackDays) {
+    const allowedSenders = [
+      'contacto@bci.cl',
+      'no-reply@tenpo.cl',
+      'info@mercadopago.com',
+    ];
+
+    console.log(`[IMAP] Searching for messages from allowed senders (lastUid: ${lastUid})`);
+
+    let sinceDate = null;
+    if (lastUid === 0 && lookbackDays > 0) {
+      const lookbackMs = lookbackDays * 24 * 60 * 60 * 1000;
+      sinceDate = new Date(Date.now() - lookbackMs);
+      console.log(`[IMAP] First run: applying ${lookbackDays}-day lookback (since ${sinceDate.toISOString()})`);
+    }
+
+    const matchedUids = await this.searchBySenderSince(allowedSenders, sinceDate);
+    console.log(`[IMAP] SEARCH returned ${matchedUids.length} UIDs from allowed senders`);
+
+    const effectiveMinUid = lastUid === 0 ? initialUid : lastUid + 1;
+    const uidsToFetch = matchedUids.filter(uid => uid >= effectiveMinUid);
+    
+    console.log(`[IMAP] Filtered to ${uidsToFetch.length} UIDs >= ${effectiveMinUid}`);
+
+    if (uidsToFetch.length === 0) {
+      return [];
+    }
+
+    console.log(`[IMAP] Fetching ${uidsToFetch.length} messages by UID`);
+    return await this.fetchMessagesByUid(uidsToFetch);
+  }
+
   async parseMessages(rawMessages) {
     const parsed = [];
     for (const raw of rawMessages) {
@@ -99,22 +148,37 @@ export async function fetchNewEmails(lastUid) {
   const client = new ImapClient();
   
   try {
+    console.log(`[IMAP] Connecting to ${config.gmail.host}:${config.gmail.port} (TLS: ${config.gmail.tls})`);
     await client.connect();
+    console.log('[IMAP] Connected successfully');
+    
+    console.log(`[IMAP] Opening folder: ${config.gmail.folder}`);
     const box = await client.openFolder(config.gmail.folder);
+    console.log(`[IMAP] Folder opened: ${box.messages.total} total messages, UIDVALIDITY ${box.uidvalidity}`);
     
     if (!box || box.messages.total === 0) {
-      console.log('No messages in folder');
+      console.log('[IMAP] No messages in folder');
       return { uidvalidity: box?.uidvalidity || null, messages: [] };
     }
 
-    const rawMessages = await client.fetchMessagesSince(lastUid);
+    const rawMessages = await client.fetchMessagesSince(
+      lastUid,
+      config.gmail.initialUid,
+      config.gmail.lookbackDays
+    );
+    
+    console.log(`[IMAP] Parsing ${rawMessages.length} fetched messages`);
     const messages = await client.parseMessages(rawMessages);
+    const filtered = messages.filter(m => m.uid > lastUid);
+    
+    console.log(`[IMAP] Returning ${filtered.length} messages after filtering UID > ${lastUid}`);
     
     return {
       uidvalidity: box.uidvalidity,
-      messages: messages.filter(m => m.uid > lastUid),
+      messages: filtered,
     };
   } finally {
+    console.log('[IMAP] Disconnecting');
     client.disconnect();
   }
 }
