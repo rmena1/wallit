@@ -124,15 +124,47 @@ async function callLuna(prompt, state, timeoutMs) {
     const result = await response.json();
     
     let content;
-    if (result.output && Array.isArray(result.output)) {
-      const assistantItem = result.output.find(item => 
-        item.role === 'assistant' && item.content
-      );
-      if (assistantItem && Array.isArray(assistantItem.content)) {
-        const textContent = assistantItem.content.find(c => c.type === 'text');
-        content = textContent?.text;
+    
+    // Prefer top-level output_text string
+    if (typeof result.output_text === 'string') {
+      content = result.output_text;
+    }
+    // Walk output array for message items and content parts
+    else if (result.output && Array.isArray(result.output)) {
+      for (const item of result.output) {
+        // Handle items with type: "message"
+        if (item.type === 'message' && item.content) {
+          if (Array.isArray(item.content)) {
+            // Find output_text or text content parts
+            const textPart = item.content.find(c => 
+              c.type === 'output_text' || c.type === 'text'
+            );
+            if (textPart) {
+              content = textPart.output_text || textPart.text;
+              break;
+            }
+          } else if (typeof item.content === 'string') {
+            content = item.content;
+            break;
+          }
+        }
+        // Handle assistant role items
+        else if (item.role === 'assistant' && item.content) {
+          if (Array.isArray(item.content)) {
+            // Find output_text or text content parts
+            const textPart = item.content.find(c => 
+              c.type === 'output_text' || c.type === 'text'
+            );
+            if (textPart) {
+              content = textPart.output_text || textPart.text;
+              break;
+            }
+          }
+        }
       }
-    } else if (result.output?.text) {
+    }
+    // Fallback to older response shapes
+    else if (result.output?.text) {
       content = result.output.text;
     } else if (typeof result.output === 'string') {
       content = result.output;
@@ -141,7 +173,27 @@ async function callLuna(prompt, state, timeoutMs) {
     }
     
     if (!content) {
-      throw new Error('Luna response missing content');
+      // Generate diagnostic info without exposing sensitive data
+      const diagnostic = {
+        resultKeys: Object.keys(result).sort(),
+        outputType: Array.isArray(result.output) ? 'array' : typeof result.output,
+      };
+      
+      if (Array.isArray(result.output)) {
+        diagnostic.outputItemTypes = result.output.map(item => ({
+          type: item.type,
+          role: item.role,
+          hasContent: !!item.content,
+          contentType: Array.isArray(item.content) ? 'array' : typeof item.content,
+        }));
+        
+        // Include content part types for each item
+        diagnostic.contentPartTypes = result.output
+          .filter(item => Array.isArray(item.content))
+          .map(item => item.content.map(c => c.type));
+      }
+      
+      throw new Error(`Luna response missing content: ${JSON.stringify(diagnostic).slice(0, 500)}`);
     }
 
     return JSON.parse(content);
