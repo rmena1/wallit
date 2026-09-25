@@ -97,19 +97,17 @@ async function callLuna(prompt, state, timeoutMs) {
         text: {
           format: {
             type: 'json_schema',
-            json_schema: {
-              name: 'decision',
-              strict: true,
-              schema: {
-                type: 'object',
-                properties: {
-                  choice: { type: 'string' },
-                  confidence: { type: 'number' },
-                },
-                required: ['choice', 'confidence'],
-                additionalProperties: false,
+            name: 'transaction_classification',
+            schema: {
+              type: 'object',
+              properties: {
+                choice: { type: 'string' },
+                confidence: { type: 'number' },
               },
+              required: ['choice', 'confidence'],
+              additionalProperties: false,
             },
+            strict: true,
           },
         },
       }),
@@ -124,13 +122,29 @@ async function callLuna(prompt, state, timeoutMs) {
     }
 
     const result = await response.json();
-    const outputText = result.output?.text || result.output;
     
-    if (!outputText) {
-      throw new Error('Luna response missing output');
+    let content;
+    if (result.output && Array.isArray(result.output)) {
+      const assistantItem = result.output.find(item => 
+        item.role === 'assistant' && item.content
+      );
+      if (assistantItem && Array.isArray(assistantItem.content)) {
+        const textContent = assistantItem.content.find(c => c.type === 'text');
+        content = textContent?.text;
+      }
+    } else if (result.output?.text) {
+      content = result.output.text;
+    } else if (typeof result.output === 'string') {
+      content = result.output;
+    } else if (result.choices?.[0]?.message?.content) {
+      content = result.choices[0].message.content;
+    }
+    
+    if (!content) {
+      throw new Error('Luna response missing content');
     }
 
-    return JSON.parse(outputText);
+    return JSON.parse(content);
   } catch (error) {
     clearTimeout(timeout);
     throw error;
