@@ -97,19 +97,21 @@ async function callLuna(prompt, state, timeoutMs) {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            name: 'decision',
-            strict: true,
-            schema: {
-              type: 'object',
-              properties: {
-                choice: { type: 'string' },
-                confidence: { type: 'number' },
+        text: {
+          format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'decision',
+              strict: true,
+              schema: {
+                type: 'object',
+                properties: {
+                  choice: { type: 'string' },
+                  confidence: { type: 'number' },
+                },
+                required: ['choice', 'confidence'],
+                additionalProperties: false,
               },
-              required: ['choice', 'confidence'],
-              additionalProperties: false,
             },
           },
         },

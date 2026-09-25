@@ -53,28 +53,28 @@ async function processEmail(email, cursor) {
   };
 
   try {
-    const txDecision = await isTransaction(email);
-    if (!txDecision) {
-      logEntry.decision = 'not_transaction';
-      await logProcessing(logEntry);
-      console.log(`UID ${email.uid}: not a transaction, skipping`);
-      return { success: true, skip: true };
-    }
-
-    logEntry.decision = 'transaction';
-
     const parseResult = await parseEmail(email);
     if (parseResult.skip) {
       logEntry.provider = parseResult.provider;
       logEntry.decision = parseResult.reason;
       await logProcessing(logEntry);
-      console.log(`UID ${email.uid}: ${parseResult.reason}`);
-      return { success: true, skip: true };
+      console.log(`UID ${email.uid}: ${parseResult.reason}, advancing cursor`);
+      return { success: true, skip: true, advance: true };
     }
 
     const parsed = parseResult.parsed;
     logEntry.provider = parsed.provider;
     logEntry.parserSucceeded = true;
+
+    const txDecision = await isTransaction(email);
+    if (!txDecision) {
+      logEntry.decision = 'not_transaction';
+      await logProcessing(logEntry);
+      console.log(`UID ${email.uid}: not a transaction, advancing cursor`);
+      return { success: true, skip: true, advance: true };
+    }
+
+    logEntry.decision = 'transaction';
 
     try {
       parsed.accountId = resolveAccount(parsed);
@@ -82,8 +82,8 @@ async function processEmail(email, cursor) {
       logEntry.decision = 'account_unresolved';
       logEntry.errorMessage = error.message;
       await logProcessing(logEntry);
-      console.error(`UID ${email.uid}: ${error.message}`);
-      return { success: false, error: error.message };
+      console.error(`UID ${email.uid}: ${error.message}, stopping (requires manual fix)`);
+      return { success: false, error: error.message, advance: false };
     }
 
     const categoryId = await chooseCategory(email, parsed.originalName);
@@ -100,18 +100,28 @@ async function processEmail(email, cursor) {
 
     if (importResult.duplicate) {
       console.log(`UID ${email.uid}: duplicate import, advancing cursor`);
-      return { success: true, skip: false };
+      return { success: true, skip: false, advance: true };
     }
 
     console.log(`UID ${email.uid}: imported successfully as ${importResult.movementId}`);
-    return { success: true, skip: false };
+    return { success: true, skip: false, advance: true };
 
   } catch (error) {
     logEntry.decision = 'error';
     logEntry.errorMessage = error.message;
     await logProcessing(logEntry);
-    console.error(`UID ${email.uid}: processing failed:`, error);
-    return { success: false, error: error.message };
+    
+    const isClassifyError = error.message.includes('Jev API error') || 
+                           error.message.includes('Luna API error') ||
+                           error.message.includes('Luna fallback unavailable');
+    
+    if (isClassifyError) {
+      console.error(`UID ${email.uid}: classifier API error (non-actionable), advancing cursor:`, error.message);
+      return { success: true, skip: true, advance: true };
+    }
+    
+    console.error(`UID ${email.uid}: processing failed, stopping:`, error);
+    return { success: false, error: error.message, advance: false };
   }
 }
 
@@ -152,13 +162,13 @@ async function main() {
     for (const email of messages) {
       const result = await processEmail(email, cursor);
       
-      if (!result.success) {
-        console.error(`Stopping at UID ${email.uid} due to error`);
+      if (result.advance) {
+        lastSuccessfulUid = email.uid;
+        await updateCursor(uidvalidity, lastSuccessfulUid);
+      } else {
+        console.error(`Stopping at UID ${email.uid} due to actionable error (cursor not advanced)`);
         break;
       }
-
-      lastSuccessfulUid = email.uid;
-      await updateCursor(uidvalidity, lastSuccessfulUid);
     }
 
     console.log(`Worker completed. Last processed UID: ${lastSuccessfulUid}`);
