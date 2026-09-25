@@ -279,7 +279,21 @@ export async function importEmailTransaction(input: EmailImportInput): Promise<I
     if (input?.kind === 'transfer') return await importTransfer(input)
     return fail('Unsupported import kind')
   } catch (error) {
-    console.error('Email import service failed', error instanceof Error ? error.message : 'unknown error')
+    const errorMessage = error instanceof Error ? error.message : 'unknown error'
+    console.error('Email import service failed', errorMessage)
+    
+    // Return specific validation errors to help with debugging
+    if (error instanceof Error && (
+      errorMessage.includes('is required') ||
+      errorMessage.includes('must be') ||
+      errorMessage.includes('Unsupported') ||
+      errorMessage.includes('is outside') ||
+      errorMessage.includes('does not belong')
+    )) {
+      return fail(errorMessage)
+    }
+    
+    // Generic error for unexpected failures
     return fail('Import failed')
   }
 }
