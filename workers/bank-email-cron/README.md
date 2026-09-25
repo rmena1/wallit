@@ -91,6 +91,14 @@ IMAP_TLS_REJECT_UNAUTHORIZED=false
 
 This disables TLS certificate validation for IMAP connections. Use only when Railway's egress or TLS stack presents certificates that Node's bundled CAs reject. The default is `true` (secure, validates certificates).
 
+**Note:** If outbound HTTPS requests to OpenAI fail with certificate errors, you may need to configure Node.js to use the system certificate store:
+
+```bash
+NODE_OPTIONS=--use-system-ca
+```
+
+This is only necessary if Railway's environment presents certificates that Node's bundled root CAs do not recognize. Do not disable certificate validation (`rejectUnauthorized: false`) for OpenAI API calls.
+
 ## Running Locally
 
 ```bash
