@@ -1,11 +1,13 @@
 /** Parse Mercado Pago outgoing transfer and subscription/prose payment notices. */
 
+import { parseEmailDate } from '../lib/date-utils.mjs';
+
 const MP_TRANSFER = /Ya enviamos tu transferencia de\s*\$\s*([0-9.]+(?:,[0-9]{1,2})?)/i;
-const MP_BENEFICIARY = /Nombre y apellido:\s*(.+?)(?=\s+(?:Entidad|N[uú]mero de cuenta|Si |Segu[ií]|Recibiste|$))/i;
-const MP_ENTITY = /Entidad:\s*(.+?)(?=\s+(?:N[uú]mero de cuenta|Si |Segu[ií]|Recibiste|$))/i;
+const MP_BENEFICIARY = /Nombre y apellido:\s*(.+?)(?:\s+(?:Entidad|N[uú]mero de cuenta|Si |Segu[ií]|Recibiste)|$)/i;
+const MP_ENTITY = /Entidad:\s*(.+?)(?:\s+(?:N[uú]mero de cuenta|Si |Segu[ií]|Recibiste)|$)/i;
 const MP_ACCOUNT = /N[uú]mero de cuenta:\s*(\d+)/i;
-const MP_PAGASTE = /Pagaste\s*\$\s*([0-9]+[.,][0-9]{2}|[0-9.]+(?:,[0-9]{1,2})?)\s+con\s+(\w+)\s+terminada\s+en\s+(\d{4})\s+a\s+([^.]+?)(?:\.|$)/i;
-const MP_SUSCRIBISTE = /Te suscribiste a\s+(.+?)\s+de\s+(.+?)\s+por\s*\$\s*([0-9]+[.,][0-9]{2}|[0-9.]+(?:,[0-9]{1,2})?)(?:\s+al mes)?(?:\s+con\s+(\w+)\s+terminada\s+en\s+(\d{4}))?/i;
+const MP_PAGASTE = /Pagaste\s*\$\s*(\d+(?:\.\d{3})+(?:,\d{1,2})?|\d+[.,]\d{2}|\d+)\s+con\s+([^\s]+)\s+terminada\s+en\s+(\d{4})\s+a\s+([^.]+?)(?:\.|$)/i;
+const MP_SUSCRIBISTE = /Te suscribiste a\s+(.+?)\s+de\s+(.+?)\s+por\s*\$\s*(\d+(?:\.\d{3})+(?:,\d{1,2})?|\d+[.,]\d{2}|\d+)(?:\s+al mes)?(?:\s+con\s+([^\s]+)\s+terminada\s+en\s+(\d{4}))?/i;
 
 function bodyText(email) {
   let text = String(email?.textBody ?? '').replace(/\r\n?/g, '\n');
@@ -37,24 +39,6 @@ function moneyToCentavos(value) {
   return clpAmount(normalized);
 }
 
-const SPANISH_MONTHS = new Map([
-  ['enero', 1], ['febrero', 2], ['marzo', 3], ['abril', 4], ['mayo', 5], ['junio', 6],
-  ['julio', 7], ['agosto', 8], ['septiembre', 9], ['octubre', 10], ['noviembre', 11], ['diciembre', 12],
-]);
-
-function envelopeDateTime(value) {
-  const raw = String(value ?? '').trim();
-  const spanish = raw.match(/^(\d{1,2})\s+de\s+([a-záéíóú]+)\s+de\s+(\d{4})\s+a\s+las\s+(\d{1,2}):(\d{2})$/i);
-  if (spanish) {
-    const month = SPANISH_MONTHS.get(spanish[2].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase());
-    if (month) return {
-      date: `${spanish[3]}-${String(month).padStart(2, '0')}-${String(spanish[1]).padStart(2, '0')}`,
-      time: `${String(spanish[4]).padStart(2, '0')}:${spanish[5]}`,
-    };
-  }
-  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
-  return iso ? { date: iso[1] + '-' + iso[2] + '-' + iso[3], time: iso[4] + ':' + iso[5] } : {};
-}
 
 function parseOutgoingTransfer(text, email) {
   if (!/Ya enviamos tu transferencia de/i.test(text)) return null;
@@ -65,7 +49,7 @@ function parseOutgoingTransfer(text, email) {
 
   const beneficiary = beneficiaryMatch[1].trim();
   const entity = entityMatch[1].trim();
-  const dateTime = envelopeDateTime(email?.date);
+  const dateTime = parseEmailDate(email?.date);
   const accountMatch = text.match(MP_ACCOUNT);
   return {
     provider: 'mercadopago',
@@ -87,7 +71,7 @@ function parseSubscriptionProse(text, email) {
   const pagaste = text.match(MP_PAGASTE);
   if (pagaste) {
     const merchant = pagaste[4].trim();
-    const dateTime = envelopeDateTime(email?.date);
+    const dateTime = parseEmailDate(email?.date);
     return {
       provider: 'mercadopago',
       type: 'expense',
@@ -106,7 +90,7 @@ function parseSubscriptionProse(text, email) {
   if (sub) {
     const product = sub[1].trim();
     const merchant = sub[2].trim();
-    const dateTime = envelopeDateTime(email?.date);
+    const dateTime = parseEmailDate(email?.date);
     return {
       provider: 'mercadopago',
       type: 'expense',
