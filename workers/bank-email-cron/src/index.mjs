@@ -53,7 +53,10 @@ async function processEmail(email, cursor) {
   };
 
   try {
+    console.error(`[UID ${email.uid}] Step: before parse`);
     const parseResult = await parseEmail(email);
+    console.error(`[UID ${email.uid}] Step: after parse (skip=${parseResult.skip}, provider=${parseResult.provider})`);
+    
     if (parseResult.skip) {
       logEntry.provider = parseResult.provider;
       logEntry.decision = parseResult.reason;
@@ -66,7 +69,10 @@ async function processEmail(email, cursor) {
     logEntry.provider = parsed.provider;
     logEntry.parserSucceeded = true;
 
+    console.error(`[UID ${email.uid}] Step: before isTransaction`);
     const txDecision = await isTransaction(email);
+    console.error(`[UID ${email.uid}] Step: after isTransaction (result=${txDecision})`);
+    
     if (!txDecision) {
       logEntry.decision = 'not_transaction';
       await logProcessing(logEntry);
@@ -86,12 +92,16 @@ async function processEmail(email, cursor) {
       return { success: false, error: error.message, advance: false };
     }
 
+    console.error(`[UID ${email.uid}] Step: before chooseCategory`);
     const categoryId = await chooseCategory(email, parsed.originalName);
-    logEntry.categoryId = categoryId;
+    console.error(`[UID ${email.uid}] Step: after chooseCategory (categoryId=${categoryId})`);
 
     const payload = buildImportPayload(parsed, categoryId, email.messageId);
     
+    console.error(`[UID ${email.uid}] Step: before import`);
     const importResult = await importToWallit(payload);
+    console.error(`[UID ${email.uid}] Step: after import (success=${importResult.success})`);
+    
     logEntry.importSuccess = importResult.success;
     logEntry.importDuplicate = importResult.duplicate || false;
     logEntry.decision = importResult.duplicate ? 'duplicate_success' : 'imported';
@@ -107,6 +117,14 @@ async function processEmail(email, cursor) {
     return { success: true, skip: false, advance: true };
 
   } catch (error) {
+    console.error(`[UID ${email.uid}] Step: on catch`, {
+      message: error.message,
+      name: error.name,
+      causeCode: error.cause?.code,
+      causeMessage: error.cause?.message,
+      stack: error.stack?.split('\n').slice(0, 5).join('\n'),
+    });
+    
     logEntry.decision = 'error';
     logEntry.errorMessage = error.message;
     await logProcessing(logEntry);
@@ -115,8 +133,31 @@ async function processEmail(email, cursor) {
   }
 }
 
+async function selfCheck() {
+  console.error('Self-check: verifying service configuration');
+  
+  const { config } = await import('./config/index.mjs');
+  
+  const typesafeHost = new URL(config.typesafe.baseUrl).host;
+  const typesafeKeySet = !!config.typesafe.apiKey;
+  console.error(`  TypeSafe: baseUrl=${typesafeHost}, apiKey=${typesafeKeySet ? 'set' : 'NOT SET'}`);
+  
+  if (config.openai.apiKey) {
+    const openaiHost = new URL(config.openai.baseUrl).host;
+    console.error(`  OpenAI: baseUrl=${openaiHost}, apiKey=set`);
+  } else {
+    console.error(`  OpenAI: apiKey=NOT SET (Luna fallback unavailable)`);
+  }
+  
+  const wallitHost = new URL(config.wallit.importUrl).host;
+  const wallitTokenSet = !!config.wallit.importToken;
+  console.error(`  Wallit: importUrl=${wallitHost}, importToken=${wallitTokenSet ? 'set' : 'NOT SET'}`);
+}
+
 async function main() {
   console.log('Bank email cron worker starting...');
+  
+  await selfCheck();
   
   await createProcessingLog();
 
