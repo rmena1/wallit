@@ -103,12 +103,18 @@ Configure Railway service with cron schedule:
 
 ### Railway Service Configuration
 
-1. Create a new Railway service in your Wallit project
-2. Set service type to "Cron Job"
-3. Set start command: `npm start`
-4. Set schedule: `*/10 * * * *`
-5. Configure all required environment variables in Railway secrets
-6. Ensure private networking is enabled for Wallit API access
+**Add as New Railway Service in Project:**
+
+1. In Railway dashboard, add a new service to your Wallit project
+2. Connect to the `rmena1/wallit` repository
+3. Set root directory: `workers/bank-email-cron`
+4. Configure service as **Cron Job**
+5. Set cron schedule: `*/10 * * * *`
+6. Set start command: `npm start`
+7. Configure environment variables (see below)
+8. Enable private networking for secure Wallit API access
+
+**Important**: Railway multi-service projects are configured through the dashboard, not via `railway.toml`. The root `railway.toml` is for the main Wallit Next.js app.
 
 ### Database
 
