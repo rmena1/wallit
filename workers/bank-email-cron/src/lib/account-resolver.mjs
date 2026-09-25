@@ -1,6 +1,6 @@
 import { config } from '../config/index.mjs';
 
-const PROVIDER_FROM_ALLOWLIST = {
+export const PROVIDER_FROM_ALLOWLIST = {
   'contacto@bci.cl': 'bci',
   'no-reply@tenpo.cl': 'tenpo',
   'info@mercadopago.com': 'mercadopago',

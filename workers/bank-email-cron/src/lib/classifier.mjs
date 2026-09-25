@@ -93,23 +93,22 @@ async function callLuna(prompt, state, timeoutMs) {
         reasoning: {
           effort: config.openai.reasoningEffort,
         },
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            name: 'decision',
-            strict: true,
-            schema: {
-              type: 'object',
-              properties: {
-                choice: { type: 'string' },
-                confidence: { type: 'number' },
+        input: `${systemPrompt}\n\n${userPrompt}`,
+        text: {
+          format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'decision',
+              strict: true,
+              schema: {
+                type: 'object',
+                properties: {
+                  choice: { type: 'string' },
+                  confidence: { type: 'number' },
+                },
+                required: ['choice', 'confidence'],
+                additionalProperties: false,
               },
-              required: ['choice', 'confidence'],
-              additionalProperties: false,
             },
           },
         },
@@ -125,13 +124,13 @@ async function callLuna(prompt, state, timeoutMs) {
     }
 
     const result = await response.json();
-    const content = result.choices?.[0]?.message?.content;
+    const outputText = result.output?.text || result.output;
     
-    if (!content) {
-      throw new Error('Luna response missing content');
+    if (!outputText) {
+      throw new Error('Luna response missing output');
     }
 
-    return JSON.parse(content);
+    return JSON.parse(outputText);
   } catch (error) {
     clearTimeout(timeout);
     throw error;
