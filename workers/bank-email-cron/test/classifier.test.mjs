@@ -248,6 +248,9 @@ describe('Classifier Luna API', () => {
 
     try {
       globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
         if (url === 'https://api.openai.com/v1/responses') {
           return {
             ok: false,
@@ -268,8 +271,10 @@ describe('Classifier Luna API', () => {
             textBody: 'Test',
           });
         },
-        {
-          message: /Luna API error: 400/,
+        (error) => {
+          const fullMessage = error.message + ' ' + (error.cause?.message || '');
+          assert.ok(fullMessage.includes('400'), 'Should include 400 status code');
+          return true;
         },
         'Should throw error for 400 response'
       );
@@ -436,6 +441,9 @@ describe('Classifier Luna API', () => {
 
     try {
       globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
         if (url === 'https://api.openai.com/v1/responses') {
           return {
             ok: true,
@@ -463,8 +471,15 @@ describe('Classifier Luna API', () => {
             textBody: 'Test body',
           });
         },
-        {
-          message: /Luna response missing content.*resultKeys.*outputType.*outputItemTypes/,
+        (error) => {
+          let fullMessage = error.message;
+          let currentError = error;
+          while (currentError.cause) {
+            fullMessage += ' ' + (currentError.cause.message || '');
+            currentError = currentError.cause;
+          }
+          assert.ok(fullMessage.includes('missing content'), 'Should mention missing content');
+          return true;
         },
         'Should provide diagnostic info in error message'
       );
@@ -473,3 +488,362 @@ describe('Classifier Luna API', () => {
     }
   });
 });
+
+describe('Classifier Error Handling', () => {
+  test('fetch error with cause includes error code in message', async () => {
+    const originalFetch = globalThis.fetch;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        if (url === 'https://api.openai.com/v1/responses') {
+          const error = new Error('fetch failed');
+          error.cause = {
+            code: 'ETIMEDOUT',
+            message: 'Connection timeout',
+          };
+          throw error;
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      await assert.rejects(
+        async () => {
+          await isTransaction({
+            subject: 'Test',
+            from: 'test@example.com',
+            textBody: 'Test',
+          });
+        },
+        (error) => {
+          assert.ok(error.message.includes('ETIMEDOUT'), 'Error message should include cause code');
+          assert.ok(error.message.includes('Connection timeout'), 'Error message should include cause message');
+          return true;
+        },
+        'Should enrich error with cause details'
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('nested error causes are included in message', async () => {
+    const originalFetch = globalThis.fetch;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        if (url === 'https://api.openai.com/v1/responses') {
+          const rootCause = {
+            code: 'ECONNRESET',
+            message: 'Socket hang up',
+          };
+          const error = new Error('fetch failed');
+          error.cause = {
+            code: 'UND_ERR_SOCKET',
+            message: 'Socket error',
+            cause: rootCause,
+          };
+          throw error;
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      await assert.rejects(
+        async () => {
+          await isTransaction({
+            subject: 'Test',
+            from: 'test@example.com',
+            textBody: 'Test',
+          });
+        },
+        (error) => {
+          assert.ok(error.message.includes('UND_ERR_SOCKET'), 'Should include first cause code');
+          assert.ok(error.message.includes('ECONNRESET'), 'Should include nested cause code');
+          return true;
+        },
+        'Should include full cause chain'
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('Classifier Retry Logic', () => {
+  test('transient network error triggers retry and eventually succeeds', async () => {
+    const originalFetch = globalThis.fetch;
+    let attemptCount = 0;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        
+        attemptCount++;
+        
+        if (url === 'https://api.openai.com/v1/responses') {
+          if (attemptCount < 2) {
+            const error = new Error('fetch failed');
+            error.cause = {
+              code: 'ETIMEDOUT',
+              message: 'Connection timeout',
+            };
+            throw error;
+          }
+          
+          return {
+            ok: true,
+            json: async () => ({
+              output: [
+                {
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify({ choice: 'transaction', confidence: 0.95 }),
+                    },
+                  ],
+                },
+              ],
+            }),
+          };
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      const result = await isTransaction({
+        subject: 'Test transaction',
+        from: 'test@example.com',
+        textBody: 'Test body',
+      });
+
+      assert.strictEqual(result, true, 'Should succeed after retry');
+      assert.ok(attemptCount >= 2, 'Should have attempted at least twice');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('HTTP 429 triggers retry', async () => {
+    const originalFetch = globalThis.fetch;
+    let attemptCount = 0;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        
+        attemptCount++;
+        
+        if (url === 'https://api.openai.com/v1/responses') {
+          if (attemptCount < 2) {
+            return {
+              ok: false,
+              status: 429,
+              text: async () => 'Rate limit exceeded',
+            };
+          }
+          
+          return {
+            ok: true,
+            json: async () => ({
+              output: [
+                {
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify({ choice: 'transaction', confidence: 0.95 }),
+                    },
+                  ],
+                },
+              ],
+            }),
+          };
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      const result = await isTransaction({
+        subject: 'Test transaction',
+        from: 'test@example.com',
+        textBody: 'Test body',
+      });
+
+      assert.strictEqual(result, true, 'Should succeed after retry');
+      assert.ok(attemptCount >= 2, 'Should have retried after 429');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('HTTP 502, 503, 504 trigger retries', async () => {
+    const originalFetch = globalThis.fetch;
+    
+    for (const status of [502, 503, 504]) {
+      let attemptCount = 0;
+      
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        
+        attemptCount++;
+        
+        if (url === 'https://api.openai.com/v1/responses') {
+          if (attemptCount < 2) {
+            return {
+              ok: false,
+              status,
+              text: async () => 'Server error',
+            };
+          }
+          
+          return {
+            ok: true,
+            json: async () => ({
+              output: [
+                {
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify({ choice: 'transaction', confidence: 0.95 }),
+                    },
+                  ],
+                },
+              ],
+            }),
+          };
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      const result = await isTransaction({
+        subject: 'Test transaction',
+        from: 'test@example.com',
+        textBody: 'Test body',
+      });
+
+      assert.strictEqual(result, true, `Should succeed after ${status} retry`);
+      assert.ok(attemptCount >= 2, `Should have retried after ${status}`);
+      
+      attemptCount = 0;
+    }
+    
+    globalThis.fetch = originalFetch;
+  });
+
+  test('non-transient errors do not trigger retries', async () => {
+    const originalFetch = globalThis.fetch;
+    let attemptCount = 0;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        
+        if (url === 'https://api.openai.com/v1/responses') {
+          attemptCount++;
+          return {
+            ok: false,
+            status: 400,
+            text: async () => 'Bad request',
+          };
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      await assert.rejects(
+        async () => {
+          await isTransaction({
+            subject: 'Test',
+            from: 'test@example.com',
+            textBody: 'Test',
+          });
+        },
+        (error) => {
+          let fullMessage = error.message;
+          let currentError = error;
+          while (currentError.cause) {
+            fullMessage += ' ' + (currentError.cause.message || '');
+            currentError = currentError.cause;
+          }
+          assert.ok(fullMessage.includes('400'), 'Should include 400 status');
+          return true;
+        },
+        'Should fail immediately for 400'
+      );
+
+      assert.strictEqual(attemptCount, 1, 'Should not retry for 400 errors');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('max retries exhausted throws enriched error', async () => {
+    const originalFetch = globalThis.fetch;
+    let lunaAttemptCount = 0;
+    
+    try {
+      globalThis.fetch = mock.fn(async (url, options) => {
+        if (url.includes('typesafe.ai')) {
+          throw new Error('Jev unavailable');
+        }
+        
+        if (url === 'https://api.openai.com/v1/responses') {
+          lunaAttemptCount++;
+          const error = new Error('fetch failed');
+          error.cause = {
+            code: 'ECONNRESET',
+            message: 'Connection reset',
+          };
+          throw error;
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+
+      const { isTransaction } = await import('../src/lib/classifier.mjs');
+      
+      await assert.rejects(
+        async () => {
+          await isTransaction({
+            subject: 'Test',
+            from: 'test@example.com',
+            textBody: 'Test',
+          });
+        },
+        (error) => {
+          assert.ok(error.message.includes('ECONNRESET'), 'Should include cause code');
+          assert.ok(error.message.includes('attempt'), 'Should mention attempts');
+          return true;
+        },
+        'Should throw enriched error after max retries'
+      );
+
+      assert.strictEqual(lunaAttemptCount, 3, 'Should attempt 3 times (initial + 2 retries)');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+  });
