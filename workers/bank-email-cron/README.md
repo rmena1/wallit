@@ -81,6 +81,16 @@ USD_CLP_EXCHANGE_RATE_X100=94650
 
 See `.env.example` for optional configuration (Luna fallback, IMAP settings, timeouts, confidence threshold).
 
+**Important for Railway Deployment:**
+
+If you encounter IMAP TLS certificate errors on Railway (`DEPTH_ZERO_SELF_SIGNED_CERT`), set:
+
+```bash
+IMAP_TLS_REJECT_UNAUTHORIZED=false
+```
+
+This disables TLS certificate validation for IMAP connections. Use only when Railway's egress or TLS stack presents certificates that Node's bundled CAs reject. The default is `true` (secure, validates certificates).
+
 ## Running Locally
 
 ```bash

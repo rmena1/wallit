@@ -40,6 +40,7 @@ export const config = {
     host: getEnv('GMAIL_IMAP_HOST', 'imap.gmail.com'),
     port: parsePositiveInt(getEnv('GMAIL_IMAP_PORT', '993'), 'GMAIL_IMAP_PORT'),
     tls: getEnv('GMAIL_IMAP_TLS', 'true') !== 'false',
+    tlsRejectUnauthorized: getEnv('IMAP_TLS_REJECT_UNAUTHORIZED', 'true') !== 'false',
     folder: getEnv('GMAIL_IMAP_FOLDER', 'INBOX'),
     initialUid: parseNonNegativeInt(getEnv('GMAIL_INITIAL_UID', '0'), 'GMAIL_INITIAL_UID'),
     lookbackDays: parsePositiveInt(getEnv('GMAIL_LOOKBACK_DAYS', '30'), 'GMAIL_LOOKBACK_DAYS'),
