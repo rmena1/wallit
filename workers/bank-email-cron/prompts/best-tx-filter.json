@@ -1,0 +1,10 @@
+{
+  "model": "jev-latest",
+  "question_id": "tx_filter",
+  "type": "choice",
+  "instructions": "Decide whether this bank or fintech email notifies a completed monetary transaction (card purchase, transfer, payment, charge, refund that moves money) versus a non-transaction message (marketing, security alert without a charge, password reset, statement summary with no single charge, promotional tips, account onboarding). Use only subject, from, and body_excerpt.",
+  "criteria": {
+    "transaction": "Email confirms a specific completed charge/purchase/payment/transfer/refund with amount and usually merchant or counterparty. Chilean bank/fintech purchase notifications (BCI 'Notificación de uso', Tenpo 'Comprobante de compra') are transactions.",
+    "not_transaction": "No single completed money movement: ads, tips, KYC/security without a charge, failed-auth alerts, generic statements, newsletters, card delivery, onboarding."
+  }
+}

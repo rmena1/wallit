@@ -1,0 +1,11 @@
+[[services]]
+name = "bank-email-cron"
+source = "workers/bank-email-cron"
+
+[services.build]
+builder = "NIXPACKS"
+buildCommand = "npm install"
+
+[services.deploy]
+startCommand = "npm start"
+cronSchedule = "*/10 * * * *"

@@ -1,0 +1,22 @@
+{
+  "name": "wallit-bank-email-cron",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Railway cron worker that imports bank email transactions into Wallit",
+  "main": "src/index.mjs",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "test": "node run-tests.mjs",
+    "test:watch": "node --test --watch test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "imap": "^0.8.19",
+    "mailparser": "^3.7.1",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {}
+}
