@@ -208,3 +208,37 @@ test('conflicting suffixes cannot agree through custom account aliases', () => {
     delete config.transferAccountMap['tenpo:CLP:9999'];
   }
 });
+
+test('BCI/MACH aliases resolve Tenpo transfers to BCI checking', async () => {
+  for (const bank of ['BCI', 'BANCO BCI', 'BCI/MACH', 'BANCO BCI/MACH', 'BCI / MACH', 'banco bci/mach']) {
+    for (const account of ['8080', '****8080']) {
+      assert.equal(resolveTransferAccount(bank, 'CLP', account), config.accounts.bciChecking);
+      const email = outgoing('Raimundo Mena', account);
+      email.textBody = email.textBody.replace('Banco de destino: BCI', `Banco de destino: ${bank}`)
+        .replace('$10.000', '$131.000');
+      const { payload, result } = await process(email);
+      assert.equal(payload.kind, 'transfer');
+      assert.equal(payload.fromAccountId, config.accounts.tenpoVista);
+      assert.equal(payload.toAccountId, config.accounts.bciChecking);
+      assert.equal(result.advance, true);
+    }
+  }
+});
+
+test('BCI card payments accept YY and YYYY dates with slash or hyphen separators', async () => {
+  for (const date of ['26/09/26', '26/09/2026', '26-09-26', '26-09-2026']) {
+    const email = { uid: 48, messageId: `bci-card-date-${date}`, from: 'contacto@bci.cl',
+      subject: 'Comprobante pago tarjeta de crédito',
+      textBody: `Monto pagado: $280.000\nFecha: ${date}\nCuenta de origen: 8080\nNúmero tarjeta crédito: ****1164` };
+    const parsed = parseCardPayment(email, 'bci', email.textBody);
+    assert.equal(parsed.date, '2026-09-26');
+    assert.equal(parsed.amount, 28000000);
+    assert.equal(parsed.sourceAccount, '8080');
+    assert.equal(parsed.beneficiaryAccount, '****1164');
+    const { payload, result } = await process(email);
+    assert.equal(payload.kind, 'transfer');
+    assert.equal(payload.fromAccountId, config.accounts.bciChecking);
+    assert.equal(payload.toAccountId, config.accounts.bciClp);
+    assert.equal(result.advance, true);
+  }
+});

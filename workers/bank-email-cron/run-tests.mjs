@@ -16,6 +16,7 @@ process.env.LUNA_TIMEOUT_MS = '30000';
 process.env.CATEGORY_MIN_CONFIDENCE = '0.70';
 process.env.ACCOUNT_BCI_CLP_ID = 'test-bci-clp';
 process.env.ACCOUNT_BCI_USD_ID = 'test-bci-usd';
+process.env.ACCOUNT_BCI_CHECKING_ID = 'test-bci-checking';
 process.env.ACCOUNT_TENPO_CREDIT_ID = 'test-tenpo-credit';
 process.env.ACCOUNT_TENPO_VISTA_ID = 'test-tenpo-vista';
 process.env.ACCOUNT_MERCADOPAGO_ID = 'test-mercadopago';
