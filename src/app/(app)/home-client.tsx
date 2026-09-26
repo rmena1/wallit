@@ -110,22 +110,21 @@ interface MovementCardProps {
 
 const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpenPaymentDialog, onNavigate }: MovementCardProps) {
   const isTransfer = !!m.transferId
-  const isPendingReceivable = m.receivable && !m.received
   const displaysUsdAmount = m.currency === 'USD' && m.amountUsd != null
 
   return (
     <div
       style={{
-        backgroundColor: isPendingReceivable ? '#2a2000' : isTransfer ? '#1a1a2a' : '#1a1a1a',
+        backgroundColor: isTransfer ? '#1a1a2a' : m.receivable && !m.received ? '#2a2000' : m.received ? '#1a1a1a' : '#1a1a1a',
         borderRadius: 12,
         padding: '12px 14px',
         display: 'flex', alignItems: 'center', gap: 10,
-        border: isPendingReceivable ? '1px solid #854d0e' : isTransfer ? '1px solid #3b4d8a' : '1px solid #2a2a2a',
+        border: isTransfer ? '1px solid #3b4d8a' : m.receivable && !m.received ? '1px solid #854d0e' : '1px solid #2a2a2a',
         opacity: isMarking ? 0.4 : m.received ? 0.5 : 1,
         transition: 'opacity 0.2s ease',
       }}
     >
-      {isPendingReceivable && (
+      {m.receivable && !m.received && !isTransfer && (
         <button
           type="button"
           aria-label={`Marcar como cobrado ${m.name}`}
@@ -141,7 +140,7 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
         />
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-        {m.received && (
+        {m.received && !isTransfer && (
           <div style={{
             width: 24, height: 24, borderRadius: 6,
             border: '2px solid #4ade80', backgroundColor: '#052e16',

@@ -10,7 +10,7 @@ Rai needs Wallit to support the real household scenario where one Space temporar
 
 Example: the `Casa` Space records a household expense and marks it as **por cobrar** because Rai paid it from his `Personal` money. Later `Personal` sends money to `Casa` or there is already an Inter-Space Transfer from `Personal` into `Casa`. Wallit must let Rai use that payment to settle the receivable without incorrectly treating the payment as reportable income for `Casa` or as a generic operational transfer for `Personal`.
 
-The important product distinction depends on the original Receivable. Paying a normal expense-origin Receivable across Spaces creates a real expense in the paying Space. Settling a Receivable that was itself the reportable source side of an Inter-Space Transfer does not create a new economic expense, so the settlement must remain an Inter-Space Transfer.
+The important product distinction is this: paying a receivable across Spaces is not merely an Inter-Space Transfer. The paying Space is recording a real reportable expense; the funded Space is receiving an operational payment that settles a receivable.
 
 ## Domain language
 
@@ -25,7 +25,7 @@ Canonical terms:
 
 Avoid:
 
-- treating an expense-origin settlement as a normal Transfer;
+- treating the settlement as a normal Transfer;
 - calling it an `aporte`;
 - calling the paying-side expense a reimbursement transfer;
 - hiding it from reports in the paying Space.
@@ -37,8 +37,7 @@ Avoid:
    - a new direct cross-Space payment created during the settlement flow;
    - an existing incoming Inter-Space Transfer that has not yet been fully consumed by previous settlements.
 3. Create the correct accounting effects in both Spaces:
-   - a normal expense-origin Receivable gives the paying Space a pending reportable expense;
-   - a transfer-origin Receivable gives the paying Space a pending Inter-Space Transfer source side;
+   - paying Space gets a pending reportable expense;
    - funded Space gets an incoming operational settlement payment linked to the Receivable.
 4. Keep the user in the funded Space after settlement, so the workflow does not feel like a context switch.
 5. Allow one existing Transfer to settle multiple Receivables over time by consuming it partially.
@@ -71,19 +70,13 @@ A cross-Space Receivable Settlement creates or consumes balance effects in two S
    - The incoming settlement Movement settles the Receivable.
    - The incoming settlement Movement does not count as income.
 
-2. **Paying Space**: the Space that pays back the funded Space for a normal expense-origin Receivable.
+2. **Paying Space**: the Space that pays back the funded Space.
    - Wallit creates a Receivable Settlement Expense.
    - This is a real reportable expense for the paying Space.
    - It starts as a Pending Review Movement, without category.
    - It should appear in the paying Space review queue like any other pending expense.
 
 The paying Space expense copies the original Receivable expense description so the user understands what they are classifying, but it must be independently categorized in the paying Space.
-
-3. **Transfer-origin exception**: when the original Receivable is the source side of an Inter-Space Transfer:
-   - the settlement outgoing and incoming Movements are linked by a new Transfer root;
-   - the paying-side source starts pending review and can be reportable or operational;
-   - the funded-side destination remains operational and linked to the Receivable;
-   - no standalone Receivable Settlement Expense is created.
 
 ### New direct settlement payment
 
@@ -123,7 +116,7 @@ Candidate Transfers:
 
 Validation happens on selection/submit and must show an actionable error when the available amount is outside tolerance.
 
-When selected, Wallit creates a Receivable Settlement Expense for a normal expense-origin Receivable. For a transfer-origin Receivable, the consumed amount becomes a new Inter-Space Transfer whose destination remains the operational payment linked to the Receivable.
+When selected, Wallit creates a Receivable Settlement Expense in the paying Space from the consumed amount and an incoming operational payment in the funded Space linked to the Receivable.
 
 ### Tolerance
 
@@ -195,7 +188,7 @@ Deletion requires access to both involved Spaces.
 
 ### Review behavior
 
-The paying-side Receivable Settlement Expense starts as a Pending Review Movement. A transfer-origin settlement instead appears as one pending Inter-Space Transfer in the paying Space review queue.
+The paying-side Receivable Settlement Expense starts as a Pending Review Movement.
 
 Rules:
 
@@ -204,7 +197,6 @@ Rules:
 - It must remain an expense.
 - It cannot be transformed into another workflow such as emergency, loan, receivable, or transfer.
 - It starts without category so the paying Space can classify it correctly.
-- For a transfer-origin settlement, the user chooses whether the source side is reportable or operational; the destination side is fixed as operational because it settles the Receivable.
 
 ### Reporting behavior
 
@@ -310,8 +302,7 @@ Required invariants:
 
 - every Movement affects exactly one account;
 - every Movement is either reportable or operational for reports;
-- an expense-origin Receivable Settlement Expense is always reportable expense in the paying Space;
-- a transfer-origin settlement keeps a Transfer root, with a reviewable source side and operational destination side;
+- Receivable Settlement Expense is always reportable expense in the paying Space;
 - incoming settlement Movement is always operational in the funded Space;
 - one Receivable can have at most one active Receivable Settlement;
 - one settlement links exactly one original Receivable, one outgoing paying Movement, and one incoming funded Movement;
@@ -324,8 +315,8 @@ Required invariants:
 
 - User can settle a Receivable from a different Space by creating a new payment.
 - User can settle a Receivable using an existing incoming Inter-Space Transfer.
-- Paying Space gets a pending expense for an expense-origin Receivable, or a pending Inter-Space Transfer for a transfer-origin Receivable.
-- Paying Space expense becomes reportable after confirmation; a transfer-origin settlement source can instead be confirmed as operational.
+- Paying Space gets a pending expense that appears in its review queue.
+- Paying Space expense becomes reportable after confirmation.
 - Funded Space receives an operational incoming payment that does not count as income.
 - The original Receivable is no longer shown as unsettled after settlement.
 - The user stays in the funded Space after settlement.
@@ -335,7 +326,7 @@ Required invariants:
 - Same-currency and different-currency settlements respect the 5% tolerance.
 - Deleting a settlement reverses both Movements and restores any consumed Transfer amount.
 - User without membership in both Spaces cannot create/delete/edit the settlement.
-- Reports exclude operational settlement receipts, include paying-side settlement expenses, and respect the reviewed reportability of transfer-origin settlement sources.
+- Reports exclude operational settlement receipts and include paying-side settlement expenses.
 
 ## Required E2E coverage
 
@@ -352,9 +343,7 @@ Create/maintain Playwright coverage with screenshots for:
 9. Different-currency or same-currency settlement rejected outside tolerance.
 10. Deleting a settlement restores the Receivable and consumed Transfer amount.
 11. User remains in funded Space after creating a cross-Space settlement.
-12. Transfer-origin Receivable settled by an existing Transfer remains a reviewable Inter-Space Transfer.
-13. Transfer-origin Receivable settled by a new direct payment creates and reverses a settlement Transfer safely.
-14. Authorization failure when the User lacks membership in one involved Space.
+12. Authorization failure when the User lacks membership in one involved Space.
 
 Screenshots should capture the settlement dialog, validation errors, post-settlement funded Space timeline, paying Space review queue, and reports where relevant.
 

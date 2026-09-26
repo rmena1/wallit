@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
 import { registerAndLogin } from './helpers'
 import {
+  getMovementWorkflowState,
+  getPersonalSpaceId,
   createRegularAccount,
   createSpaceForUser,
   getUserId,
@@ -113,4 +115,40 @@ test.describe('Authenticated email import service', () => {
       destinationMovementId: firstBody.destinationMovementId,
     })
   })
+  test('persists same/inter-Space flags and ambiguous expense review override', async ({ page }) => {
+    const email = await registerAndLogin(page)
+    const userId = (await getUserId(email))!
+    const personal = await getPersonalSpaceId(userId)
+    const casa = await createSpaceForUser(userId, 'Casa import')
+    const source = await createRegularAccount(userId)
+    for (const [spaceId, inter] of [[personal, false], [casa, true]] as const) {
+      const destination = await createRegularAccount(userId, { spaceId })
+      const sourceName = `Flags source ${inter}`
+      const destinationName = `Flags destination ${inter}`
+      const response = await page.request.post('/api/import/email', {
+        headers: headers(), data: {
+          kind: 'transfer', userId, fromAccountId: source, toAccountId: destination,
+          sourceName, destinationName, date: '2026-09-26', amount: 100000,
+          sourceEmailProvider: 'tenpo', sourceEmailId: `flags-${inter}`,
+        },
+      })
+      expect(response.status()).toBe(200)
+      for (const [space, name, type] of [[personal, sourceName, 'expense'], [spaceId, destinationName, 'income']]) {
+        expect(await getMovementWorkflowState(space, name)).toMatchObject({
+          type, reportable: inter, needsReview: inter, categoryId: null,
+        })
+      }
+    }
+    const fallback = {
+      kind: 'movement', userId, accountId: source, name: 'Ambiguous internal',
+      type: 'expense', needsReview: false, date: '2026-09-26', amount: 100000,
+      sourceEmailProvider: 'bci', sourceEmailId: 'ambiguous-internal',
+    }
+    const response = await page.request.post('/api/import/email', { headers: headers(), data: fallback })
+    expect(response.status()).toBe(200)
+    expect(await getMovementWorkflowState(personal, fallback.name)).toMatchObject({ needsReview: false, type: 'expense', reportable: true })
+    const invalid = await page.request.post('/api/import/email', { headers: headers(), data: { ...fallback, needsReview: 'false' } })
+    expect(invalid.status()).toBe(400)
+  })
+
 })

@@ -196,7 +196,8 @@ export default async function Home() {
         sql`NOT EXISTS (
           SELECT 1
           FROM receivable_settlements settlement
-          WHERE settlement.outgoing_movement_id = ${transfers.sourceMovementId}
+          WHERE settlement.consumed_transfer_id = ${transfers.id}
+             OR settlement.outgoing_movement_id = ${transfers.sourceMovementId}
              OR settlement.incoming_movement_id = ${transfers.destinationMovementId}
         )`,
         sql`EXISTS (

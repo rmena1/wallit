@@ -21,6 +21,7 @@ type SourceIdentity = {
 
 export type EmailMovementImport = SourceIdentity & MoneyFacts & {
   kind: 'movement'
+  needsReview?: boolean
   accountId: string
   categoryId?: string | null
   name: string
@@ -129,6 +130,7 @@ async function importMovement(input: EmailMovementImport): Promise<ImportResult>
   const name = String(input.name ?? '').trim()
   if (!name) return fail('name is required')
   if (!['income', 'expense'].includes(input.type)) return fail('type must be income or expense')
+  if (input.needsReview !== undefined && typeof input.needsReview !== 'boolean') return fail('needsReview must be a boolean')
   const account = await getImportAccount(identity.userId, String(input.accountId ?? ''))
   if (!account) return fail('Account is not accessible by user')
   if (!(await categoryBelongsToSpace(input.categoryId, account.spaceId))) return fail('Category does not belong to account Space')
@@ -147,7 +149,7 @@ async function importMovement(input: EmailMovementImport): Promise<ImportResult>
       date,
       amount: money.amount,
       type: input.type,
-      needsReview: true,
+      needsReview: input.needsReview ?? true,
       currency: money.currency,
       amountUsd: money.amountUsd,
       exchangeRate: money.exchangeRate,
@@ -214,7 +216,8 @@ async function importTransfer(input: EmailTransferImport): Promise<ImportResult>
       date,
       amount: sourceMoney.amount,
       type: 'expense',
-      needsReview: true,
+      needsReview: fromAccount.spaceId !== toAccount.spaceId,
+      reportable: fromAccount.spaceId !== toAccount.spaceId,
       currency: sourceMoney.currency,
       amountUsd: sourceMoney.amountUsd,
       exchangeRate: sourceMoney.exchangeRate,
@@ -254,7 +257,8 @@ async function importTransfer(input: EmailTransferImport): Promise<ImportResult>
       date,
       amount: destinationMoney.amount,
       type: 'income',
-      needsReview: true,
+      needsReview: fromAccount.spaceId !== toAccount.spaceId,
+      reportable: fromAccount.spaceId !== toAccount.spaceId,
       currency: destinationMoney.currency,
       amountUsd: destinationMoney.amountUsd,
       exchangeRate: destinationMoney.exchangeRate,
@@ -279,7 +283,21 @@ export async function importEmailTransaction(input: EmailImportInput): Promise<I
     if (input?.kind === 'transfer') return await importTransfer(input)
     return fail('Unsupported import kind')
   } catch (error) {
-    console.error('Email import service failed', error instanceof Error ? error.message : 'unknown error')
+    const errorMessage = error instanceof Error ? error.message : 'unknown error'
+    console.error('Email import service failed', errorMessage)
+    
+    // Return specific validation errors to help with debugging
+    if (error instanceof Error && (
+      errorMessage.includes('is required') ||
+      errorMessage.includes('must be') ||
+      errorMessage.includes('Unsupported') ||
+      errorMessage.includes('is outside') ||
+      errorMessage.includes('does not belong')
+    )) {
+      return fail(errorMessage)
+    }
+    
+    // Generic error for unexpected failures
     return fail('Import failed')
   }
 }

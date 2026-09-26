@@ -466,166 +466,7 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     expect(fundedTotals.totalIncome).toBe(0)
   })
 
-  test('settles a transfer-origin receivable as a reviewable Inter-Space Transfer', async ({ page }) => {
-    const email = await registerUser(page)
-    const userId = await getUserId(email)
-    if (!userId) throw new Error('User not found in DB')
-
-    const personalSpaceId = await getPersonalSpaceId(userId)
-    const casaSpaceId = await createSpaceForUser(userId, 'Casa Pago TC', '🏠')
-    const personalCreditId = await createRegularAccount(userId, { bankName: 'TC Personal', lastFourDigits: '1164', initialBalance: 0, spaceId: personalSpaceId })
-    const personalCurrentId = await createRegularAccount(userId, { bankName: 'Cuenta Personal', lastFourDigits: '6969', initialBalance: 0, spaceId: personalSpaceId })
-    const casaCreditId = await createRegularAccount(userId, { bankName: 'TC Casa', lastFourDigits: '9015', initialBalance: 0, spaceId: casaSpaceId })
-    const casaCurrentId = await createRegularAccount(userId, { bankName: 'Cuenta Casa', lastFourDigits: '0146', initialBalance: 100_000_000, spaceId: casaSpaceId })
-    const personalCategoryId = await seedCategory(userId, { name: 'Hogar Personal', emoji: '🏠', spaceId: personalSpaceId })
-
-    const originalTransfer = await movementLedger.recordTransfer(personalSpaceId, userId, {
-      fromAccountId: personalCreditId,
-      toAccountId: casaCreditId,
-      destinationSpaceId: casaSpaceId,
-      fromAmount: 50_000_000,
-      toAmount: 50_000_000,
-      fromCurrency: 'CLP',
-      toCurrency: 'CLP',
-      date: new Date().toISOString().slice(0, 10),
-      note: 'Pago TC Casa',
-      source: { reportable: true, categoryId: personalCategoryId, receivable: true, receivableText: 'Pago TC casa por cobrar' },
-      destination: { reportable: false },
-    })
-    expect(originalTransfer.success).toBe(true)
-
-    const receivableId = await getMovementIdByName(userId, 'Pago TC casa por cobrar', personalSpaceId)
-    if (!receivableId) throw new Error('Transfer-origin receivable not found')
-
-    const paymentTransfer = await seedInterspaceTransfer(userId, {
-      sourceSpaceId: casaSpaceId,
-      destinationSpaceId: personalSpaceId,
-      sourceAccountId: casaCurrentId,
-      destinationAccountId: personalCurrentId,
-      amount: 50_000_000,
-      note: 'Saldo pago TC',
-    })
-
-    const settled = await movementLedger.settleReceivableWithExistingMovement(
-      personalSpaceId,
-      userId,
-      receivableId,
-      paymentTransfer.destinationMovementId,
-    )
-    expect(settled.success).toBe(true)
-    expect(await getTransferMovementAmounts(paymentTransfer.transferId)).toBeNull()
-
-    const settlementOutgoing = await getMovementWorkflowState(casaSpaceId, 'Pago TC casa por cobrar')
-    const settlementIncoming = await getMovementWorkflowState(personalSpaceId, 'Cobro: Pago TC casa por cobrar')
-    expect(settlementOutgoing).toMatchObject({ type: 'expense', needsReview: true, reportable: true, receivableSettlementRole: 'outgoing' })
-    expect(settlementIncoming).toMatchObject({ type: 'income', needsReview: false, reportable: false, receivableId, receivableSettlementRole: 'incoming' })
-
-    const settlementTransferId = await getTransferIdForMovement(settlementOutgoing!.id)
-    expect(settlementTransferId).not.toBeNull()
-    expect(await getTransferIdForMovement(settlementIncoming!.id)).toBe(settlementTransferId)
-
-    await switchSpace(page, 'Casa Pago TC')
-    await page.goto('/review')
-    await expect(page.getByText('Transferencia pendiente')).toBeVisible()
-    await expect(page.getByText('Esta transferencia salda un por cobrar. Decide si la salida cuenta como gasto; la entrada permanece operacional.')).toBeVisible()
-    const sourceReportable = page.getByRole('checkbox', { name: 'Origen reportable' })
-    const destinationOperational = page.getByRole('checkbox', { name: 'Destino operacional' })
-    await expect(sourceReportable).toBeChecked()
-    await expect(destinationOperational).not.toBeChecked()
-    await expect(destinationOperational).toBeDisabled()
-    await screenshot(page, 'recv-transfer-origin-settlement-01-review')
-
-    await sourceReportable.uncheck()
-    await page.getByRole('button', { name: /Aprobar transferencia/i }).click()
-    await expect.poll(() => getMovementWorkflowState(casaSpaceId, 'Pago TC casa por cobrar')).toMatchObject({ needsReview: false, reportable: false })
-    expect(await getMovementWorkflowState(personalSpaceId, 'Cobro: Pago TC casa por cobrar')).toMatchObject({ needsReview: false, reportable: false, receivableId })
-    expect((await getReportTotalsForSpace(casaSpaceId)).totalExpense).toBe(0)
-    expect((await getReportTotalsForSpace(personalSpaceId)).totalIncome).toBe(0)
-
-    const reversed = await movementLedger.deletePendingTransfer(casaSpaceId, userId, settlementTransferId!)
-    expect(reversed.success).toBe(true)
-    expect(await getTransferMovementAmounts(paymentTransfer.transferId)).toMatchObject({ sourceAmount: 50_000_000, destinationAmount: 50_000_000 })
-    expect(await getMovementWorkflowState(casaSpaceId, 'Pago TC casa por cobrar')).toBeNull()
-    expect(await getMovementWorkflowState(personalSpaceId, 'Cobro: Pago TC casa por cobrar')).toBeNull()
-    expect(await getMovementWorkflowState(personalSpaceId, 'Pago TC casa por cobrar')).toMatchObject({ received: false })
-  })
-
-  test('creates and reverses a direct transfer settlement for a transfer-origin receivable', async ({ page }) => {
-    const email = await registerUser(page)
-    const userId = await getUserId(email)
-    if (!userId) throw new Error('User not found in DB')
-
-    const personalSpaceId = await getPersonalSpaceId(userId)
-    const casaSpaceId = await createSpaceForUser(userId, 'Casa Cobro Directo', '🏠')
-    const personalSourceId = await createRegularAccount(userId, { bankName: 'Personal Directo', lastFourDigits: '1111', initialBalance: 0, spaceId: personalSpaceId })
-    const personalDestinationId = await createRegularAccount(userId, { bankName: 'Personal Recibe', lastFourDigits: '2222', initialBalance: 0, spaceId: personalSpaceId })
-    const casaDestinationId = await createRegularAccount(userId, { bankName: 'Casa Recibe', lastFourDigits: '3333', initialBalance: 0, spaceId: casaSpaceId })
-    const casaSourceId = await createRegularAccount(userId, { bankName: 'Casa Paga', lastFourDigits: '4444', initialBalance: 30_000_000, spaceId: casaSpaceId })
-    const personalCategoryId = await seedCategory(userId, { name: 'Casa directo', emoji: '🏠', spaceId: personalSpaceId })
-
-    const originalTransfer = await movementLedger.recordTransfer(personalSpaceId, userId, {
-      fromAccountId: personalSourceId,
-      toAccountId: casaDestinationId,
-      destinationSpaceId: casaSpaceId,
-      fromAmount: 30_000_000,
-      toAmount: 30_000_000,
-      fromCurrency: 'CLP',
-      toCurrency: 'CLP',
-      date: new Date().toISOString().slice(0, 10),
-      source: { reportable: true, categoryId: personalCategoryId, receivable: true, receivableText: 'Transferencia directa por cobrar' },
-      destination: { reportable: false },
-    })
-    expect(originalTransfer.success).toBe(true)
-
-    const receivableId = await getMovementIdByName(userId, 'Transferencia directa por cobrar', personalSpaceId)
-    if (!receivableId) throw new Error('Direct transfer-origin receivable not found')
-
-    await page.goto('/')
-    await page.getByRole('button', { name: /Marcar como cobrado Transferencia directa por cobrar/i }).click()
-    const paymentDialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
-    await expect(paymentDialog).toBeVisible()
-    await paymentDialog.getByText('Pago desde otro Space').click()
-    await paymentDialog.getByRole('combobox', { name: /^Space que paga$/ }).selectOption(casaSpaceId)
-    await paymentDialog.getByRole('combobox', { name: /^Cuenta origen para el pago$/ }).selectOption(casaSourceId)
-    await paymentDialog.getByRole('combobox', { name: /^Cuenta destino del Space actual$/ }).selectOption(personalDestinationId)
-    await paymentDialog.getByRole('textbox', { name: /^Monto recibido desde otro Space$/ }).fill('300000')
-    await screenshot(page, 'recv-transfer-origin-direct-00-payment-form')
-    await paymentDialog.getByRole('button', { name: /Confirmar/i }).click()
-    await expect(paymentDialog).not.toBeVisible({ timeout: 10_000 })
-    await screenshot(page, 'recv-transfer-origin-direct-00-created')
-
-    const outgoing = await getMovementWorkflowState(casaSpaceId, 'Transferencia directa por cobrar')
-    const incoming = await getMovementWorkflowState(personalSpaceId, 'Cobro: Transferencia directa por cobrar')
-    const transferId = await getTransferIdForMovement(outgoing!.id)
-    expect(transferId).not.toBeNull()
-    expect(await getTransferIdForMovement(incoming!.id)).toBe(transferId)
-
-    await switchSpace(page, 'Casa Cobro Directo')
-    await page.goto('/review')
-    await expect(page.getByText('Transferencia pendiente')).toBeVisible()
-    await screenshot(page, 'recv-transfer-origin-direct-01-review')
-    await page.getByRole('button', { name: /Eliminar transferencia/i }).click()
-    await expect(page.getByText('¿Eliminar esta transferencia?')).toBeVisible()
-    await screenshot(page, 'recv-transfer-origin-direct-02-delete-dialog')
-    await page.locator('div[style*="position: fixed"]').getByRole('button', { name: 'Eliminar' }).click()
-    await expect(page.getByText('¡Revisión completada!').or(page.getByText('No hay movimientos pendientes'))).toBeVisible()
-    await screenshot(page, 'recv-transfer-origin-direct-03-reversed')
-
-    expect(await getMovementWorkflowState(casaSpaceId, 'Transferencia directa por cobrar')).toBeNull()
-    expect(await getMovementWorkflowState(personalSpaceId, 'Cobro: Transferencia directa por cobrar')).toBeNull()
-    expect(await getMovementWorkflowState(personalSpaceId, 'Transferencia directa por cobrar')).toMatchObject({ received: false })
-
-    const settledAgain = await movementLedger.settleReceivableWithCrossSpacePayment(personalSpaceId, userId, receivableId, {
-      payingSpaceId: casaSpaceId,
-      sourceAccountId: casaSourceId,
-      destinationAccountId: personalDestinationId,
-      amount: 30_000_000,
-      date: new Date().toISOString().slice(0, 10),
-    })
-    expect(settledAgain.success).toBe(true)
-  })
-
-  test('reuses an incoming Inter-Space Transfer remainder across multiple receivables', async ({ page }) => {
+  test('settles receivable by consuming part of an incoming Inter-Space Transfer', async ({ page }) => {
     const email = await registerUser(page)
     const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
@@ -635,7 +476,6 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     const personalAccountId = await createRegularAccount(userId, { bankName: 'Personal Origen', lastFourDigits: '5656', initialBalance: 100_000_000, spaceId: personalSpaceId })
     const casaAccountId = await createRegularAccount(userId, { bankName: 'Casa Destino', lastFourDigits: '7878', initialBalance: 0, spaceId: casaSpaceId })
     await seedReceivable(userId, casaAccountId, 'Cena pagada por Casa', 25_000_000, casaSpaceId)
-    await seedReceivable(userId, casaAccountId, 'Almuerzo pagado por Casa', 10_000_000, casaSpaceId)
     const transfer = await seedInterspaceTransfer(userId, {
       sourceSpaceId: personalSpaceId,
       destinationSpaceId: casaSpaceId,
@@ -667,32 +507,12 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     expect(amounts?.destinationAmount).toBe(25_000_000)
     expect(await countMovementsInSpace(personalSpaceId, 'Cena pagada por Casa')).toBe(1)
 
-    await page.getByRole('button', { name: /Marcar como cobrado Almuerzo pagado por Casa/i }).click()
-    const secondPaymentDialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
-    await expect(secondPaymentDialog).toBeVisible({ timeout: 5_000 })
-    await secondPaymentDialog.getByRole('button', { name: /Vincular existente/i }).click()
-    const remainderCandidate = secondPaymentDialog.getByRole('radio', { name: /Transferencia desde Personal/ })
-    await expect(remainderCandidate).toBeVisible({ timeout: 10_000 })
-    await expect(secondPaymentDialog.getByText(/Disponible \$250\.000/)).toBeVisible()
-    await screenshot(page, 'recv-cross-transfer-03-remainder-candidate')
-
-    await remainderCandidate.click()
-    await secondPaymentDialog.getByRole('button', { name: /Confirmar/i }).click()
-    await expect(secondPaymentDialog).not.toBeVisible({ timeout: 10_000 })
-
-    await expect.poll(async () => (await getTransferMovementAmounts(transfer.transferId))?.sourceAmount).toBe(15_000_000)
-    const amountsAfterSecondSettlement = await getTransferMovementAmounts(transfer.transferId)
-    expect(amountsAfterSecondSettlement?.sourceAmount).toBe(15_000_000)
-    expect(amountsAfterSecondSettlement?.destinationAmount).toBe(15_000_000)
-    expect(await countMovementsInSpace(personalSpaceId, 'Almuerzo pagado por Casa')).toBe(1)
-    await screenshot(page, 'recv-cross-transfer-04-second-settlement')
-
     const blockedUpdate = await movementLedger.updateTransfer(casaSpaceId, userId, transfer.transferId, {
       fromAccountId: personalAccountId,
       toAccountId: casaAccountId,
       destinationSpaceId: casaSpaceId,
-      fromAmount: 15_000_000,
-      toAmount: 15_000_000,
+      fromAmount: 25_000_000,
+      toAmount: 25_000_000,
       fromCurrency: 'CLP',
       toCurrency: 'CLP',
       date: new Date().toISOString().slice(0, 10),
@@ -736,13 +556,13 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     })
     expect(createdTransfer.success).toBe(true)
 
-    const destinationMovementId = (await getMovementWorkflowState(casaSpaceId, 'Restore clasificada'))?.id ?? null
+    const destinationMovementId = await getMovementIdByName(casaSpaceId, 'Restore clasificada')
     if (!destinationMovementId) throw new Error('Destination movement not found')
     const settled = await movementLedger.settleReceivableWithExistingMovement(casaSpaceId, userId, receivableId, destinationMovementId)
     expect(settled.success).toBe(true)
     expect(await getTransferMovementAmounts(createdTransfer.transferId!)).toBeNull()
 
-    const settlementOutgoingId = (await getMovementWorkflowState(personalSpaceId, 'Cena restore completa'))?.id ?? null
+    const settlementOutgoingId = await getMovementIdByName(personalSpaceId, 'Cena restore completa')
     if (!settlementOutgoingId) throw new Error('Settlement outgoing movement not found')
     const undone = await movementLedger.deletePendingMovement(personalSpaceId, userId, settlementOutgoingId)
     expect(undone.success).toBe(true)

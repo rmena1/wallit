@@ -183,7 +183,6 @@ export async function getMovementWorkflowState(spaceId: string, nameLike: string
   type: 'income' | 'expense'
   needsReview: boolean
   reportable: boolean
-  received: boolean
   categoryId: string | null
   receivableId: string | null
   receivableSettlementRole: 'receivable' | 'outgoing' | 'incoming' | null
@@ -196,7 +195,6 @@ export async function getMovementWorkflowState(spaceId: string, nameLike: string
       m.type,
       m.needs_review,
       m.reportable,
-      m.received,
       m.category_id,
       m.receivable_id,
       CASE
@@ -224,7 +222,6 @@ export async function getMovementWorkflowState(spaceId: string, nameLike: string
     type: row.type,
     needsReview: Boolean(row.needs_review),
     reportable: Boolean(row.reportable),
-    received: Boolean(row.received),
     categoryId: row.category_id ?? null,
     receivableId: row.receivable_id ?? null,
     receivableSettlementRole: row.receivable_settlement_role ?? null,
