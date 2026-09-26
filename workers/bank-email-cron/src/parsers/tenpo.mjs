@@ -1,3 +1,4 @@
+import { parseCardPayment } from './card-payment.mjs';
 /** Parse Tenpo purchase, bill-payment, and transfer notices. */
 
 const TENPO_PURCHASE_AMOUNT = /Monto transacci[oó]n:\s*\$\s*([0-9.]+(?:,[0-9]{1,2})?)/i;
@@ -162,6 +163,8 @@ export function parseTenpo(email) {
   if (provider !== 'tenpo' && !sender.includes('tenpo.cl')) return null;
 
   const text = bodyText(email);
+  const payment = parseCardPayment(email, 'tenpo', text);
+  if (payment) return payment;
   return parsePurchase(text)
     ?? parseIncomingPayment(text)
     ?? parseOutgoingTransfer(text)

@@ -31,7 +31,7 @@ This service monitors a Gmail mailbox via IMAP for transaction notifications fro
    - Run deterministic parser (BCI/Tenpo/MercadoPago)
    - Resolve Wallit account from provider + currency + card
    - Call Jev category choice (with confidence threshold)
-   - Build import payload (`kind: movement`)
+   - Build import payload (`kind: movement` or confidently resolved `kind: transfer`)
    - POST to Wallit `/api/import/email`
    - Advance cursor on success/duplicate/intentional skip
    - Stop on network/5xx/validation errors (retry next cron)
@@ -258,3 +258,31 @@ Structured logs include:
 ## Support
 
 See `CLOUDAGENT-PROMPT.md` for full implementation specification.
+
+## Internal transfers
+
+Outgoing transfers to Raimundo Mena (including additional surnames), and BCI/Tenpo
+own-credit-card payment notices, are internal-transfer candidates. Destination
+resolution uses labeled account numbers and bank/currency, never arbitrary body
+digits or classifier guesses. Known endings: BCI 1164 (CLP/USD), BCI checking 8080,
+Tenpo credit 7648, Tenpo Vista 0146, Mercado Pago 6969. A Tenpo own-card payment
+without a card number can use the explicit Tenpo credit marker. An unknown explicit
+card number never falls back to that marker.
+
+Optional `ACCOUNT_BCI_CHECKING_ID` enables BCI checking 8080. Optional
+`TRANSFER_ACCOUNT_MAP` is a JSON object mapping `bank:currency:last4` to account IDs,
+for example `{"bci:CLP:9015":"casa-card-id"}`. Bank keys are `bci`, `tenpo`,
+`mercadopago`; `bank:currency:credit` may explicitly map an own-card marker.
+These mappings also resolve labeled source accounts in card-payment notices.
+A missing/unknown source remains an actionable error; no source account is guessed.
+
+A known, distinct destination produces `kind: transfer`. The app derives flags from
+actual account Spaces: same-Space is operational on both sides, without review;
+Inter-Space is reportable on both sides and needs review, with null categories.
+An unclear destination produces one expense with `needsReview: false` and null
+category. Successful import or duplicate advances UID; API/classifier failures do
+not. External P2P remains an ordinary one-leg expense. Candidates skip category
+classification because their categories are intentionally null.
+
+Rollout: redeploy the Wallit app first, then bank-email-cron in Railway after merge.
+The app must support the movement review override before the worker uses it.

@@ -1,3 +1,4 @@
+import { isInternalTransferCandidate, resolveTransferDestination } from './account-resolver.mjs';
 import { config } from '../config/index.mjs';
 
 function enrichError(error, context) {
@@ -149,5 +150,23 @@ export function buildImportPayload(parsedResult, categoryId, sourceEmailId) {
     payload.amount = parsedResult.amount;
   }
 
+  if (isInternalTransferCandidate(parsedResult)) {
+    const destination = resolveTransferDestination(parsedResult);
+    if (destination) {
+      payload.kind = 'transfer';
+      payload.fromAccountId = parsedResult.accountId;
+      payload.toAccountId = destination;
+      payload.sourceName = parsedResult.name;
+      delete payload.accountId;
+      delete payload.categoryId;
+      delete payload.name;
+      delete payload.type;
+      // API derives reportability/review from the actual account Spaces.
+    } else {
+      payload.type = 'expense';
+      payload.needsReview = false;
+      payload.categoryId = null;
+    }
+  }
   return payload;
 }
