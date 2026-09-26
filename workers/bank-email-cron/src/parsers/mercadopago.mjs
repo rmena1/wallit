@@ -5,7 +5,7 @@ import { parseEmailDate } from '../lib/date-utils.mjs';
 const MP_TRANSFER = /Ya enviamos tu transferencia de\s*\$\s*([0-9.]+(?:,[0-9]{1,2})?)/i;
 const MP_BENEFICIARY = /Nombre y apellido:\s*(.+?)(?:\s+(?:Entidad|N[uú]mero de cuenta|Si |Segu[ií]|Recibiste)|$)/i;
 const MP_ENTITY = /Entidad:\s*(.+?)(?:\s+(?:N[uú]mero de cuenta|Si |Segu[ií]|Recibiste)|$)/i;
-const MP_ACCOUNT = /N[uú]mero de cuenta:\s*(\d+)/i;
+const MP_ACCOUNT = /N[uú]mero de cuenta:\s*([*xX•]*\d+)/i;
 const MP_PAGASTE = /Pagaste\s*\$\s*(\d+(?:\.\d{3})+(?:,\d{1,2})?|\d+[.,]\d{2}|\d+)\s+con\s+([^\s]+)\s+terminada\s+en\s+(\d{4})\s+a\s+([^.]+?)(?:\.|$)/i;
 const MP_SUSCRIBISTE = /Te suscribiste a\s+(.+?)\s+de\s+(.+?)\s+por\s*\$\s*(\d+(?:\.\d{3})+(?:,\d{1,2})?|\d+[.,]\d{2}|\d+)(?:\s+al mes)?(?:\s+con\s+([^\s]+)\s+terminada\s+en\s+(\d{4}))?/i;
 

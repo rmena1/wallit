@@ -23,8 +23,9 @@ process.env.USD_CLP_EXCHANGE_RATE_X100 = '94650';
 
 // Now run the actual test
 import { spawn } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 
-const child = spawn('node', ['--test', 'test/*.test.mjs'], {
+const child = spawn('node', ['--test', ...readdirSync('test').filter(name => name.endsWith('.test.mjs')).map(name => `test/${name}`)], {
   stdio: 'inherit',
   env: process.env,
 });

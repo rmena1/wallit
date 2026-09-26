@@ -29,6 +29,16 @@ function parseNonNegativeInt(value, label) {
   return parsed;
 }
 
+function parseTransferAccountMap(value) {
+  const map = JSON.parse(value);
+  if (!map || typeof map !== 'object' || Array.isArray(map)
+    || Object.entries(map).some(([key, id]) => !/^[a-z]+:(CLP|USD):(\d{4}|credit)$/.test(key)
+      || typeof id !== 'string' || !id.trim())) {
+    throw new Error('TRANSFER_ACCOUNT_MAP must map bank:currency:last4 (or credit) to account IDs');
+  }
+  return map;
+}
+
 export const config = {
   database: {
     url: requireEnv('DATABASE_URL'),
@@ -72,7 +82,11 @@ export const config = {
     minConfidence: parseFloat(getEnv('CATEGORY_MIN_CONFIDENCE', '0.70')),
   },
   
+  // Explicit bank:currency:last4 (or bank:currency:credit) -> Wallit account ID.
+  transferAccountMap: parseTransferAccountMap(getEnv('TRANSFER_ACCOUNT_MAP', '{}')),
+
   accounts: {
+    bciChecking: getEnv('ACCOUNT_BCI_CHECKING_ID'),
     bciClp: requireEnv('ACCOUNT_BCI_CLP_ID'),
     bciUsd: requireEnv('ACCOUNT_BCI_USD_ID'),
     tenpoCredit: requireEnv('ACCOUNT_TENPO_CREDIT_ID'),

@@ -1,3 +1,4 @@
+import { parseCardPayment } from './card-payment.mjs';
 /** Parse BCI credit-card purchase notices (CLP and international USD).
  *
  * Two body layouts appear in the filled corpus:
@@ -47,6 +48,8 @@ export function parseBci(email) {
   if (provider !== 'bci' && !sender.includes('bci.cl')) return null;
 
   const text = bodyText(email);
+  const payment = parseCardPayment(email, 'bci', text);
+  if (payment) return payment;
   if (!BCI_PURCHASE.test(text)) return null;
 
   const amountMatch = text.match(BCI_AMOUNT);
