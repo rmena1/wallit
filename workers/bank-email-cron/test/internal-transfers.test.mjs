@@ -104,3 +104,107 @@ test('explicit own Tenpo card marker resolves, but BCI without card marker mappi
     if (provider === 'bci') assert.equal(payload.needsReview, false);
   }
 });
+
+// Synthetic layout regressions: exercise the parser, resolver and processor
+// together so a lost field cannot silently re-enable the credit marker.
+import { parseCardPayment } from '../src/parsers/card-payment.mjs';
+import { resolveAccount, resolveTransferAccount, resolveTransferDestination } from '../src/lib/account-resolver.mjs';
+
+function cardNotice(destination, source = '****0146') {
+  return { uid: 47, messageId: 'card-layout-regression', from: 'no-reply@tenpo.cl',
+    subject: 'Recibimos con éxito el pago de tu Tarjeta de Crédito',
+    textBody: `Monto pagado: $25.000\nFecha: 26/09/2026\nBanco de origen: Tenpo\nCuenta de origen: ${source}${destination === undefined ? '' : `\n${destination}`}` };
+}
+
+const unresolvedCardFields = [
+  ['Tarjeta de crédito terminada en: 9999', '9999'],
+  ['Número de tarjeta: ****9999', '****9999'],
+  ['Tarjeta de crédito: 7648 1234 5678 9999', '7648 1234 5678 9999'],
+  ['Tarjeta de crédito: 7648-1234-5678-9999', '7648-1234-5678-9999'],
+  ['Numero de tarjeta de credito: xxxx9999', 'xxxx9999'],
+  ['Tarjeta de crédito pagada: ••••9999', '••••9999'],
+  ['Número tarjeta crédito: ****9999', '****9999'],
+  ['Tarjeta de crédito:', ''],
+  ['Número de tarjeta:   ', ''],
+  ['Tarjeta de crédito terminada en:', ''],
+  ['Tarjeta de crédito: desconocida', 'desconocida'],
+  ['Tarjeta de crédito: 7648-', '7648-'],
+  ['Tarjeta de crédito: ****--7648', '****--7648'],
+  ['Tarjeta de crédito: ****7648oops', '****7648oops'],
+  ['Tarjeta de crédito: 7648-1234-invalid', '7648-1234-invalid'],
+  ['Tarjeta de crédito: 7648 / 9999', '7648 / 9999'],
+  ['Tarjeta de crédito: ****7648\nNúmero de tarjeta: ****9999', ['****7648', '****9999']],
+  ['Número de tarjeta: ****9999\nTarjeta de crédito: ****7648', ['****9999', '****7648']],
+  ['Tarjeta de crédito: ****7648\nNúmero de tarjeta:', ['****7648', '']],
+  ['Tarjeta de crédito: ****7648\nNúmero de tarjeta: malformed', ['****7648', 'malformed']],
+  ['Tarjeta de crédito: ****7648 Número de tarjeta: ****9999', ['****7648', '****9999']],
+];
+for (const [field, expected] of unresolvedCardFields) {
+  test(`explicit unresolved card remains an expense: ${JSON.stringify(field)}`, async () => {
+    const email = cardNotice(field);
+    const parsed = parseCardPayment(email, 'tenpo', email.textBody);
+    assert.deepEqual(parsed.beneficiaryAccount, expected);
+    assert.equal(resolveTransferDestination({ ...parsed, accountId: resolveAccount(parsed) }), null);
+    const { payload, result } = await process(email);
+    assert.equal(payload.kind, 'movement');
+    assert.equal(payload.type, 'expense');
+    assert.equal(payload.needsReview, false);
+    assert.equal(result.advance, true);
+  });
+}
+
+test('only absent identifiers allow a default credit marker', () => {
+  assert.equal(resolveTransferAccount('Tenpo', 'CLP', undefined, 'credit'), config.accounts.tenpoCredit);
+  for (const value of ['', null, false, 0, ' ', 'bad', '****9999', [], [''], ['****7648', '']]) {
+    assert.equal(resolveTransferAccount('Tenpo', 'CLP', value, 'credit'), null);
+  }
+});
+
+test('known complete identifiers and absent identifier preserve legitimate transfers', async () => {
+  for (const field of [undefined, 'Tarjeta de crédito terminada en: 7648',
+    'Número de tarjeta: ****7648', 'Tarjeta de crédito: 9999 1234 5678 7648',
+    'Tarjeta de crédito: 9999-1234-5678-7648',
+    'Tarjeta de crédito: ****7648\nNúmero de tarjeta: ****7648']) {
+    const email = cardNotice(field);
+    const parsed = parseCardPayment(email, 'tenpo', email.textBody);
+    if (field === undefined) assert.equal(parsed.beneficiaryAccount, undefined);
+    assert.equal(resolveTransferDestination({ ...parsed, accountId: resolveAccount(parsed) }), config.accounts.tenpoCredit);
+    const { payload, result } = await process(email);
+    assert.equal(payload.kind, 'transfer');
+    assert.equal(payload.toAccountId, config.accounts.tenpoCredit);
+    assert.equal(result.advance, true);
+  }
+});
+
+test('source captures complete grouped tokens and rejects unresolved or conflicting fields', async () => {
+  for (const source of ['9999 1234 5678 0146', '9999-1234-5678-0146',
+    '0146 1234 5678 9999', '0146-1234-5678-9999', '', '****0146oops',
+    '****0146\nCuenta de cargo: ****9999']) {
+    const email = cardNotice('Número de tarjeta: ****7648', source);
+    const parsed = parseCardPayment(email, 'tenpo', email.textBody);
+    assert.deepEqual(parsed.sourceAccount, source.includes('\n') ? ['****0146', '****9999'] : source);
+    const known = source.endsWith('0146');
+    if (known) assert.equal(resolveAccount(parsed), config.accounts.tenpoVista);
+    else assert.throws(() => resolveAccount(parsed), /unresolved source/);
+    const { payload, result } = await process(email);
+    assert.equal(result.advance, known);
+    if (known) assert.equal(payload.fromAccountId, config.accounts.tenpoVista);
+    else assert.equal(payload, undefined);
+  }
+});
+
+test('body notice prose does not count as an explicit destination field', async () => {
+  const email = cardNotice(undefined);
+  email.textBody = `${email.subject}\n${email.textBody}`;
+  assert.equal((await process(email)).payload.kind, 'transfer');
+});
+
+test('conflicting suffixes cannot agree through custom account aliases', () => {
+  config.transferAccountMap['tenpo:CLP:9999'] = config.accounts.tenpoCredit;
+  try {
+    assert.equal(resolveTransferAccount('Tenpo', 'CLP', ['7648', '9999'], 'credit'), null);
+    assert.equal(resolveTransferAccount('Tenpo', 'CLP', ['****7648', '9999 1234 5678 7648']), config.accounts.tenpoCredit);
+  } finally {
+    delete config.transferAccountMap['tenpo:CLP:9999'];
+  }
+});

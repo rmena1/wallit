@@ -67,12 +67,25 @@ function bankKey(value) {
   return text;
 }
 
+function accountLast4(account) {
+  if (typeof account !== 'string') return null;
+  const token = account.trim();
+  if (!/^[*xX•\d]+(?:(?:[ \t]+|[.-])[*xX•\d]+)*$/.test(token)) return null;
+  const number = token.replace(/[ \t.-]/g, '');
+  return /^(?:[*xX•]*\d{4}|\d{5,})$/.test(number) ? number.slice(-4) : null;
+}
+
 export function resolveTransferAccount(bank, currency, account, marker) {
+  if (Array.isArray(account)) {
+    const resolved = account.map(value => resolveTransferAccount(bank, currency, value));
+    return resolved.length && resolved[0] && resolved.every((value, index) => value === resolved[0]
+      && accountLast4(account[index]) === accountLast4(account[0]))
+      ? resolved[0] : null;
+  }
   const key = bankKey(bank);
   // Only a labeled account number is considered; never scan all digits in a body.
-  const number = String(account || '').replace(/[ .-]/g, '');
-  const last4 = /^(?:[*xX•]*\d{4}|\d{5,})$/.test(number) ? number.slice(-4) : null;
-  const signal = last4 || (!account && marker);
+  const last4 = accountLast4(account);
+  const signal = last4 || (account === undefined && marker);
   if (!signal) return null;
   const map = {
     'bci:CLP:1164': config.accounts.bciClp,
