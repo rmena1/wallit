@@ -61,7 +61,7 @@ export function resolveAccount(parsedResult) {
 
 function bankKey(value) {
   const text = String(value || '').toLowerCase().trim();
-  if (/^(?:banco\s+)?bci$/.test(text)) return 'bci';
+  if (/^(?:banco\s+)?bci(?:\s*\/\s*mach)?$/.test(text)) return 'bci';
   if (/^tenpo(?: banco)?$/.test(text)) return 'tenpo';
   if (/^mercado\s*pago$/.test(text)) return 'mercadopago';
   return text;
