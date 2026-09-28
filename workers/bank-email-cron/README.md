@@ -286,3 +286,43 @@ classification because their categories are intentionally null.
 
 Rollout: redeploy the Wallit app first, then bank-email-cron in Railway after merge.
 The app must support the movement review override before the worker uses it.
+
+## IMAP connection recovery and Railway restarts
+
+`IMAP_CONNECT_MAX_RETRIES` defaults to `3` retries after the initial connection
+attempt (4 attempts total); `0` disables retries. `IMAP_CONNECT_BASE_DELAY_MS`
+defaults to `500` and must be a positive integer. Each retry creates a fresh IMAP
+client after destroying the failed connection. Delays grow exponentially with
+0–100% random jitter, capped at 30 seconds. Timeouts (including authentication
+timeouts), temporary DNS/socket failures and premature disconnects retry;
+explicit credential rejection and other non-transient failures fail immediately.
+Attempt logs use fixed diagnostic text without raw server errors or credentials.
+
+Exhausted connection retries propagate to the existing `process.exit(1)` handler.
+The worker's `railway.toml` specifies `on_failure` with 5 restarts, `npm run build`
+and `npm run start`, with no HTTP healthcheck or port. Successful one-shot runs
+exit 0 and are left to the existing cron schedule. Retry/restart limits are finite;
+a persistent outage can still exhaust them.
+
+Railway Operator `eef30a4d-279c-4dbd-b9e3-46b2a198df72` must verify the service:
+
+1. Open the Railway project and production environment, select **bank-email-cron**
+   (not wallit-app), then **Settings**.
+2. Under **Source**, verify **Root Directory** is `/workers/bank-email-cron`.
+   Under **Config as Code**, set the config file path to
+   `/workers/bank-email-cron/railway.toml` if this existing service supports it.
+3. Under **Deploy**, set **Restart Policy** to **On Failure** and **Max Retries**
+   to **5** as the dashboard fallback. Verify build/start commands are
+   `npm run build` / `npm run start`, no HTTP healthcheck is configured, and leave
+   the existing cron schedule and variables unchanged.
+4. Save/stage these settings without deploying as part of this change. After a
+   separately authorized deployment, inspect its details to confirm the effective
+   restart policy is **On Failure / 5** and its configuration source is the worker
+   TOML (or dashboard when Config as Code is unavailable).
+
+A repository file does not update an existing deployment or dashboard settings.
+[Railway Config as Code](https://docs.railway.com/config-as-code) documents explicit
+config paths and precedence; it currently notes legacy Config as Code support
+until 2026-12-01. If unavailable for this service, use the dashboard fallback above.
+[Restart policy documentation](https://docs.railway.com/deployments/restart-policy)
+explains nonzero-exit restarts. No Railway deployment is performed by this change.

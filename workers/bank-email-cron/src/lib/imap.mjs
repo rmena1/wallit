@@ -3,28 +3,87 @@ import { simpleParser } from 'mailparser';
 import { config } from '../config/index.mjs';
 import { PROVIDER_FROM_ALLOWLIST } from './account-resolver.mjs';
 
+const TRANSIENT_CONNECT_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN']);
+
+function connectFailure(error) {
+  const message = error.message || '';
+  // Authentication timeouts are transient; explicit credential rejection is not.
+  if (/invalid credentials|authentication failed|authenticationfailed|login failed|app(?:lication)?[- ]specific password/i.test(message)) {
+    return { transient: false, message: 'authentication rejected' };
+  }
+  if (TRANSIENT_CONNECT_CODES.has(error.code)) {
+    return { transient: true, message: error.code };
+  }
+  if (/timeout|timed out|socket hang up|connection ended unexpectedly/i.test(message)) {
+    return { transient: true, message: 'connection/authentication timeout or interrupted connection' };
+  }
+  return { transient: false, message: 'non-transient connection failure' };
+}
+
 export class ImapClient {
-  constructor() {
-    this.imap = new Imap({
-      user: config.gmail.user,
-      password: config.gmail.password,
-      host: config.gmail.host,
-      port: config.gmail.port,
-      tls: config.gmail.tls,
-      tlsOptions: { rejectUnauthorized: config.gmail.tlsRejectUnauthorized },
-    });
+  constructor({
+    createImap = options => new Imap(options),
+    sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+    random = Math.random,
+    logger = console,
+  } = {}) {
+    this.createImap = createImap;
+    this.sleep = sleep;
+    this.random = random;
+    this.logger = logger;
+    this.imap = null;
   }
 
-  connect() {
-    return new Promise((resolve, reject) => {
-      this.imap.once('ready', resolve);
-      this.imap.once('error', reject);
-      this.imap.connect();
-    });
+  async connect() {
+    const { connectMaxRetries: maxRetries, connectBaseDelayMs: baseDelayMs } = config.gmail;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      this.logger.log(`[IMAP] Connect attempt ${attempt + 1}/${maxRetries + 1}`);
+      const imap = this.createImap({
+        user: config.gmail.user,
+        password: config.gmail.password,
+        host: config.gmail.host,
+        port: config.gmail.port,
+        tls: config.gmail.tls,
+        tlsOptions: { rejectUnauthorized: config.gmail.tlsRejectUnauthorized },
+      });
+      this.imap = imap;
+      try {
+        await new Promise((resolve, reject) => {
+          const cleanup = () => {
+            imap.removeListener('ready', onReady);
+            imap.removeListener('end', onEnd);
+            imap.removeListener('close', onEnd);
+          };
+          const onReady = () => { cleanup(); resolve(); };
+          const onError = error => { cleanup(); reject(error); };
+          const onEnd = () => onError(new Error('Connection ended unexpectedly'));
+          imap.once('ready', onReady);
+          // Keep an error listener for late socket errors during teardown.
+          imap.on('error', onError);
+          imap.once('end', onEnd);
+          imap.once('close', onEnd);
+          try { imap.connect(); } catch (error) { onError(error); }
+        });
+        return;
+      } catch (error) {
+        this.imap = null;
+        imap.destroy();
+        const failure = connectFailure(error);
+        // Use fixed diagnostic text: server error messages can contain credentials.
+        if (!failure.transient || attempt === maxRetries) {
+          const message = `[IMAP] Connect failed after ${attempt + 1} attempt(s): ${failure.message}`;
+          this.logger.warn(message);
+          throw new Error(message);
+        }
+        const delayMs = Math.min(30_000, Math.round(baseDelayMs * 2 ** attempt * (1 + this.random())));
+        this.logger.warn(`[IMAP] Connect attempt ${attempt + 1} failed: ${failure.message}; retrying in ${delayMs}ms`);
+        await this.sleep(delayMs);
+      }
+    }
   }
 
   disconnect() {
-    this.imap.end();
+    this.imap?.end();
   }
 
   async openFolder(folder) {
