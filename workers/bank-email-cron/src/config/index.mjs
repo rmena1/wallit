@@ -88,7 +88,7 @@ export const config = {
   transferAccountMap: parseTransferAccountMap(getEnv('TRANSFER_ACCOUNT_MAP', '{}')),
 
   accounts: {
-    bciChecking: getEnv('ACCOUNT_BCI_CHECKING_ID'),
+    bciChecking: requireEnv('ACCOUNT_BCI_CHECKING_ID'),
     bciClp: requireEnv('ACCOUNT_BCI_CLP_ID'),
     bciUsd: requireEnv('ACCOUNT_BCI_USD_ID'),
     tenpoCredit: requireEnv('ACCOUNT_TENPO_CREDIT_ID'),
