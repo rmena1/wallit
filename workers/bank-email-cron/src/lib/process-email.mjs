@@ -120,7 +120,9 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
         return { success: true, skip: false, advance: true };
       }
 
-      console.log(`UID ${email.uid}: imported successfully as ${importResult.movementId}`);
+      const importedId = [importResult.movementId, importResult.transferId, importResult.sourceMovementId]
+        .find(id => typeof id === 'string' && id.trim()) || 'unknown-id';
+      console.log(`UID ${email.uid}: imported successfully as ${importedId}`);
       return { success: true, skip: false, advance: true };
 
     } catch (error) {
