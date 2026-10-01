@@ -210,8 +210,8 @@ test('conflicting suffixes cannot agree through custom account aliases', () => {
 });
 
 test('BCI/MACH aliases resolve Tenpo transfers to BCI checking', async () => {
-  for (const bank of ['BCI', 'BANCO BCI', 'BCI/MACH', 'BANCO BCI/MACH', 'BCI / MACH', 'banco bci/mach']) {
-    for (const account of ['8080', '****8080']) {
+  for (const bank of ['bci', 'BCI', 'BANCO BCI', 'BCI/MACH', 'BANCO BCI/MACH', 'BCI / MACH', 'banco bci/mach']) {
+    for (const account of ['8080', '****8080', '32608080']) {
       assert.equal(resolveTransferAccount(bank, 'CLP', account), config.accounts.bciChecking);
       const email = outgoing('Raimundo Mena', account);
       email.textBody = email.textBody.replace('Banco de destino: BCI', `Banco de destino: ${bank}`)

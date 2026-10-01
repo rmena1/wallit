@@ -20,7 +20,11 @@ export function resolveAccount(parsedResult) {
   const { provider, currency, last4, cardHint, type } = parsedResult;
   if (parsedResult.ownCardPayment) {
     const source = resolveTransferAccount(parsedResult.sourceBank || provider, currency, parsedResult.sourceAccount);
-    if (!source) throw new Error('Credit card payment: unresolved source account');
+    if (!source) {
+      const bank = bankKey(parsedResult.sourceBank || provider);
+      const sourceLast4 = accountLast4(parsedResult.sourceAccount);
+      throw new Error(`Credit card payment: unresolved source account (bank=${bank} currency=${currency} last4=${sourceLast4 || 'unknown'})`);
+    }
     return source;
   }
 

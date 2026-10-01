@@ -67,6 +67,8 @@ WALLIT_USER_ID=your-user-id
 TYPESAFE_API_KEY=apikey_your_key
 
 # Wallit Account IDs (configure for your deployment)
+# BCI checking (last4 8080), required for own-card sources and transfer destinations
+ACCOUNT_BCI_CHECKING_ID=your-bci-checking-account-id
 ACCOUNT_BCI_CLP_ID=m3p73v3hx022lsy8z5w39
 ACCOUNT_BCI_USD_ID=2fy0igbyfngwuw9s7rye2
 ACCOUNT_TENPO_CREDIT_ID=33hmwmu5ppq3avb5756u2
@@ -269,8 +271,12 @@ Tenpo credit 7648, Tenpo Vista 0146, Mercado Pago 6969. A Tenpo own-card payment
 without a card number can use the explicit Tenpo credit marker. An unknown explicit
 card number never falls back to that marker.
 
-Optional `ACCOUNT_BCI_CHECKING_ID` enables BCI checking 8080. Optional
-`TRANSFER_ACCOUNT_MAP` is a JSON object mapping `bank:currency:last4` to account IDs,
+Required `ACCOUNT_BCI_CHECKING_ID` maps `bci:CLP:8080` to BCI checking (last4 8080)
+for own-card payment sources and internal transfer destinations. If unset or empty,
+config import fails before processing emails with
+`Missing required environment variable: ACCOUNT_BCI_CHECKING_ID`, preventing a
+silent stuck cron. Optional `TRANSFER_ACCOUNT_MAP` overrides or extends the default
+mappings as a JSON object mapping `bank:currency:last4` to account IDs,
 for example `{"bci:CLP:9015":"casa-card-id"}`. Bank keys are `bci`, `tenpo`,
 `mercadopago`; `bank:currency:credit` may explicitly map an own-card marker.
 These mappings also resolve labeled source accounts in card-payment notices.
