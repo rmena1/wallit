@@ -695,7 +695,7 @@ export function HomePage({ email, accountBalances, totalBalance, totalIncome, to
                     </div>
                     {(acc.accountType === 'Crédito' || acc.accountType === 'credit') && acc.creditLimit && acc.creditLimit > 0 && (
                       <div style={{ fontSize: 11, color: '#a1a1aa', marginTop: 2 }}>
-                        Cupo: {formatCurrency(Math.max(0, acc.balance), acc.currency)} / {formatCurrency(acc.creditLimit, acc.currency)}
+                        Cupo: {formatCurrency(Math.max(0, acc.creditLimit - acc.balance), acc.currency)} / {formatCurrency(acc.creditLimit, acc.currency)}
                       </div>
                     )}
                     <div style={{ fontSize: 11, color: '#9ca3af' }}>
