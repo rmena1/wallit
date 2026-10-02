@@ -1553,18 +1553,71 @@ export const movementLedger = {
 
     if (income.needsReview || hasDependentWorkflow(income) || income.loan || income.receivable) return fail('Selected income is already part of another workflow')
     if (await movementIsReceivableSettlement(income.id)) return fail('Selected income is already part of another workflow')
-    // Legacy same-Space income matching intentionally remains a simple receivableId link
-    // instead of creating receivable_settlements, but it shares the settlement amount invariant.
-    if (!isWithinReceivableSettlementTolerance(income.amount, receivable.amount)) {
-      return fail(settlementAmountError('Monto fuera de tolerancia para saldar el por cobrar', income.amount, receivable.amount))
-    }
+    // Legacy same-Space settlements use only receivableId: link the whole income
+    // within tolerance, or split off the receivable amount and retain excess income.
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:receivable-settlement:${spaceId}:${receivableId}`}, 0))`)
+      const [lockedReceivable] = await tx.select().from(movements)
+        .where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId))).for('update')
+      const [lockedIncome] = await tx.select().from(movements)
+        .where(and(eq(movements.id, existingIncomeId), eq(movements.spaceId, spaceId))).for('update')
+      if (!lockedReceivable) return fail('Receivable not found')
+      if (!lockedReceivable.receivable) return fail('Movement is not receivable')
+      if (lockedReceivable.received) return fail('Receivable already received')
+      if (!lockedIncome) return fail('Income movement not found')
+      if (lockedIncome.type !== 'income') return fail('Selected movement is not an income')
+      if (lockedIncome.needsReview || hasDependentWorkflow(lockedIncome) || lockedIncome.loan || lockedIncome.receivable || lockedIncome.emergency) {
+        return fail('Selected income is already part of another workflow')
+      }
+      const [workflow] = await tx.select({ id: receivableSettlements.id }).from(receivableSettlements)
+        .where(or(eq(receivableSettlements.receivableId, receivableId), eq(receivableSettlements.incomingMovementId, existingIncomeId), eq(receivableSettlements.outgoingMovementId, existingIncomeId))).limit(1)
+      const [incomeTransfer] = await tx.select({ id: transfers.id }).from(transfers)
+        .where(or(eq(transfers.sourceMovementId, existingIncomeId), eq(transfers.destinationMovementId, existingIncomeId))).limit(1)
+      if (workflow || incomeTransfer) return fail('Selected income or receivable is already part of another workflow')
 
-    await db.transaction(async (tx) => {
-      await tx.update(movements).set({ received: true, updatedAt: new Date() }).where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId)))
-      await tx.update(movements).set({ receivableId, updatedAt: new Date() }).where(and(eq(movements.id, existingIncomeId), eq(movements.spaceId, spaceId)))
+      const bounds = settlementBounds(lockedReceivable.amount)
+      if (lockedIncome.amount < bounds.min) {
+        return fail(settlementAmountError('Monto insuficiente para saldar el por cobrar', lockedIncome.amount, lockedReceivable.amount))
+      }
+      const now = new Date()
+      if (lockedIncome.amount <= bounds.max) {
+        await tx.update(movements).set({ receivableId, updatedAt: now }).where(eq(movements.id, existingIncomeId))
+      } else {
+        const consumedAmount = lockedReceivable.amount
+        const consumedAmountUsd = proportionalNullableAmount(lockedIncome.amountUsd, consumedAmount / lockedIncome.amount)
+        await tx.update(movements).set({
+          amount: lockedIncome.amount - consumedAmount,
+          amountUsd: subtractNullableAmount(lockedIncome.amountUsd, consumedAmountUsd),
+          receivableId: null,
+          updatedAt: now,
+        }).where(eq(movements.id, existingIncomeId))
+        await tx.insert(movements).values({
+          id: generateId(),
+          spaceId,
+          createdByUserId: actorUserId,
+          accountId: lockedIncome.accountId,
+          categoryId: lockedIncome.categoryId,
+          name: `Cobro: ${lockedReceivable.name}`,
+          date: lockedIncome.date,
+          time: lockedIncome.time,
+          amount: consumedAmount,
+          currency: lockedIncome.currency,
+          amountUsd: consumedAmountUsd,
+          exchangeRate: lockedIncome.exchangeRate,
+          type: 'income',
+          needsReview: false,
+          receivable: false,
+          received: false,
+          emergency: false,
+          loan: false,
+          receivableId,
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
+      await tx.update(movements).set({ received: true, updatedAt: now }).where(eq(movements.id, receivableId))
+      return ok()
     })
-
-    return ok()
   },
 
   async splitMovement(spaceId: string, actorUserId: string, originalId: string, splits: { name: string; amount: number }[]): Promise<LedgerResult> {

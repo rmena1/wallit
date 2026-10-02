@@ -337,16 +337,16 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     }
   })
 
-  test('existing income must be within settlement tolerance to mark receivable as received', async ({ page }) => {
+  test('existing income rejects insufficient amounts and fully links within settlement tolerance', async ({ page }) => {
     const email = await registerUser(page)
     await ensureAccount(page)
 
     const userId = await getUserId(email)
     if (!userId) throw new Error('User not found in DB')
     const accountId = await getFirstAccountId(userId)
-    await seedReceivable(userId, accountId, 'Catalina me debe compra', 10_000_000)
-    await seedUnlinkedIncome(userId, accountId, 'Pago fuera tolerancia Catalina', 11_000_000)
-    await seedUnlinkedIncome(userId, accountId, 'Pago dentro tolerancia Catalina', 10_400_000)
+    const receivableId = await seedReceivable(userId, accountId, 'Catalina me debe compra', 10_000_000)
+    await seedUnlinkedIncome(userId, accountId, 'Pago insuficiente Catalina', 9_000_000)
+    const incomeId = await seedUnlinkedIncome(userId, accountId, 'Pago dentro tolerancia Catalina', 10_400_000)
 
     await page.goto('/')
     await page.waitForLoadState('networkidle')
@@ -358,15 +358,15 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     const paymentDialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
     await expect(paymentDialog).toBeVisible({ timeout: 3000 })
     await paymentDialog.getByRole('button', { name: /Vincular existente/i }).click()
-    await paymentDialog.getByRole('radio', { name: /Pago fuera tolerancia Catalina/i }).click()
-    await screenshot(page, 'recv-existing-income-tolerance-01-outside-selected')
+    await paymentDialog.getByRole('radio', { name: /Pago insuficiente Catalina/i }).click()
+    await screenshot(page, 'recv-existing-income-tolerance-01-insufficient-selected')
 
     const outsideAlert = page.waitForEvent('dialog')
     await paymentDialog.getByRole('button', { name: /Confirmar/i }).click()
     const alert = await outsideAlert
-    expect(alert.message()).toContain('tolerancia')
+    expect(alert.message()).toContain('insuficiente')
     await alert.accept()
-    await screenshot(page, 'recv-existing-income-tolerance-02-outside-rejected')
+    await screenshot(page, 'recv-existing-income-tolerance-02-insufficient-rejected')
 
     await expect(page.getByText('Catalina me debe compra')).toBeVisible({ timeout: 5000 })
     await page.getByRole('button', { name: /Marcar como cobrado Catalina me debe compra/i }).click()
@@ -379,7 +379,54 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     await expect(retryDialog).not.toBeVisible({ timeout: 10_000 })
     await expect(page.getByText('Catalina me debe compra')).not.toBeVisible({ timeout: 5000 })
     await screenshot(page, 'recv-existing-income-tolerance-04-inside-accepted')
+    expect(await getMovementWorkflowState(await getPersonalSpaceId(userId), 'Pago dentro tolerancia Catalina')).toMatchObject({
+      id: incomeId, amount: 10_400_000, receivableId, receivableSettlementRole: null,
+    })
   })
+
+  for (const { label, available, required } of [
+    { label: '11M income', available: 11_000_000, required: 10_000_000 },
+    { label: '2.7M consolidated income', available: 2_734_875, required: 1_200_000 },
+  ]) {
+    test(`oversize existing income leaves a remainder: ${label}`, async ({ page }) => {
+      const email = await registerUser(page)
+      await ensureAccount(page)
+      const userId = await getUserId(email)
+      if (!userId) throw new Error('User not found in DB')
+      const spaceId = await getPersonalSpaceId(userId)
+      const accountId = await getFirstAccountId(userId)
+      if (!accountId) throw new Error('Account not found in DB')
+      const receivableId = await seedReceivable(userId, accountId, 'Deuda consolidada', required)
+      const incomeId = await seedUnlinkedIncome(userId, accountId, 'Ingreso consolidado', available)
+      const balanceBefore = await getClpAccountBalance(accountId)
+      const totalsBefore = await getReportTotalsForSpace(spaceId)
+
+      await page.goto('/')
+      await page.getByRole('button', { name: /Por cobrar/i }).click()
+      await page.getByRole('button', { name: /Marcar como cobrado Deuda consolidada/i }).click()
+      const dialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
+      await dialog.getByRole('button', { name: /Vincular existente/i }).click()
+      await dialog.getByRole('radio', { name: /Ingreso consolidado/i }).click()
+      await dialog.getByRole('button', { name: /Confirmar/i }).click()
+      await expect(dialog).not.toBeVisible()
+      await expect(page.getByText('Deuda consolidada', { exact: true })).not.toBeVisible()
+      await screenshot(page, `recv-oversize-${available}-settled`)
+
+      expect(await getMovementWorkflowState(spaceId, 'Ingreso consolidado')).toMatchObject({
+        id: incomeId, amount: available - required, receivableId: null,
+        reportable: true, receivableSettlementRole: null,
+      })
+      expect(await getMovementWorkflowState(spaceId, 'Cobro: Deuda consolidada')).toMatchObject({
+        amount: required, accountId, receivableId, needsReview: false,
+        receivableSettlementRole: null,
+      })
+      expect(await getClpAccountBalance(accountId)).toBe(balanceBefore)
+      expect((await getReportTotalsForSpace(spaceId)).totalIncome).toBe(totalsBefore.totalIncome - required)
+      // A second attempt also verifies that the receivable was persisted as received.
+      expect(await movementLedger.settleReceivableWithExistingMovement(spaceId, userId, receivableId, incomeId))
+        .toMatchObject({ error: 'Receivable already received' })
+    })
+  }
 
   test('settles receivable with a new payment from another Space, locks review workflow, and reports only paying expense', async ({ page }) => {
     const email = await registerUser(page)

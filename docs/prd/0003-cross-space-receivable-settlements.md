@@ -52,7 +52,7 @@ Avoid:
 - No notifications to members of either Space.
 - No consolidated cross-Space settlement report.
 - No settlement of multiple Receivables in one submit action.
-- No partial settlement of a single Receivable below tolerance; each Receivable is considered settled only when the selected payment amount is within tolerance.
+- No partial settlement of a single Receivable below tolerance; each Receivable requires at least the tolerance floor, with excess existing payment amounts left as a remainder.
 - No responsible-user assignment inside a Space.
 - No public invoice/request flow.
 - No settlement between users outside Space membership.
@@ -114,18 +114,18 @@ Candidate Transfers:
 - should be shown with source Space, source account, destination account, date, description, and remaining available amount;
 - should be shown even if they may be insufficient, because the user needs to understand why a payment cannot be used.
 
-Validation happens on selection/submit and must show an actionable error when the available amount is outside tolerance.
+Validation happens on selection/submit and must show an actionable error when the available amount is insufficient.
 
 When selected, Wallit creates a Receivable Settlement Expense in the paying Space from the consumed amount and an incoming operational payment in the funded Space linked to the Receivable.
 
 ### Tolerance
 
-A Receivable can be settled when the available payment amount is within ±5% of the Receivable amount after currency conversion.
+A Receivable can be fully linked to an existing payment within ±5% of the Receivable amount after currency conversion, or partially consume an existing payment above that band.
 
 Rules:
 
 - The tolerance applies to same-currency and different-currency settlements.
-- Differences above 5% are rejected.
+- Existing payments (incoming transfer or same-Space income) need only meet the −5% floor; above +5%, consume the receivable amount and leave the excess as a remainder. Editable new cross-Space payment amounts must still fall within ±5%.
 - Error messages must include enough context: required amount, available/payment amount, and allowed tolerance.
 - The settlement records the real amount paid/received, not the converted expected amount.
 
@@ -340,7 +340,7 @@ Create/maintain Playwright coverage with screenshots for:
 6. Existing incoming Transfer partially consumed, leaving a Settlement Remainder Transfer.
 7. One existing Transfer settling multiple Receivables one at a time.
 8. Different-currency settlement within tolerance.
-9. Different-currency or same-currency settlement rejected outside tolerance.
+9. Different-currency or same-currency settlement rejected below the tolerance floor; existing oversized payments leave a remainder, while new cross-Space entered payments outside ±5% are rejected.
 10. Deleting a settlement restores the Receivable and consumed Transfer amount.
 11. User remains in funded Space after creating a cross-Space settlement.
 12. Authorization failure when the User lacks membership in one involved Space.
