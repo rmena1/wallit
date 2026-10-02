@@ -77,7 +77,7 @@ test.describe('Credit Limit And Net Liquidity', () => {
     await page.waitForLoadState('networkidle')
     await expect(page.getByText('Falabella', { exact: true })).toBeVisible({ timeout: 5000 })
     await expect(page.getByText('Cupo:')).toBeVisible()
-    await expect(page.getByText(/Cupo:\s*\$0\s*\/\s*\$500\.000/)).toBeVisible()
+    await expect(page.getByText(/Cupo:\s*\$500\.000\s*\/\s*\$500\.000/)).toBeVisible()
     await screenshot(page, 'credit-limit-05-home-card')
   })
 
@@ -163,7 +163,7 @@ test.describe('Credit Limit And Net Liquidity', () => {
     await expect(netLiquidityCard).toContainText(/Débito:\s*\$95\.050/)
   })
 
-  test('Credit limit shown correctly after spending', async ({ page }) => {
+  test('Credit limit overrides divergent initial balance on create and update', async ({ page }) => {
     await registerAndLogin(page)
     await screenshot(page, 'credit-spend-01-registered')
 
@@ -175,7 +175,7 @@ test.describe('Credit Limit And Net Liquidity', () => {
       bankName: 'Falabella',
       accountType: 'Crédito',
       lastFourDigits: '4321',
-      initialBalance: '',
+      initialBalance: '250000',
       creditLimit: '1000000',
     })
     await expect(page.getByText('Crédito · ···4321')).toBeVisible({ timeout: 5000 })
@@ -197,7 +197,21 @@ test.describe('Credit Limit And Net Liquidity', () => {
     await screenshot(page, 'credit-spend-06-home-after-expense')
 
     await expect(page.getByText('Falabella', { exact: true })).toBeVisible({ timeout: 5000 })
-    await expect(page.getByText(/Cupo:\s*\$100\.000\s*\/\s*\$1\.000\.000/)).toBeVisible()
+    await expect(page.getByText(/Cupo:\s*\$900\.000\s*\/\s*\$1\.000\.000/)).toBeVisible()
     await screenshot(page, 'credit-spend-07-cupo-verified')
+    await expect(page.getByText(/Deuda:\s*\$100\.000/)).toBeVisible()
+
+    await page.goto('/settings')
+    await expect(page.getByText('Saldo inicial: $1.000.000', { exact: true })).toBeVisible()
+    await page.locator('button').filter({ has: page.locator('svg path[d*="18.5 2.5"]') }).first().click()
+    await page.locator('input[name="initialBalance"]').fill('300000')
+    await page.locator('input[name="creditLimit"]').fill('1500000')
+    await page.getByRole('button', { name: 'Guardar', exact: true }).click()
+    await expect(page.getByText('Saldo inicial: $1.500.000', { exact: true })).toBeVisible()
+
+    await page.goto('/')
+    await expect(page.getByText(/Cupo:\s*\$1\.400\.000\s*\/\s*\$1\.500\.000/)).toBeVisible()
+    await expect(page.getByText('$1.400.000', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText(/Deuda:\s*\$100\.000/)).toBeVisible()
   })
 })

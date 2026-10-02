@@ -1,5 +1,6 @@
 'use server'
 
+import { accountBalanceBase } from '@/lib/domain/account-balance'
 import { db, movements, categories, accounts } from '@/lib/db'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
@@ -78,6 +79,9 @@ export async function getReportData(
     emoji: accounts.emoji,
     currency: accounts.currency,
     initialBalance: accounts.initialBalance,
+    accountType: accounts.accountType,
+    creditLimit: accounts.creditLimit,
+    isInvestment: accounts.isInvestment,
   }).from(accounts).where(eq(accounts.spaceId, space.id))
 
   const selectedAccount = accountId
@@ -159,12 +163,12 @@ export async function getReportData(
 
   const t = totals[0] || { totalIncome: 0, totalExpense: 0, count: 0 }
   const openingBalanceBase = selectedAccount
-    ? selectedAccount.initialBalance
+    ? accountBalanceBase(selectedAccount)
     : userAccounts.reduce((sum, account) => {
       if (account.currency === 'USD' && usdClpRate) {
-        return sum + Math.round(account.initialBalance * usdClpRate / 100)
+        return sum + Math.round(accountBalanceBase(account) * usdClpRate / 100)
       }
-      return sum + account.initialBalance
+      return sum + accountBalanceBase(account)
     }, 0)
   const balanceTotalsBeforeRange = balanceTotals[0] || { totalIncome: 0, totalExpense: 0 }
 
