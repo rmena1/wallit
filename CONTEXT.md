@@ -95,6 +95,8 @@ _Avoid_: Viewer
 - Categories are shared within a **Space**, not owned privately by individual users inside that **Space**.
 - When a **User** creates a new **Space**, Wallit copies the categories from that **User**'s default personal **Space** into the new **Space**. The copied categories become independent categories in the new **Space**.
 - A **Movement** belongs to exactly one account and always affects that account's balance.
+- For **TC/Crédito** (`Crédito` or `credit`) accounts with `creditLimit > 0`, total cupo uses `creditLimit` as its source of truth; available/balance = `creditLimit + sum(income) − sum(expense)`.
+- For these credit accounts, `initialBalance` must not diverge from `creditLimit`. Opening debt is modeled through **Movements**, not a different `initial_balance`.
 - A **Transfer** is composed of exactly two linked **Movements** through an explicit **Transfer** root.
 - A **Transfer** root stores only operation identity and linkage metadata; movement-owned facts such as date, name, amount, currency, account, and category live only on the linked **Movements**.
 - A **Transfer** has one outgoing **Movement** and one incoming **Movement**.
