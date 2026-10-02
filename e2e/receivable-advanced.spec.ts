@@ -16,6 +16,7 @@ import {
   getTransferMovementAmounts,
   getUserId,
   seedCategory,
+  seedConfirmedWorkflowMovement,
   seedInterspaceTransfer,
   seedReceivable,
   seedUsdReviewMovement,
@@ -94,6 +95,41 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     await page.getByRole('button', { name: /Por cobrar/i }).click()
     await expect(page.getByText('Cobro: Cobro importado en USD')).toBeVisible({ timeout: 5_000 })
     await screenshot(page, 'usd-import-receivable-04-paid')
+  })
+
+  test('saves an unsaved category before marking an expense as receivable from edit', async ({ page }) => {
+    const email = await registerUser(page)
+    await ensureAccount(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const accountId = await getFirstAccountId(userId)
+    const categoryId = await seedCategory(userId, { name: 'Cena compartida', emoji: '🍔' })
+    const movementId = await seedConfirmedWorkflowMovement(userId, accountId, {
+      name: 'Cena sin categoría',
+      clpAmount: 4000000,
+      type: 'expense',
+      categoryId: null,
+    })
+
+    await page.goto(`/edit/${movementId}`)
+    const categorySelect = page.locator('select').filter({ has: page.locator(`option[value="${categoryId}"]`) })
+    await expect(categorySelect).toHaveValue('')
+    await categorySelect.selectOption(categoryId)
+    await screenshot(page, 'recv-unsaved-category-01-selected')
+
+    // Confirm the receivable directly, without clicking Guardar.
+    await page.getByRole('button', { name: /Por cobrar/i }).click()
+    await page.getByPlaceholder('Texto del recordatorio...').fill('Juan debe la cena')
+    await screenshot(page, 'recv-unsaved-category-02-reminder')
+    await page.getByRole('button', { name: 'Confirmar', exact: true }).click()
+    await page.waitForURL('**/')
+    await expect(page.getByText('Un gasto por cobrar requiere categoría')).not.toBeVisible()
+    await page.getByRole('button', { name: /Por cobrar/i }).click()
+    await expect(page.getByText('Juan debe la cena')).toBeVisible()
+    await screenshot(page, 'recv-unsaved-category-03-success')
+
+    await page.goto(`/edit/${movementId}`)
+    await expect(categorySelect).toHaveValue(categoryId)
   })
 
   test('mark existing movement as receivable from edit page and verify on home', async ({ page }) => {
