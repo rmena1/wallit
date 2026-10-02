@@ -1,6 +1,5 @@
 'use server'
 
-import { accountBalanceBase } from '@/lib/domain/account-balance'
 import { db, accounts, movements, investmentSnapshots, transfers } from '@/lib/db'
 import { eq, and, or, sql } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
@@ -32,9 +31,7 @@ export type AccountWithBalanceSerialized = Omit<AccountWithBalance, 'currentValu
 
 /**
  * Get all accounts with calculated balances for the current user.
- * Non-investment balance = opening base + sum(income) - sum(expense).
- * Crédito/credit with creditLimit > 0 uses creditLimit (available cupo); others use initialBalance.
- * Investment balances use their tracked current value.
+ * Balance = initialBalance + sum(income) - sum(expense)
  */
 export async function getAccountBalances(): Promise<AccountWithBalance[]> {
   const { user: session, space } = await getCurrentSpace()
@@ -112,7 +109,7 @@ export async function getAccountBalances(): Promise<AccountWithBalance[]> {
       creditLimit: r.creditLimit ?? null,
       balance: r.isInvestment
         ? performance!.currentValue
-        : accountBalanceBase(r) + Number(r.incomeSum) - Number(r.expenseSum),
+        : r.initialBalance + Number(r.incomeSum) - Number(r.expenseSum),
       currency: r.currency,
       color: r.color,
       emoji: r.emoji,

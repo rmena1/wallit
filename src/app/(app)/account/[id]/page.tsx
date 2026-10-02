@@ -1,4 +1,3 @@
-import { accountBalanceBase } from '@/lib/domain/account-balance'
 import { getCurrentSpace } from '@/lib/spaces'
 import { notFound } from 'next/navigation'
 import { db, accounts, movements, categories, transfers } from '@/lib/db'
@@ -67,7 +66,6 @@ export default async function AccountDetailPage({ params }: Props) {
       accountType: accounts.accountType,
       lastFourDigits: accounts.lastFourDigits,
       initialBalance: accounts.initialBalance,
-      creditLimit: accounts.creditLimit,
       isInvestment: accounts.isInvestment,
       currentValue: accounts.currentValue,
       currentValueUpdatedAt: accounts.currentValueUpdatedAt,
@@ -156,7 +154,7 @@ export default async function AccountDetailPage({ params }: Props) {
     // Get movements from last 180 days sorted by date asc for balance history
     const cutoffDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const allMovements = await db.select({ date: movements.date, amount: movements.amount, type: movements.type, amountUsd: movements.amountUsd }).from(movements).where(and(eq(movements.accountId, id), eq(movements.spaceId, space.id), gte(movements.date, cutoffDate))).orderBy(asc(movements.date), asc(movements.createdAt))
-    let running = accountBalanceBase(account)
+    let running = account.initialBalance
     const byDate = new Map<string, number>()
     for (const m of allMovements) {
       const amt = account.currency === 'USD' && m.amountUsd ? m.amountUsd : m.amount
