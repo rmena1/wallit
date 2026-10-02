@@ -177,16 +177,55 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
     setError(null)
   }
 
+  async function persistNormalMovement(): Promise<boolean> {
+    try {
+      const amountCents = parseMoney(formAmount)
+      if (amountCents <= 0) { setError('Monto inválido'); return false }
+
+      // Normal update
+      if (movement.loan && (formType !== 'income' || !formLoan)) {
+        const hasPaybacks = await hasLoanPaybackExpenses(movement.id)
+        if (hasPaybacks) {
+          setError('No se puede desmarcar: ya existen devoluciones vinculadas a este préstamo')
+          return false
+        }
+      }
+
+      const result = await reclassifyReportableMovement(movement.id, {
+        name: formName.trim(),
+        date: formDate,
+        amount: amountCents,
+        type: formType,
+        currency: formCurrency,
+        accountId: formAccountId || null,
+        categoryId: formCategoryId || null,
+        amountInputMode: 'canonicalClp',
+        amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
+        exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
+        time: formTime || null,
+        emergency: formType === 'expense' && canEditEmergencyWorkflow ? formEmergency : false,
+        loan: formType === 'income' ? formLoan : false,
+      })
+      if (!result.success) {
+        setError(result.error || 'Error al guardar')
+        return false
+      }
+      return true
+    } catch {
+      setError('Error al guardar')
+      return false
+    }
+  }
+
   async function handleSave() {
     setLoading(true)
     setError(null)
     try {
       const amountCents = parseMoney(formAmount)
-      if (amountCents <= 0) { setError('Monto inválido'); setLoading(false); return }
+      if (amountCents <= 0) { setError('Monto inválido'); return }
 
       if (isReceivableSettlementOperational && isTransferMode) {
         setError('Este movimiento salda un por cobrar entre Spaces y no puede transformarse en transferencia')
-        setLoading(false)
         return
       }
 
@@ -194,29 +233,24 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
       if (isTransferMode) {
         if (!formAccountId) {
           setError('Selecciona una cuenta origen')
-          setLoading(false)
           return
         }
         if (!transferToAccountId) {
           setError(selectedTransferDestinationSpace?.hasAccounts === false ? 'El Space destino no tiene cuentas disponibles' : 'Selecciona una cuenta destino')
-          setLoading(false)
           return
         }
         if (formAccountId === transferToAccountId && transferDestinationSpaceId === currentSpaceId) {
           setError('Las cuentas deben ser diferentes')
-          setLoading(false)
           return
         }
         const toAmountCents = parseMoney(transferToAmount)
         if (toAmountCents <= 0) {
           setError('Monto destino inválido')
-          setLoading(false)
           return
         }
         const sourceAmountCents = fromCurrency === 'USD' ? parseMoney(formAmountUsd) : amountCents
         if (sourceAmountCents <= 0) {
           setError('Monto origen inválido')
-          setLoading(false)
           return
         }
         
@@ -244,7 +278,6 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
         
         if (!result.success) {
           setError(result.error || 'Error al convertir a transferencia')
-          setLoading(false)
           return
         }
         
@@ -252,37 +285,7 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
         return
       }
 
-      // Normal update
-      if (movement.loan && (formType !== 'income' || !formLoan)) {
-        const hasPaybacks = await hasLoanPaybackExpenses(movement.id)
-        if (hasPaybacks) {
-          setError('No se puede desmarcar: ya existen devoluciones vinculadas a este préstamo')
-          setLoading(false)
-          return
-        }
-      }
-
-      const result = await reclassifyReportableMovement(movement.id, {
-        name: formName.trim(),
-        date: formDate,
-        amount: amountCents,
-        type: formType,
-        currency: formCurrency,
-        accountId: formAccountId || null,
-        categoryId: formCategoryId || null,
-        amountInputMode: 'canonicalClp',
-        amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
-        exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
-        time: formTime || null,
-        emergency: formType === 'expense' && canEditEmergencyWorkflow ? formEmergency : false,
-        loan: formType === 'income' ? formLoan : false,
-      })
-      if (!result.success) {
-        setError(result.error || 'Error al guardar')
-        setLoading(false)
-        return
-      }
-      router.push('/')
+      if (await persistNormalMovement()) router.push('/')
     } catch {
       setError('Error al guardar')
     } finally {
@@ -311,11 +314,12 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
   async function handleReceivable() {
     if (!receivableText.trim()) return
     setLoading(true)
+    setError(null)
     try {
+      if (!await persistNormalMovement()) return
       const result = await markAsReceivable(movement.id, receivableText.trim())
       if (!result.success) {
         setError(result.error || 'Error al marcar como por cobrar')
-        setLoading(false)
         return
       }
       setShowReceivable(false)

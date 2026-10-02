@@ -202,6 +202,10 @@ test.describe('Review Flow — Complete', () => {
 
     // Review queue is latest-first; mark the newest movement as receivable first.
     await expect(page.getByText('Compra desconocida')).toBeVisible({ timeout: 5000 })
+    const categorySelect = page.locator('select').filter({ has: page.locator('option').filter({ hasText: 'Comida' }) })
+    await categorySelect.selectOption({ label: '🍔 Comida' })
+    await screenshot(page, 'review-recv-01-category-selected')
+
     await page.getByRole('button', { name: /💰 Cobrar/i }).click()
     await expect(page.getByText('Marcar como Por Cobrar')).toBeVisible({ timeout: 3000 })
     await screenshot(page, 'review-recv-02-dialog')

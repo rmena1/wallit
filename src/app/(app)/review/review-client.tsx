@@ -320,6 +320,39 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     if (next < total) loadMovement(next)
   }
 
+  async function persistNormalMovement(): Promise<boolean> {
+    if (!current) return false
+    try {
+      const amountCents = parseMoney(formAmount)
+      if (amountCents <= 0) { setError('Monto inválido'); return false }
+
+      // Normal confirmation
+      const result = await confirmPendingAsReportable(current.id, {
+        name: formName.trim(),
+        date: formDate,
+        amount: amountCents,
+        type: formType,
+        currency: formCurrency,
+        accountId: formAccountId || null,
+        categoryId: formCategoryId || null,
+        amountInputMode: 'canonicalClp',
+        amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
+        exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
+        time: formTime || null,
+        emergency: formType === 'expense' ? formEmergency : false,
+        loan: formType === 'income' ? formLoan : false,
+      })
+      if (!result.success) {
+        setError(result.error || 'Error al confirmar')
+        return false
+      }
+      return true
+    } catch {
+      setError('Error al confirmar')
+      return false
+    }
+  }
+
   async function handleConfirm() {
     if (!current) return
     setLoading(true)
@@ -329,17 +362,14 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
         const isInterSpacePending = current.transferSourceSpaceId !== current.transferDestinationSpaceId
         if (isInterSpacePending && pendingSourceReportable && !pendingSourceCategoryId) {
           setError('El origen reportable requiere categoría')
-          setLoading(false)
           return
         }
         if (isInterSpacePending && pendingSourceReportable && pendingSourceReceivable && !pendingSourceReceivableText.trim()) {
           setError('Indica quién debe pagar este gasto')
-          setLoading(false)
           return
         }
         if (isInterSpacePending && pendingDestinationReportable && !pendingDestinationCategoryId) {
           setError('El destino reportable requiere categoría')
-          setLoading(false)
           return
         }
         const result = await confirmPendingTransfer(current.transferId, {
@@ -353,7 +383,6 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
         })
         if (!result.success) {
           setError(result.error || 'Error al aprobar transferencia')
-          setLoading(false)
           return
         }
         goNext(true)
@@ -362,55 +391,46 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
 
       if (isReceivableSettlementExpense && isTransferMode) {
         setError('Este gasto salda un por cobrar entre Spaces y no puede transformarse en transferencia')
-        setLoading(false)
         return
       }
 
       const amountCents = parseMoney(formAmount)
-      if (amountCents <= 0) { setError('Monto inválido'); setLoading(false); return }
+      if (amountCents <= 0) { setError('Monto inválido'); return }
       
       // If in transfer mode, convert to transfer instead of normal confirm
       if (isTransferMode) {
         if (!formAccountId) {
           setError('Selecciona una cuenta origen')
-          setLoading(false)
           return
         }
         if (!transferToAccountId) {
           setError(selectedTransferDestinationSpace?.hasAccounts === false ? 'El Space destino no tiene cuentas disponibles' : 'Selecciona una cuenta destino')
-          setLoading(false)
           return
         }
         if (formAccountId === transferToAccountId && transferDestinationSpaceId === currentSpaceId) {
           setError('Las cuentas deben ser diferentes')
-          setLoading(false)
           return
         }
         const toAmountCents = parseMoney(transferToAmount)
         if (toAmountCents <= 0) {
           setError('Monto destino inválido')
-          setLoading(false)
           return
         }
         const sourceAmountCents = fromCurrency === 'USD' ? parseMoney(formAmountUsd) : amountCents
         if (sourceAmountCents <= 0) {
           setError('Monto origen inválido')
-          setLoading(false)
           return
         }
         if (isNewTransferInterSpace && transferSourceReportable && !transferSourceCategoryId) {
           setError('El origen reportable requiere categoría')
-          setLoading(false)
           return
         }
         if (isNewTransferInterSpace && transferSourceReportable && transferSourceReceivable && !transferSourceReceivableText.trim()) {
           setError('Indica quién debe pagar este gasto')
-          setLoading(false)
           return
         }
         if (isNewTransferInterSpace && transferDestinationReportable && !transferDestinationCategoryId) {
           setError('El destino reportable requiere categoría')
-          setLoading(false)
           return
         }
         
@@ -444,7 +464,6 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
         
         if (!result.success) {
           setError(result.error || 'Error al convertir a transferencia')
-          setLoading(false)
           return
         }
         
@@ -452,28 +471,7 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
         return
       }
       
-      // Normal confirmation
-      const result = await confirmPendingAsReportable(current.id, {
-        name: formName.trim(),
-        date: formDate,
-        amount: amountCents,
-        type: formType,
-        currency: formCurrency,
-        accountId: formAccountId || null,
-        categoryId: formCategoryId || null,
-        amountInputMode: 'canonicalClp',
-        amountUsd: formCurrency === 'USD' ? parseMoney(formAmountUsd) || null : null,
-        exchangeRate: formCurrency === 'USD' && formExchangeRate ? Math.round(parseFloat(formExchangeRate) * 100) : null,
-        time: formTime || null,
-        emergency: formType === 'expense' ? formEmergency : false,
-        loan: formType === 'income' ? formLoan : false,
-      })
-      if (!result.success) {
-        setError(result.error || 'Error al confirmar')
-        setLoading(false)
-        return
-      }
-      goNext(true)
+      if (await persistNormalMovement()) goNext(true)
     } catch {
       setError('Error al confirmar')
     } finally {
@@ -508,11 +506,12 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
   async function handleReceivable() {
     if (!current || !receivableText.trim()) return
     setLoading(true)
+    setError(null)
     try {
+      if (!await persistNormalMovement()) return
       const result = await markAsReceivable(current.id, receivableText.trim())
       if (!result.success) {
         setError(result.error || 'Error al marcar como por cobrar')
-        setLoading(false)
         return
       }
       setShowReceivable(false)
@@ -650,7 +649,7 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
   return (
     <>
       <Header />
-      <main style={{ maxWidth: 540, margin: '0 auto', padding: '8px 12px 0' }}>
+      <main style={{ maxWidth: 540, margin: '0 auto', padding: '8px 12px 96px' }}>
         {/* Progress bar - compact */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 12, color: '#a1a1aa', whiteSpace: 'nowrap' }}>
