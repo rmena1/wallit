@@ -1,0 +1,13 @@
+{
+  "name": "wallit-exchange-rate-cron",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node --check src/index.mjs && node --check src/worker.mjs",
+    "start": "node src/index.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": { "postgres": "^3.4.5" }
+}
