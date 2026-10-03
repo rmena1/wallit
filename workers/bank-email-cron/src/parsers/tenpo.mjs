@@ -1,3 +1,4 @@
+import { getProviderFromEmail } from '../lib/sender-auth.mjs';
 import { parseCardPayment } from './card-payment.mjs';
 /** Parse Tenpo purchase, bill-payment, and transfer notices. */
 
@@ -123,6 +124,30 @@ function parseIncomingPayment(text) {
   };
 }
 
+function parseIncomingTransfer(text) {
+  if (!/Comprobante de recibo transferencia/i.test(text)
+    || !/a tu cuenta Tenpo fue exitosa/i.test(text)) return null;
+  const amount = text.match(TENPO_TRANSFER_AMOUNT);
+  const sender = text.match(/Origen transferencia:\s*(.+?)(?=\s+(?:Banco de origen|N[ºo°.]\s*cuenta|RUT|Fecha|Hora)\b|$)/i);
+  const { date, time } = baseFields(text);
+  if (!amount || !sender || !date || !time) return null;
+  const name = sender[1].trim();
+  return { provider: 'tenpo', type: 'income', currency: 'CLP', amount: clpAmount(amount[1]),
+    name, originalName: name, beneficiary: name, date, time,
+    entity: text.match(/Banco de origen:\s*(.+?)(?=\s+(?:N[ºo°.]\s*cuenta|RUT|Fecha|Hora)\b|$)/i)?.[1]?.trim(),
+    sourceAccount: text.match(/N[ºo°.]\s*cuenta de origen:\s*(\S+)/i)?.[1] };
+}
+function parseOutgoingPeerPayment(text) {
+  if (!/desde tu cuenta Tenpo fue exitoso/i.test(text)) return null;
+  const recipient = text.match(/Enviado a:\s*(.+?)(?=\s+(?:Monto pagado|Mensaje|Fecha|Hora|C[oó]digo)\b|$)/i);
+  const amount = text.match(TENPO_PAID_AMOUNT);
+  const { date, time } = baseFields(text);
+  if (!recipient || !amount || !date || !time) return null;
+  const name = recipient[1].trim();
+  return { provider: 'tenpo', type: 'expense', currency: 'CLP', amount: clpAmount(amount[1]),
+    name, originalName: name, beneficiary: name, date, time };
+}
+
 function parseOutgoingTransfer(text) {
   const amountMatch = text.match(TENPO_TRANSFER_AMOUNT);
   const destMatch = text.match(TENPO_DESTINATARIO);
@@ -150,6 +175,7 @@ function parseOutgoingTransfer(text) {
     beneficiary,
     entity: bank,
     beneficiaryAccount: account,
+    routingAmbiguous: isOddOutgoing && !isExplicitOutgoing,
     date,
     time,
     last4: undefined,
@@ -158,14 +184,14 @@ function parseOutgoingTransfer(text) {
 
 /** @returns {object|null} normalized parser result, or null when unrecognized */
 export function parseTenpo(email) {
-  const provider = String(email?._source_email_provider ?? '').toLowerCase();
-  const sender = String(email?.from ?? '').toLowerCase();
-  if (provider !== 'tenpo' && !sender.includes('tenpo.cl')) return null;
+  if (getProviderFromEmail(email?.from) !== 'tenpo') return null;
 
   const text = bodyText(email);
   const payment = parseCardPayment(email, 'tenpo', text);
   if (payment) return payment;
   return parsePurchase(text)
+    ?? parseIncomingTransfer(text)
+    ?? parseOutgoingPeerPayment(text)
     ?? parseIncomingPayment(text)
     ?? parseOutgoingTransfer(text)
     ?? parseBillPayment(text);

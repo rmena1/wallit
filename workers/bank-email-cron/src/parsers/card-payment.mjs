@@ -4,13 +4,17 @@ function accountFields(text, label) {
   const fields = [...text.matchAll(new RegExp(
     `(?:(?:^|\\n)[ \\t]*(?:${label})(?=[: \\t\\r\\n]|$)[ \\t]*:?|\\s(?:${label})[ \\t]*:)[ \\t]*`, 'gi',
   ))].map(match => {
+    if (/\bTipo de$/i.test(text.slice(Math.max(0, match.index - 30), match.index).trim())) return undefined;
     const rest = text.slice(match.index + match[0].length);
+    // A standalone colonless heading is not an explicit empty identifier field.
+    // Colon-labeled empty fields still remain unresolved and never fall back.
+    if (!match[0].includes(':') && /^(?:\r?\n|$)/.test(rest)) return undefined;
     // Bound inline fields as well as line-oriented templates. Unknown text is
     // retained so malformed values cannot become a confidently resolved prefix.
     return rest.split(new RegExp(
       `\\r?\\n|\\s+(?:(?:${CARD_LABEL})|(?:${SOURCE_LABEL})|Banco (?:de origen|de cargo)|Monto(?: pagado| del pago)?|Fecha|Hora)[ \\t]*:`, 'i',
     ), 1)[0].trim();
-  });
+  }).filter(value => value !== undefined);
   return fields.length > 1 ? fields : fields[0];
 }
 
@@ -21,7 +25,7 @@ const SOURCE_LABEL = String.raw`Cuenta (?:de origen|de cargo|cargo|origen)`;
 export function parseCardPayment(email, provider, text) {
   const notice = `${email.subject || ''}\n${text}`;
   if (!/(?:comprobante (?:de )?pago (?:de )?(?:tu )?tarjeta de cr[eé]dito|recibimos con [eé]xito el pago de tu tarjeta de cr[eé]dito)/i.test(notice)) return null;
-  const amount = text.match(/Monto(?: pagado| del pago)?:?\s*\$\s*([\d.]+(?:,00)?)(?=\s|$)/i);
+  const amount = text.match(/Monto(?: pagado| del pago| transacci[oó]n)?:?\s*\$\s*([\d.]+(?:,00)?)(?=\s|$)/i);
   const date = text.match(/Fecha:?\s*(\d{2})[-/](\d{2})[-/](\d{4}|\d{2})(?!\d)/i);
   if (!amount || !date) return null;
   const value = amount[1];
@@ -35,6 +39,7 @@ export function parseCardPayment(email, provider, text) {
     entity: provider,
     beneficiaryAccount: accountFields(text, CARD_LABEL),
     sourceAccount: accountFields(text, SOURCE_LABEL),
+    sourceProduct: provider === 'tenpo' && /Medio de pago:\s*Cuenta Vista Tenpo\b/i.test(text) ? 'tenpo_vista' : undefined,
     sourceBank: text.match(/Banco (?:de origen|de cargo):?\s*([^\n]+)/i)?.[1]?.trim(),
   };
 }

@@ -4,13 +4,13 @@ Railway cron worker that runs every 10 minutes to import bank email transactions
 
 ## Overview
 
-This service monitors a Gmail mailbox via IMAP for transaction notifications from Chilean banks and fintechs (BCI, Tenpo, Mercado Pago), parses them using deterministic parsers, classifies them with Jev (TypeSafe AI), and imports them into Wallit through the private `/api/import/email` endpoint.
+This service monitors a Gmail mailbox via IMAP for transaction notifications from Chilean banks and fintechs (BCI, Tenpo, Mercado Pago), with exact sender and Gmail-aligned DMARC verification, parses them using deterministic parsers, classifies them with Jev (TypeSafe AI), and imports them into Wallit through the private `/api/import/email` endpoint.
 
 ## Features
 
 - **IMAP Gmail Integration**: Reads new emails using UID cursor with UIDVALIDITY tracking
 - **Concurrent Run Protection**: PostgreSQL advisory lock prevents overlapping cron executions
-- **Deterministic Parsers**: BCI, Tenpo, and Mercado Pago email parsers (65/65 gold amount accuracy)
+- **Deterministic Parsers**: BCI, Tenpo, and Mercado Pago email parsers (validated synthetic regressions and a separately stored private 100-message real-email audit)
 - **AI Classification**:
   - Transaction filter (Jev with Luna fallback)
   - Category choice (Jev with Luna fallback, confidence-gated)
@@ -18,7 +18,7 @@ This service monitors a Gmail mailbox via IMAP for transaction notifications fro
 - **Money Units**:
   - CLP: centavos (pesos × 100)
   - USD: cents with explicit exchange rate (CLP/USD × 100)
-- **Structured Logging**: Processing decisions recorded without sensitive data
+- **Structured Logging**: New processing logs hash Message-ID and omit sender mailbox, subject, bodies, remote error messages and credentials
 
 ## Architecture
 
@@ -34,7 +34,7 @@ This service monitors a Gmail mailbox via IMAP for transaction notifications fro
    - Build import payload (`kind: movement` or confidently resolved `kind: transfer`)
    - POST to Wallit `/api/import/email`
    - Advance cursor on success/duplicate/intentional skip
-   - Stop on network/5xx/validation errors (retry next cron)
+   - Stop on network/5xx/validation errors, transaction-shaped unknown templates or ambiguous routing (retry next scheduled cron)
 5. Release lock
 
 ## Installation
@@ -151,7 +151,7 @@ npm test
 ```
 
 Tests cover:
-- Parser amount accuracy (65/65 gold fixtures)
+- Synthetic parser, monetary/date validation, exact-sender/auth, runner cleanup, cursor and timeout regressions
 - CLP centavos and USD cents conversion
 - Jev classification with mocked responses
 - Cursor advancement logic
@@ -163,8 +163,8 @@ Tests cover:
 - **Never commit** credentials, app passwords, bearer tokens, or production email bodies
 - Gmail app password required (not account password)
 - `WALLIT_IMPORT_TOKEN` authenticates private API access
-- Raw email bodies never logged or stored in database
-- Message-ID is hashed/redacted in logs
+- New raw email bodies never logged or stored in database
+- New Message-ID log values are SHA-256 hashes; old log rows are not modified by this release
 
 ## Provider Allowlist
 
@@ -223,14 +223,14 @@ For USD movements, replace `amount` with `amountUsd` + `exchangeRate`.
   - Duplicate response (200 + `duplicate: true`)
   - Intentional skip (not_transaction, allowlist, unparseable)
 - Network errors, 5xx, 429, validation failures → stop without advancing
-- UIDVALIDITY change → reset cursor to `GMAIL_INITIAL_UID` with alert
+- UIDVALIDITY or configured-folder change → stop with nonzero status and preserve cursor. No automatic reset/replay/backfill
 
 ## Failure Modes
 
 - **Lock contention**: Another cron running, exit 0
-- **UIDVALIDITY changed**: Reset cursor, log alert, exit 0
+- **UIDVALIDITY changed**: Preserve cursor, log fixed reason, exit 1; operator decision required
 - **Network/API error mid-batch**: Stop at failed UID, retry next cron
-- **Unresolved account**: Log pending, fail that message, retry next cron
+- **Unresolved account**: Log redacted reason, exit 1 without advancing; retry on a later scheduled cron
 - **Jev/Luna unavailable**: Fail closed, retry next cron
 
 ## Logs
@@ -332,3 +332,19 @@ config paths and precedence; it currently notes legacy Config as Code support
 until 2026-12-01. If unavailable for this service, use the dashboard fallback above.
 [Restart policy documentation](https://docs.railway.com/deployments/restart-policy)
 explains nonzero-exit restarts. No Railway deployment is performed by this change.
+
+## Audited safety contract (2026-10-03)
+
+- `npm test` and `npm run test:watch` always use fake configuration and a transport-denial preload. HTTP, TLS, IMAP, DNS and PostgreSQL networking are blocked; test doubles provide effects. Never run `npm start` as a test.
+- A private genuine-email corpus can be checked with `npm run test:corpus -- /absolute/private/corpus`. It must remain outside every Git root. Only synthetic/sanitized fixtures belong in this repository. The harness writes per-case hashes/checks to that private directory and prints no bodies or monetary values.
+- The cursor schema and existing nonempty Message-ID import identity remain compatible. Missing Message-ID uses a deterministic mailbox/folder/UIDVALIDITY/UID hash. Neither UIDVALIDITY nor folder changes can reset the cursor automatically.
+- Advisory lock, cursor and log queries use one reserved PostgreSQL session. A session loss permanently invalidates the run; backend PID/lock ownership is checked before effects. SQL has both server and client transport deadlines, and tracked sockets are force-closed when necessary. All paths release/close without premature `process.exit`. Blocked work exits 1; lock contention exits 0.
+- Server-side UID search fetches at most `IMAP_BATCH_SIZE` (default 50) messages; each is limited by `IMAP_MAX_MESSAGE_BYTES` (default 524288). Fetch/decode failures cannot disappear from an otherwise successful batch.
+- IMAP operations are bounded by `IMAP_OPERATION_TIMEOUT_MS` (default 30000). Import request and body decoding are bounded by `WALLIT_IMPORT_TIMEOUT_MS` (default 15000). Import retries reuse identical identity/payload and retry 429/5xx/transient transport failures; invalid responses and 4xx validation are retained for review.
+- Header-only transaction date proxies are normalized to `America/Santiago`; explicit body date/time remains authoritative. USD exchange rate must be explicitly configured; no default FX is guessed.
+- MercadoPago funded-card receipts route explicitly named BCI credit card 1164 to BCI. A brand/last4 alone does not prove issuer/product. Unknown funding cards cannot silently debit the wallet. Contradictory direction receipts are blocked.
+- Keep Railway's effective `NEVER` restart policy with the 10-minute cron. Errors are visible and retry on a natural scheduled run, avoiding immediate poison-message restart loops.
+- The work deadline is propagated through IMAP/model/import retries. Final confirmed-disposition state writes and bounded cleanup may extend beyond the work deadline
+- Do not replay, reset the cursor, backfill or manually invoke production imports when validating/rolling back this release.
+
+See `AUDIT_2026-10-03.md` for evidence counts, remaining limits and rollout checks.

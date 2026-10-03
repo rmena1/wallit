@@ -20,7 +20,7 @@ async function process(email, overrides = {}) {
     importToWallit: async (value) => { payload = value; return { success: true }; },
     ...overrides,
   });
-  return { result: await run(email), payload };
+  return { result: await run({ ...email, authentication: { verified: true, reason: 'synthetic' } }), payload };
 }
 test('confident Raimundo destination imports two legs and advances', async () => {
   const { result, payload } = await process(outgoing());
@@ -66,7 +66,7 @@ test('BCI and Tenpo own card payment notices resolve labeled source and destinat
     assert.equal(payload.toAccountId, provider === 'bci' ? config.accounts.bciClp : config.accounts.tenpoCredit);
     assert.equal(result.advance, true);
     email.textBody = email.textBody.replace(/\*{4}(1164|7648)/, '****9999');
-    assert.equal((await process(email)).payload.needsReview, false);
+    assert.equal((await process(email)).result.advance, false);
     email.textBody = email.textBody.replace('Cuenta de origen: ****0146', '');
     assert.equal((await process(email)).result.advance, false);
   }
@@ -94,14 +94,14 @@ test('destination equal to source cannot manufacture a transfer', async () => {
   assert.equal(result.advance, true);
 });
 
-test('explicit own Tenpo card marker resolves, but BCI without card marker mapping stays ambiguous', async () => {
+test('explicit own Tenpo card marker resolves, but BCI without card mapping blocks', async () => {
   for (const provider of ['tenpo', 'bci']) {
     const { payload } = await process({ uid: 46, messageId: `marker-${provider}`,
       from: provider === 'tenpo' ? 'no-reply@tenpo.cl' : 'contacto@bci.cl',
       subject: 'Comprobante pago tarjeta de crédito',
       textBody: 'Monto: $10.000\nFecha: 26/09/2026\nBanco de origen: Tenpo\nCuenta de origen: ****0146' });
-    assert.equal(payload.kind, provider === 'tenpo' ? 'transfer' : 'movement');
-    if (provider === 'bci') assert.equal(payload.needsReview, false);
+    if (provider === 'tenpo') assert.equal(payload.kind, 'transfer');
+    else assert.equal(payload, undefined);
   }
 });
 
@@ -140,16 +140,14 @@ const unresolvedCardFields = [
   ['Tarjeta de crédito: ****7648 Número de tarjeta: ****9999', ['****7648', '****9999']],
 ];
 for (const [field, expected] of unresolvedCardFields) {
-  test(`explicit unresolved card remains an expense: ${JSON.stringify(field)}`, async () => {
+  test(`explicit unresolved card blocks repayment: ${JSON.stringify(field)}`, async () => {
     const email = cardNotice(field);
     const parsed = parseCardPayment(email, 'tenpo', email.textBody);
     assert.deepEqual(parsed.beneficiaryAccount, expected);
     assert.equal(resolveTransferDestination({ ...parsed, accountId: resolveAccount(parsed) }), null);
     const { payload, result } = await process(email);
-    assert.equal(payload.kind, 'movement');
-    assert.equal(payload.type, 'expense');
-    assert.equal(payload.needsReview, false);
-    assert.equal(result.advance, true);
+    assert.equal(payload, undefined);
+    assert.equal(result.advance, false);
   });
 }
 

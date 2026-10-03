@@ -521,7 +521,7 @@ describe('Classifier Error Handling', () => {
         },
         (error) => {
           assert.ok(error.message.includes('ETIMEDOUT'), 'Error message should include cause code');
-          assert.ok(error.message.includes('Connection timeout'), 'Error message should include cause message');
+          assert.ok(!error.message.includes('Connection timeout'), 'Raw server messages must not be exposed');
           return true;
         },
         'Should enrich error with cause details'
@@ -723,7 +723,7 @@ describe('Classifier Retry Logic', () => {
         },
         (error) => {
           assert.ok(error.message.includes('ECONNRESET'), 'Should include cause code in message');
-          assert.ok(error.message.includes('socket hang up'), 'Should include cause message');
+          assert.ok(!error.message.includes('socket hang up'), 'Raw server messages must not be exposed');
           return true;
         },
         'Should enrich TypeError fetch failed with cause details'

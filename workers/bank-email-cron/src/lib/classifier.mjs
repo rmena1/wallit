@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { requireBudget, boundedTimeout } from './run-budget.mjs';
 import { config } from '../config/index.mjs';
 import { getAccountSpace, getCategorySpace } from '../data/space-mappings.mjs';
 
@@ -27,36 +28,20 @@ function truncateBody(body, maxChars = 8000) {
 }
 
 function enrichError(error, context) {
-  const parts = [context];
-  
-  if (error.message) {
-    parts.push(error.message);
+  const codes = Array.isArray(error.safeCodes) ? error.safeCodes.filter(code => TRANSIENT_NETWORK_CODES.has(code)) : []; const visited = new Set();
+  for (let current = error; current && !visited.has(current); current = current.cause) {
+    visited.add(current);
+    if (TRANSIENT_NETWORK_CODES.has(current.code)) codes.push(current.code);
   }
-  
-  if (error.cause) {
-    const causeChain = [];
-    let current = error.cause;
-    while (current) {
-      const causeInfo = [];
-      if (current.code) causeInfo.push(`code: ${current.code}`);
-      if (current.message) causeInfo.push(`message: ${current.message}`);
-      if (causeInfo.length > 0) {
-        causeChain.push(causeInfo.join(', '));
-      }
-      current = current.cause;
-    }
-    
-    if (causeChain.length > 0) {
-      parts.push(`cause: ${causeChain.join(' -> ')}`);
-    }
-  }
-  
-  const enriched = new Error(parts.join('; '), { cause: error.cause || error });
-  
-  if (error.response) {
-    enriched.response = error.response;
-  }
-  
+  const code = [...new Set(codes)].join(', ');
+  const status = error.response?.status;
+  const safeContext = context.replace(/https?:\/\/\S+/g, '[service]');
+  const enriched = new Error(`${safeContext}${status ? `; HTTP ${status}` : code ? `; ${code}` : error.message?.includes('missing content') ? '; missing content' : '; request failed'}`);
+  enriched.name = error.name === 'AbortError' ? 'AbortError' : 'Error';
+  if (codes.length) enriched.code = codes[0];
+  enriched.safeCodes = [...new Set(codes)];
+  enriched.retryable = error.retryable === true || codes.length > 0 || /fetch failed/.test(error.message);
+  if (error.response) enriched.response = error.response;
   return enriched;
 }
 
@@ -74,11 +59,12 @@ const TRANSIENT_NETWORK_CODES = new Set([
 const TRANSIENT_HTTP_STATUSES = new Set([429, 502, 503, 504]);
 
 function isTransientError(error, response) {
+  if (error.retryable === true) return true;
   if (response && TRANSIENT_HTTP_STATUSES.has(response.status)) {
     return true;
   }
   
-  if (error.cause?.code && TRANSIENT_NETWORK_CODES.has(error.cause.code)) {
+  if (TRANSIENT_NETWORK_CODES.has(error.code) || TRANSIENT_NETWORK_CODES.has(error.cause?.code)) {
     return true;
   }
   
@@ -93,13 +79,15 @@ function isTransientError(error, response) {
   return false;
 }
 
-async function withRetry(fn, { maxRetries = 3, baseDelayMs = 500, context = 'Operation' } = {}) {
+async function withRetry(fn, { maxRetries = 3, baseDelayMs = 500, context = 'Operation', runtime = {} } = {}) {
   let lastError;
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    requireBudget(runtime);
     try {
       return await fn();
     } catch (error) {
+      requireBudget(runtime);
       lastError = error;
       
       const isTransient = isTransientError(error, error.response);
@@ -114,18 +102,18 @@ async function withRetry(fn, { maxRetries = 3, baseDelayMs = 500, context = 'Ope
         error.message
       );
       
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      await new Promise(resolve => setTimeout(resolve, Math.min(delayMs, requireBudget(runtime))));
     }
   }
   
   throw enrichError(lastError, `${context} exhausted retries`);
 }
 
-async function callJev(prompt, state, timeoutMs) {
+async function callJev(prompt, state, timeoutMs, runtime) {
   return await withRetry(
     async () => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), boundedTimeout(timeoutMs, runtime));
       
       try {
         let response;
@@ -154,11 +142,8 @@ async function callJev(prompt, state, timeoutMs) {
           throw enrichError(error, `TypeSafe POST ${config.typesafe.baseUrl}/v1/systemone failed`);
         }
 
-        clearTimeout(timeout);
-
         if (!response.ok) {
-          const text = await response.text();
-          const error = new Error(`Jev API error: ${response.status} ${text}`);
+          const error = new Error(`Jev API error: ${response.status}`);
           error.response = response;
           throw error;
         }
@@ -170,20 +155,14 @@ async function callJev(prompt, state, timeoutMs) {
           throw new Error('Jev response missing answer');
         }
 
-        return {
-          choice: answer.choice,
-          confidence: answer.confidence,
-        };
-      } catch (error) {
-        clearTimeout(timeout);
-        throw error;
-      }
+        return { choice: answer.choice, confidence: answer.confidence };
+      } finally { clearTimeout(timeout); }
     },
-    { maxRetries: 2, baseDelayMs: 500, context: 'Jev API call' }
+    { maxRetries: 2, baseDelayMs: 500, context: 'Jev API call', runtime }
   );
 }
 
-async function callLuna(prompt, state, timeoutMs) {
+async function callLuna(prompt, state, timeoutMs, runtime) {
   if (!config.openai.apiKey) {
     throw new Error('Luna fallback unavailable: OPENAI_API_KEY not configured');
   }
@@ -191,7 +170,7 @@ async function callLuna(prompt, state, timeoutMs) {
   return await withRetry(
     async () => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), boundedTimeout(timeoutMs, runtime));
       
       try {
         const systemPrompt = `${prompt.instructions}\n\nCriteria:\n${JSON.stringify(prompt.criteria, null, 2)}`;
@@ -237,11 +216,8 @@ async function callLuna(prompt, state, timeoutMs) {
           throw enrichError(error, `OpenAI POST ${url} failed`);
         }
 
-        clearTimeout(timeout);
-
         if (!response.ok) {
-          const text = await response.text();
-          const error = new Error(`Luna API error: ${response.status} ${text}`);
+          const error = new Error(`Luna API error: ${response.status}`);
           error.response = response;
           throw error;
         }
@@ -322,22 +298,28 @@ async function callLuna(prompt, state, timeoutMs) {
         }
 
         return JSON.parse(content);
-      } catch (error) {
-        clearTimeout(timeout);
-        throw error;
-      }
+      } finally { clearTimeout(timeout); }
     },
-    { maxRetries: 2, baseDelayMs: 500, context: 'Luna API call' }
+    { maxRetries: 2, baseDelayMs: 500, context: 'Luna API call', runtime }
   );
 }
 
-async function classifyWithFallback(prompt, state, jevTimeoutMs, lunaTimeoutMs) {
+function validateClassification(prompt, result) {
+  if (!result || typeof result.choice !== 'string' || !Number.isFinite(result.confidence)
+    || result.confidence < 0 || result.confidence > 1
+    || (prompt.question_id === 'tx_filter' && !Object.hasOwn(prompt.criteria, result.choice))) {
+    throw new Error('classifier_invalid_response');
+  }
+  return result;
+}
+
+async function classifyWithFallback(prompt, state, jevTimeoutMs, lunaTimeoutMs, runtime) {
   try {
-    return await callJev(prompt, state, jevTimeoutMs);
+    return validateClassification(prompt, await callJev(prompt, state, jevTimeoutMs, runtime));
   } catch (error) {
     console.warn('Jev classification failed, falling back to Luna:', error.message);
     try {
-      return await callLuna(prompt, state, lunaTimeoutMs);
+      return validateClassification(prompt, await callLuna(prompt, state, lunaTimeoutMs, runtime));
     } catch (lunaError) {
       console.error('Luna API call failed:', {
         message: lunaError.message,
@@ -354,7 +336,7 @@ async function classifyWithFallback(prompt, state, jevTimeoutMs, lunaTimeoutMs) 
   }
 }
 
-export async function isTransaction(email) {
+export async function isTransaction(email, runtime = {}) {
   await loadPrompts();
   
   const state = {
@@ -367,13 +349,15 @@ export async function isTransaction(email) {
     txFilterPrompt,
     state,
     config.typesafe.timeoutMs,
-    config.openai.timeoutMs
+    config.openai.timeoutMs,
+    runtime
   );
 
+  if (result.choice === 'not_transaction' && result.confidence < 0.90) throw new Error('classifier_uncertain_rejection');
   return result.choice === 'transaction';
 }
 
-export async function chooseCategory(email, merchant, accountId = null) {
+export async function chooseCategory(email, merchant, accountId = null, runtime = {}) {
   await loadPrompts();
   
   const accountSpace = accountId ? getAccountSpace(accountId) : null;
@@ -393,7 +377,8 @@ export async function chooseCategory(email, merchant, accountId = null) {
     categoryChoicePrompt,
     state,
     config.typesafe.timeoutMs,
-    config.openai.timeoutMs
+    config.openai.timeoutMs,
+    runtime
   );
 
   const validCategoryIds = Object.keys(categoryChoicePrompt.criteria).filter(k => k !== '__skip__');

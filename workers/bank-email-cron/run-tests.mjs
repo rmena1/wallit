@@ -26,11 +26,24 @@ process.env.USD_CLP_EXCHANGE_RATE_X100 = '94650';
 import { spawn } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 
-const child = spawn('node', ['--test', ...readdirSync('test').filter(name => name.endsWith('.test.mjs')).map(name => `test/${name}`)], {
+// Do not inherit production credentials, custom endpoints, NODE_OPTIONS or proxy
+// settings. The preload blocks every transport; individual tests inject doubles.
+const safeEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+  ['PATH', 'HOME', 'TZ', 'TERM', 'LANG'].includes(key) || [
+    'DATABASE_URL', 'GMAIL_USER', 'GMAIL_APP_PASSWORD', 'GMAIL_INITIAL_UID',
+    'GMAIL_LOOKBACK_DAYS', 'WALLIT_BASE_URL', 'WALLIT_IMPORT_TOKEN',
+    'WALLIT_USER_ID', 'TYPESAFE_API_KEY', 'JEV_TIMEOUT_MS', 'OPENAI_API_KEY',
+    'LUNA_TIMEOUT_MS', 'CATEGORY_MIN_CONFIDENCE', 'ACCOUNT_BCI_CLP_ID',
+    'ACCOUNT_BCI_USD_ID', 'ACCOUNT_BCI_CHECKING_ID', 'ACCOUNT_TENPO_CREDIT_ID',
+    'ACCOUNT_TENPO_VISTA_ID', 'ACCOUNT_MERCADOPAGO_ID', 'USD_CLP_EXCHANGE_RATE_X100',
+  ].includes(key)));
+const corpus = process.argv[2] === '--corpus' ? process.argv[3] : null;
+const args = corpus ? ['--import', './test/network-guard.mjs', './test/corpus-audit.mjs', corpus]
+  : ['--import', './test/network-guard.mjs', '--test', ...(process.argv.includes('--watch') ? ['--watch'] : []), ...readdirSync('test').filter(name => name.endsWith('.test.mjs')).map(name => `test/${name}`)];
+const child = spawn(process.execPath, args, {
   stdio: 'inherit',
-  env: process.env,
+  env: safeEnv,
 });
 
-child.on('exit', (code) => {
-  process.exit(code);
-});
+child.on('error', () => { process.exitCode = 1; });
+child.on('exit', (code, signal) => { process.exitCode = signal ? 1 : (code ?? 1); });

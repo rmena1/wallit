@@ -1,3 +1,4 @@
+import { getProviderFromEmail } from '../lib/sender-auth.mjs';
 import { parseCardPayment } from './card-payment.mjs';
 /** Parse BCI credit-card purchase notices (CLP and international USD).
  *
@@ -6,7 +7,7 @@ import { parseCardPayment } from './card-payment.mjs';
  * 2. Colonless compact fields (older): `Monto USD 45,00` / `Comercio KAPSO …`
  */
 
-const BCI_PURCHASE = /Realizaste una compra(?: en comercio internacional)?\s+con tu tarjeta de cr[eé]dito\./i;
+const BCI_PURCHASE = /Realizaste\s+una\s+compra(?:\s+en\s+comercio\s+internacional)?\s+con\s+tu\s+tarjeta\s+de\s+cr[eé]dito\./i;
 const BCI_LAST4 = /\bN[uú]mero tarjeta cr[eé]dito:?\s*[*xX•]{4}(\d{4})/im;
 const BCI_AMOUNT = /\bMonto:?\s*(?:(USD)\s+)?\$?\s*([0-9.]+(?:,[0-9]{1,2})?)(?=\s+Fecha:?\s|\s*$)/im;
 const BCI_MERCHANT = /\bComercio:?\s*(.+?)(?=\s+Cuotas\b|\s+Si\b|\s*$)/m;
@@ -34,6 +35,10 @@ function clpAmount(value) {
 
 function minorUnits(value) {
   const normalized = String(value).replace(/\s/g, '');
+  if (/^\d+\.\d{1,2}$/.test(normalized)) {
+    const [whole, fraction] = normalized.split('.');
+    return Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+  }
   const [whole, fraction = ''] = normalized.split(',');
   if (!/^\d+(?:\.\d{3})*$/.test(whole) || !/^\d{0,2}$/.test(fraction)) {
     throw new Error(`invalid decimal amount: ${value}`);
@@ -43,9 +48,7 @@ function minorUnits(value) {
 
 /** @returns {object|null} normalized parser result, or null when not a BCI purchase */
 export function parseBci(email) {
-  const provider = String(email?._source_email_provider ?? '').toLowerCase();
-  const sender = String(email?.from ?? '').toLowerCase();
-  if (provider !== 'bci' && !sender.includes('bci.cl')) return null;
+  if (getProviderFromEmail(email?.from) !== 'bci') return null;
 
   const text = bodyText(email);
   const payment = parseCardPayment(email, 'bci', text);
@@ -58,9 +61,8 @@ export function parseBci(email) {
   const timeMatch = text.match(BCI_TIME);
   if (!amountMatch || !merchantMatch || !dateMatch || !timeMatch) return null;
 
-  const isUsd = Boolean(amountMatch[1])
-    || /\bUSD\b/i.test(amountMatch[0])
-    || /comercio internacional/i.test(text);
+  const isUsd = Boolean(amountMatch[1]);
+  if (/comercio\s+internacional/i.test(text) && !isUsd) throw new Error('parser_ambiguous_currency');
   const result = {
     provider: 'bci',
     type: 'expense',

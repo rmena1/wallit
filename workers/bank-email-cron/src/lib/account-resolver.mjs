@@ -1,25 +1,13 @@
 import { config } from '../config/index.mjs';
 
-export const PROVIDER_FROM_ALLOWLIST = {
-  'contacto@bci.cl': 'bci',
-  'no-reply@tenpo.cl': 'tenpo',
-  'info@mercadopago.com': 'mercadopago',
-};
-
-export function getProviderFromEmail(from) {
-  const normalized = from.toLowerCase().trim();
-  for (const [allowedFrom, provider] of Object.entries(PROVIDER_FROM_ALLOWLIST)) {
-    if (normalized.includes(allowedFrom)) {
-      return provider;
-    }
-  }
-  return null;
-}
+export { PROVIDER_FROM_ALLOWLIST, getProviderFromEmail } from './sender-auth.mjs';
 
 export function resolveAccount(parsedResult) {
   const { provider, currency, last4, cardHint, type } = parsedResult;
   if (parsedResult.ownCardPayment) {
-    const source = resolveTransferAccount(parsedResult.sourceBank || provider, currency, parsedResult.sourceAccount);
+    const source = parsedResult.sourceAccount === undefined && parsedResult.sourceProduct === 'tenpo_vista' && currency === 'CLP'
+      ? config.accounts.tenpoVista
+      : resolveTransferAccount(parsedResult.sourceBank || provider, currency, parsedResult.sourceAccount);
     if (!source) {
       const bank = bankKey(parsedResult.sourceBank || provider);
       const sourceLast4 = accountLast4(parsedResult.sourceAccount);
@@ -57,6 +45,14 @@ export function resolveAccount(parsedResult) {
   }
 
   if (provider === 'mercadopago') {
+    // Mercado Pago can send receipts for charges funded by an external card.
+    // A sender-provider match must not debit the wallet for a known BCI card.
+    if (parsedResult.funding === 'card') {
+      if (last4 === '1164' && currency === 'CLP' && /^cr[eé]dito$/i.test(cardHint || '') && bankKey(parsedResult.fundingBank) === 'bci') return config.accounts.bciClp;
+      if (last4 === '6969' && currency === 'CLP' && bankKey(parsedResult.fundingBank) === 'mercadopago') return config.accounts.mercadopago;
+      throw new Error('Mercado Pago: unresolved funding card');
+    }
+    if (parsedResult.funding === 'unknown') throw new Error('Mercado Pago: unresolved funding source');
     return config.accounts.mercadopago;
   }
 

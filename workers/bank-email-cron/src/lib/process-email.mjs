@@ -1,152 +1,83 @@
+import { createHash } from 'node:crypto';
 import { parseBci } from '../parsers/bci.mjs';
 import { parseTenpo } from '../parsers/tenpo.mjs';
 import { parseMercadoPago } from '../parsers/mercadopago.mjs';
 import { getProviderFromEmail, resolveAccount, isInternalTransferCandidate } from './account-resolver.mjs';
 import { buildImportPayload } from './import-client.mjs';
-import { getAccountSpace, isCategoryInAccountSpace } from '../data/space-mappings.mjs';
+import { isCategoryInAccountSpace } from '../data/space-mappings.mjs';
+import { validateParsed, looksLikeTransactionNotice } from './parser-validation.mjs';
+import { requireBudget } from './run-budget.mjs';
+import { config } from '../config/index.mjs';
 
-export function createEmailProcessor({ isTransaction, chooseCategory, importToWallit, logProcessing }) {
-  async function parseEmail(email) {
+export function sourceIdentity(email) {
+  if (typeof email.messageId === 'string' && email.messageId.trim()
+    && email.messageId.length <= 998 && !/[\r\n]/.test(email.messageId)) return email.messageId.trim().replace(/^<|>$/g, '');
+  if (!Number.isSafeInteger(email.uid) || !Number.isSafeInteger(email.uidvalidity)
+    || email.uid <= 0 || email.uidvalidity <= 0) throw new Error('source_identity_missing');
+  return `imap:${createHash('sha256').update([config.gmail.user.toLowerCase(), config.gmail.folder, email.uidvalidity, email.uid].join('\0')).digest('hex')}`;
+}
+const hash = value => createHash('sha256').update(String(value)).digest('hex');
+function safeError(error) {
+  const message = String(error?.message || '');
+  return /^(?:parser_[a-z_]+|source_identity_missing|mime_parse_failed|message_too_large|authentication_missing|parser_no_match_transaction|classifier_invalid_decision|import_not_confirmed|database_session_lost|run_budget_exhausted)$/.test(message)
+    || /^Credit card payment: unresolved source account \(bank=[a-z]+ currency=(?:CLP|USD) last4=(?:\d{4}|unknown)\)$/.test(message)
+    ? message : 'processing_failed';
+}
+
+export function createEmailProcessor({ isTransaction, chooseCategory, importToWallit, logProcessing, logger = console, assertRunActive = async () => {} }) {
+  return async function processEmail(email, runtime = {}) {
     const provider = getProviderFromEmail(email.from);
-    if (!provider) {
-      return { skip: true, reason: 'from_not_in_allowlist', provider: null };
-    }
-
-    email._source_email_provider = provider;
-
-    const parsers = {
-      bci: parseBci,
-      tenpo: parseTenpo,
-      mercadopago: parseMercadoPago,
+    const entry = { uid: email.uid, messageId: hash(email.messageId || `uid:${email.uidvalidity}:${email.uid}`),
+      from: provider || 'untrusted', subject: '', provider, decision: 'pending' };
+    const skip = async reason => {
+      entry.decision = reason; await logProcessing(entry);
+      logger.log(`UID ${email.uid}: ${reason}, advancing cursor`);
+      return { success: true, skip: true, advance: true, reason };
     };
-
-    const parser = parsers[provider];
-    if (!parser) {
-      return { skip: true, reason: 'no_parser', provider };
-    }
-
-    const result = parser(email);
-    if (!result) {
-      return { skip: true, reason: 'parser_no_match', provider };
-    }
-
-    return { skip: false, parsed: result, provider };
-  }
-
-  async function processEmail(email) {
-    const logEntry = {
-      uid: email.uid,
-      messageId: email.messageId || `uid-${email.uid}`,
-      from: email.from,
-      subject: email.subject,
-      decision: 'pending',
-    };
-
     try {
-      console.error(`[UID ${email.uid}] Step: before parse`);
-      const parseResult = await parseEmail(email);
-      console.error(`[UID ${email.uid}] Step: after parse (skip=${parseResult.skip}, provider=${parseResult.provider})`);
-    
-      if (parseResult.skip) {
-        logEntry.provider = parseResult.provider;
-        logEntry.decision = parseResult.reason;
-        await logProcessing(logEntry);
-        console.log(`UID ${email.uid}: ${parseResult.reason}, advancing cursor`);
-        return { success: true, skip: true, advance: true };
+      requireBudget(runtime);
+      if (email.decodeError) throw new Error(email.decodeError);
+      if (!provider) return await skip('from_not_in_allowlist');
+      if (!email.authentication?.verified) {
+        if (email.authentication?.reason === 'authentication_failed') return await skip('authentication_failed');
+        throw new Error('authentication_missing');
       }
-
-      const parsed = parseResult.parsed;
-      logEntry.provider = parsed.provider;
-      logEntry.parserSucceeded = true;
-
-      console.error(`[UID ${email.uid}] Step: before isTransaction`);
-      const txDecision = await isTransaction(email);
-      console.error(`[UID ${email.uid}] Step: after isTransaction (result=${txDecision})`);
-    
-      if (!txDecision) {
-        logEntry.decision = 'not_transaction';
-        await logProcessing(logEntry);
-        console.log(`UID ${email.uid}: not a transaction, advancing cursor`);
-        return { success: true, skip: true, advance: true };
+      const parsed = validateParsed({ bci: parseBci, tenpo: parseTenpo, mercadopago: parseMercadoPago }[provider](email));
+      if (!parsed) {
+        if (looksLikeTransactionNotice(email)) throw new Error('parser_no_match_transaction');
+        return await skip('parser_no_match');
       }
-
-      logEntry.decision = 'transaction';
-
-      try {
-        parsed.accountId = resolveAccount(parsed);
-        logEntry.accountId = parsed.accountId;
-      } catch (error) {
-        logEntry.decision = 'account_unresolved';
-        logEntry.errorMessage = error.message;
-        await logProcessing(logEntry);
-        console.error(`UID ${email.uid}: ${error.message}, stopping (requires manual fix)`);
-        return { success: false, error: error.message, advance: false };
+      const identity = sourceIdentity(email);
+      entry.messageId = hash(identity);
+      entry.parserSucceeded = true;
+      const txDecision = await isTransaction(email, runtime);
+      if (typeof txDecision !== 'boolean') throw new Error('classifier_invalid_decision');
+      if (!txDecision) return await skip('not_transaction');
+      try { parsed.accountId = resolveAccount(parsed); }
+      catch (error) {
+        entry.decision = 'account_unresolved'; entry.errorMessage = safeError(error); await logProcessing(entry);
+        logger.error(`UID ${email.uid}: account_unresolved, stopping`);
+        return { success: false, advance: false, error: entry.errorMessage };
       }
-
-      const accountSpace = getAccountSpace(parsed.accountId);
-      console.error(`[UID ${email.uid}] Resolved account ${parsed.accountId} in space ${accountSpace}`);
-
-      console.error(`[UID ${email.uid}] Step: before chooseCategory`);
-      const categoryId = isInternalTransferCandidate(parsed) ? null
-        : await chooseCategory(email, parsed.originalName, parsed.accountId);
-      console.error(`[UID ${email.uid}] Step: after chooseCategory (categoryId=${categoryId})`);
-    
-      logEntry.categoryId = categoryId;
-
-      let validatedCategoryId = categoryId;
-      if (categoryId && !isCategoryInAccountSpace(categoryId, parsed.accountId)) {
-        console.warn(
-          `[UID ${email.uid}] Defensive guard: category ${categoryId} does not belong to account ${parsed.accountId} space, setting to null`
-        );
-        validatedCategoryId = null;
-        logEntry.categoryId = null;
-      }
-
-      const payload = buildImportPayload(parsed, validatedCategoryId, email.messageId);
-    
-      console.error(`[UID ${email.uid}] Step: before import`);
-      const importResult = await importToWallit(payload);
-      console.error(`[UID ${email.uid}] Step: after import (success=${importResult.success})`);
-    
-      if (!importResult.success) throw new Error('Import API did not confirm success');
-      logEntry.importSuccess = importResult.success;
-      logEntry.importDuplicate = importResult.duplicate || false;
-      logEntry.decision = importResult.duplicate ? 'duplicate_success' : 'imported';
-    
-      await logProcessing(logEntry);
-
-      if (importResult.duplicate) {
-        console.log(`UID ${email.uid}: duplicate import, advancing cursor`);
-        return { success: true, skip: false, advance: true };
-      }
-
-      const importedId = [importResult.movementId, importResult.transferId, importResult.sourceMovementId]
-        .find(id => typeof id === 'string' && id.trim()) || 'unknown-id';
-      console.log(`UID ${email.uid}: imported successfully as ${importedId}`);
-      return { success: true, skip: false, advance: true };
-
+      entry.accountId = parsed.accountId;
+      const category = isInternalTransferCandidate(parsed) ? null : await chooseCategory(email, parsed.originalName, parsed.accountId, runtime);
+      const categoryId = category && isCategoryInAccountSpace(category, parsed.accountId) ? category : null;
+      entry.categoryId = categoryId;
+      requireBudget(runtime);
+      await assertRunActive();
+      requireBudget(runtime);
+      const result = await importToWallit(buildImportPayload(parsed, categoryId, identity), { ...runtime, assertRunActive });
+      if (result?.success !== true) throw new Error('import_not_confirmed');
+      entry.importSuccess = true; entry.importDuplicate = result.duplicate === true;
+      entry.decision = entry.importDuplicate ? 'duplicate_success' : 'imported';
+      await logProcessing(entry);
+      logger.log(`UID ${email.uid}: ${entry.decision}, advancing cursor`);
+      return { success: true, skip: false, advance: true, reason: entry.decision };
     } catch (error) {
-      console.error(`[UID ${email.uid}] Step: on catch`, {
-        message: error.message,
-        name: error.name,
-        causeCode: error.cause?.code,
-        causeMessage: error.cause?.message,
-        stack: error.stack?.split('\n').slice(0, 5).join('\n'),
-      });
-    
-      logEntry.decision = 'error';
-      logEntry.errorMessage = error.message;
-    
-      if (logEntry.accountId) {
-        const accountSpace = getAccountSpace(logEntry.accountId);
-        console.error(`[UID ${email.uid}] Error context: accountId=${logEntry.accountId}, accountSpace=${accountSpace}, categoryId=${logEntry.categoryId || 'null'}`);
-      }
-    
-      await logProcessing(logEntry);
-      console.error(`UID ${email.uid}: processing failed, stopping (will retry next cron):`, error.message);
-      return { success: false, error: error.message, advance: false };
+      entry.decision = 'error'; entry.errorMessage = safeError(error);
+      await logProcessing(entry);
+      logger.error(`UID ${email.uid}: ${entry.errorMessage}, stopping`);
+      return { success: false, error: entry.errorMessage, advance: false };
     }
-  }
-
-  return processEmail;
+  };
 }

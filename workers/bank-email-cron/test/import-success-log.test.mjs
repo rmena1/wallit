@@ -25,7 +25,7 @@ for (const [name, kind, ids, expectedId] of cases) {
       },
     });
     const result = await processEmail({
-      uid: 42,
+      authentication: { verified: true }, uid: 42,
       messageId: 'synthetic-success-log',
       from: 'no-reply@tenpo.cl',
       textBody: `Has realizado una transferencia
@@ -37,7 +37,7 @@ Fecha: 26/09/2026
 Hora: 12:00`,
     });
 
-    assert.deepEqual(result, { success: true, skip: false, advance: true });
-    assert.deepEqual(messages, [`UID 42: imported successfully as ${expectedId}`]);
+    assert.equal(result.success, true); assert.equal(result.advance, true); assert.equal(result.skip, false);
+    assert.deepEqual(messages, ['UID 42: imported, advancing cursor']);
   });
 }
