@@ -6,8 +6,8 @@ const retryStatus = status => status === 429 || status >= 500;
 export function createImportClient({ fetchImpl = (...args) => fetch(...args),
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), timeoutMs = config.wallit.timeoutMs,
   logger = console } = {}) {
-  return async (payload, runtime = {}) => {
-    // Exactly the same serialized identity+payload on every retry.
+  return async function send(payload, runtime = {}) {
+    // Transport retries preserve the exact serialized identity and payload.
     const body = JSON.stringify(payload);
     for (let attempt = 0; attempt < 3; attempt++) {
       requireBudget(runtime);
@@ -21,6 +21,16 @@ export function createImportClient({ fetchImpl = (...args) => fetch(...args),
           headers: { Authorization: `Bearer ${config.wallit.importToken}`, 'Content-Type': 'application/json' },
           body, signal: controller.signal });
         status = response.status;
+        if (status === 400 && payload.kind === 'movement' && payload.type === 'expense' && payload.categoryId) {
+          const rejection = await response.json();
+          if (rejection?.success === false && rejection.error === 'Category does not belong to account Space') {
+            // A category can move/disappear after lookup. Retry this same import
+            // uncategorized; never apply a foreign category or skip the expense.
+            clearTimeout(timer);
+            return send({ ...payload, categoryId: null }, runtime)
+              .then(result => ({ ...result, categoryRejected: true }));
+          }
+        }
         if (!response.ok) throw Object.assign(new Error('http_failure'), { retryable: retryStatus(status) });
         const result = await response.json();
         if (!result || result.success !== true || (result.duplicate !== undefined && typeof result.duplicate !== 'boolean')) {

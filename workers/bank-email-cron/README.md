@@ -11,6 +11,9 @@ This service monitors a Gmail mailbox via IMAP for transaction notifications fro
 - **IMAP Gmail Integration**: Reads new emails using UID cursor with UIDVALIDITY tracking
 - **Concurrent Run Protection**: PostgreSQL advisory lock prevents overlapping cron executions
 - **Deterministic Parsers**: BCI, Tenpo, and Mercado Pago email parsers (validated synthetic regressions and a separately stored private 100-message real-email audit)
+- **Historical expense categories**: Before AI classification, exact `original_name` matches among movements created by `WALLIT_USER_ID` in the destination account's Space vote. Only non-null categories that also belong to that Space count; account, movement and category Spaces are checked in the live database. The most frequent category wins (category ID breaks ties); the current provider/email identity is excluded on retries. A winner bypasses both AI calls. Without eligible votes, the existing classification flow runs. Own-bank transfers and card payments do not use this lookup. If the API rejects an expense category's Space (for example after a concurrent category change), the client retries the same email identity without a category; the cursor advances only after a confirmed import.
+  - Apply Wallit's `0020_category_history_index` migration before deploying the worker to avoid a full movements-table scan for each expense.
+  - SQL integration check against a disposable database: `HISTORY_TEST_DATABASE_URL=... node --test test/category-history.integration.mjs` (from this worker directory). This also verifies that PostgreSQL uses the history index.
 - **AI Classification**:
   - Transaction filter (Jev with Luna fallback)
   - Category choice (Jev with Luna fallback, confidence-gated)

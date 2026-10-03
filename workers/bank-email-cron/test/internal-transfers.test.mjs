@@ -15,6 +15,7 @@ Hora: 12:00` };
 async function process(email, overrides = {}) {
   let payload;
   const run = createEmailProcessor({
+    findHistoricalCategory: async () => assert.fail('Transfers and card payments must not consult category history'),
     isTransaction: async () => true, chooseCategory: async () => null,
     logProcessing: async () => {},
     importToWallit: async (value) => { payload = value; return { success: true }; },
@@ -43,7 +44,7 @@ test('ambiguous candidate imports expense without review and advances, including
 });
 test('external P2P and similarly named recipients remain one-leg expenses', async () => {
   for (const name of ['Ana Perez', 'Raimundo Menard']) {
-    const { payload } = await process(outgoing(name));
+    const { payload } = await process(outgoing(name), { findHistoricalCategory: async () => null });
     assert.equal(payload.kind, 'movement');
     assert.equal(payload.type, 'expense');
     assert.notEqual(payload.needsReview, false);
