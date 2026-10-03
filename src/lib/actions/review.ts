@@ -52,7 +52,7 @@ export async function getPendingReviewMovements() {
       )`,
     })
     .from(movements)
-    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+    .leftJoin(categories, eq(movements.categoryId, categories.id))
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(eq(movements.spaceId, space.id), eq(movements.needsReview, true)))
     .orderBy(desc(movements.date), desc(movements.createdAt))

@@ -36,16 +36,12 @@ test('PostgreSQL: majority, ties, exact raw names, owner and retries', {
     assert.equal(await find('RAW SHOP'), null);
     await add(null);
     assert.equal(await find('RAW SHOP'), null);
-    // Neither foreign movements nor foreign categories cast a vote.
-    await add('food', { space_id: 'casa' });
-    await add('foreign-category');
-    assert.equal(await find('RAW SHOP'), null);
+    await add('foreign-category', { space_id: 'casa', original_name: 'ONLY ELSEWHERE' });
+    assert.equal(await find('ONLY ELSEWHERE'), 'foreign-category');
     await add('food');
     await add('food');
     await add('travel');
     for (let i = 0; i < 4; i++) {
-      await add('foreign-category');
-      await add('travel', { space_id: 'casa' });
       await add('other-user', { created_by_user_id: 'someone-else' });
       await add('normalized-only', { original_name: 'different', name: 'RAW SHOP' });
       await add('wrong-case', { original_name: 'raw shop' });
@@ -55,7 +51,7 @@ test('PostgreSQL: majority, ties, exact raw names, owner and retries', {
     assert.equal(await find('RAW SHOP'), 'food');
     assert.equal(await find('Normalized shop'), null);
     assert.equal(await find('NEW SHOP'), null);
-    await add('travel');
+    await add('travel', { space_id: 'casa' });
     assert.ok(['food', 'travel'].includes(await find('RAW SHOP')));
     await add('travel', { source_email_provider: 'tenpo', source_email_id: 'current' });
     assert.equal(await find('RAW SHOP'), 'travel');

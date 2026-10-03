@@ -356,7 +356,7 @@ export async function getAccountMovements(accountId: string, offset: number, lim
       categoryEmoji: categories.emoji,
     })
     .from(movements)
-    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+    .leftJoin(categories, eq(movements.categoryId, categories.id))
     .where(whereCondition)
     .orderBy(desc(movements.date), desc(movements.createdAt))
     .limit(limit)

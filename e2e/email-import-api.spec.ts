@@ -18,6 +18,56 @@ function headers() {
 }
 
 test.describe('Authenticated email import service', () => {
+  test('preserves an exact-name historical category from another Space', async ({ page }) => {
+    const email = await registerAndLogin(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found')
+    const destination = await getPersonalSpaceId(userId)
+    const otherSpace = await createSpaceForUser(userId, 'History elsewhere')
+    const accountId = await createRegularAccount(userId)
+    const otherAccount = await createRegularAccount(userId, { spaceId: otherSpace })
+    const categoryId = await seedCategory(userId, { name: 'Elsewhere', emoji: '📁', spaceId: otherSpace })
+    const payload = {
+      kind: 'movement', userId, accountId: otherAccount, categoryId,
+      name: 'Historical shop', originalName: ' RAW SHOP ', date: new Date().toISOString().slice(0, 10),
+      type: 'expense', amount: 1000, sourceEmailProvider: 'bci',
+      sourceEmailId: 'historical-elsewhere',
+    }
+    const seed = await page.request.post('/api/import/email', { headers: headers(), data: payload })
+    expect(await seed.json()).toMatchObject({ success: true })
+    const current = { ...payload, accountId, name: 'Cross Space import', sourceEmailId: 'current-cross-space' }
+    const imported = await page.request.post('/api/import/email', { headers: headers(), data: current })
+    expect(await imported.json()).toMatchObject({ success: true, duplicate: false })
+    expect(await getMovementWorkflowState(destination!, current.name)).toMatchObject({ categoryId, accountId })
+    const retry = await page.request.post('/api/import/email', { headers: headers(), data: current })
+    expect(await retry.json()).toMatchObject({ success: true, duplicate: true })
+    // A foreign category without exact-name evidence remains invalid.
+    const invalid = await page.request.post('/api/import/email', {
+      headers: headers(), data: { ...current, originalName: 'RAW SHOP', sourceEmailId: 'unmatched-name' },
+    })
+    expect(invalid.status()).toBe(400)
+
+    await page.goto('/review')
+    const reviewCategory = page.locator('select').filter({ has: page.locator(`option[value="${categoryId}"]`) })
+    await expect(reviewCategory).toHaveValue(categoryId)
+    await expect(reviewCategory.locator('option:checked')).toHaveText('📁 Elsewhere')
+    await page.getByRole('button', { name: '✓ Confirmar' }).click()
+    await expect.poll(async () => (await getMovementWorkflowState(destination!, current.name))?.needsReview).toBe(false)
+
+    const movement = await getMovementWorkflowState(destination!, current.name)
+    await page.goto(`/edit/${movement!.id}`)
+    const editCategory = page.locator('select').filter({ has: page.locator(`option[value="${categoryId}"]`) })
+    await expect(editCategory).toHaveValue(categoryId)
+    await expect(editCategory.locator('option:checked')).toHaveText('📁 Elsewhere')
+    await page.locator('input').filter({ visible: true }).first().fill('Edited cross Space import')
+    await page.getByRole('button', { name: 'Guardar cambios ✓' }).click()
+    await expect.poll(async () => (await getMovementWorkflowState(destination!, 'Edited cross Space import'))?.categoryId).toBe(categoryId)
+    await page.goto('/')
+    await expect(page.getByRole('button', { name: 'Editar movimiento Edited cross Space import' })).toContainText('Elsewhere')
+    await page.goto('/reports')
+    await expect(page.getByText('Elsewhere', { exact: true }).first()).toBeVisible()
+  })
+
   test('owns USD canonicalization, authorization, validation and movement idempotency', async ({ page }) => {
     const email = await registerAndLogin(page)
     const userId = await getUserId(email)

@@ -1007,6 +1007,8 @@ export const movementLedger = {
     return ok()
   },
 
+  // Imported categories may belong to another Space. Preserve an unchanged
+  // category on review/edit; replacements still require a local category.
   async confirmPendingAsReportable(spaceId: string, movementId: string, input: ReportableInput): Promise<LedgerResult> {
     const original = await getOwnedMovement(spaceId, movementId)
     if (!original) return fail('Movement not found')
@@ -1017,7 +1019,7 @@ export const movementLedger = {
       if (settlementLink.role !== 'outgoing') return fail('Receivable settlement operational movements cannot be reviewed here')
       if (!validatesSettlementOutgoingSafeFields(original, input)) return fail(settlementSafeClassificationError())
       if (!input.name.trim()) return fail('Name is required')
-      if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+      if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
       await db.update(movements).set({
         name: input.name.trim(),
@@ -1040,7 +1042,7 @@ export const movementLedger = {
 
     const normalized = await normalizeMoney(spaceId, input)
     if ('error' in normalized) return fail(normalized.error)
-    if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+    if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
     await db.update(movements).set({
       name: input.name.trim(),
@@ -1093,7 +1095,7 @@ export const movementLedger = {
       if (settlementLink.role !== 'outgoing') return fail('Receivable settlement operational movements cannot be edited through reportable movement edits')
       if (!validatesSettlementOutgoingSafeFields(original, input)) return fail(settlementSafeClassificationError())
       if (!input.name.trim()) return fail('Name is required')
-      if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+      if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
       await db.update(movements).set({
         name: input.name.trim(),
@@ -1130,7 +1132,7 @@ export const movementLedger = {
 
     const normalized = await normalizeMoney(spaceId, input)
     if ('error' in normalized) return fail(normalized.error)
-    if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+    if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
     await db.update(movements).set({
       name: input.name.trim(),

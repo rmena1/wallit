@@ -1012,6 +1012,9 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
                       }}
                     >
                       <option value="">⚠️ Sin categoría</option>
+                      {current?.categoryId && !localCategories.some(c => c.id === current.categoryId) && (
+                        <option value={current.categoryId}>{current.categoryEmoji} {current.categoryName}</option>
+                      )}
                       {localCategories.map(c => (
                         <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
                       ))}
