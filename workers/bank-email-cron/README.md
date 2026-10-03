@@ -184,7 +184,7 @@ Default mappings (configurable via environment):
 | BCI | Card 1164, USD | Personal USD |
 | Tenpo | Credit card activity | Tenpo Credit |
 | Tenpo | Transfer/incoming payment | Tenpo Vista (Casa) |
-| Mercado Pago | Account 6969 | Personal CLP |
+| Mercado Pago | Account 6991 | Personal CLP |
 
 ## Money Units
 
@@ -267,7 +267,7 @@ Outgoing transfers to Raimundo Mena (including additional surnames), and BCI/Ten
 own-credit-card payment notices, are internal-transfer candidates. Destination
 resolution uses labeled account numbers and bank/currency, never arbitrary body
 digits or classifier guesses. Known endings: BCI 1164 (CLP/USD), BCI checking 8080,
-Tenpo credit 7648, Tenpo Vista 0146, Mercado Pago 6969. A Tenpo own-card payment
+Tenpo credit 7648, Tenpo Vista 0146, Mercado Pago 6991. A Tenpo own-card payment
 without a card number can use the explicit Tenpo credit marker. An unknown explicit
 card number never falls back to that marker.
 
@@ -348,3 +348,7 @@ explains nonzero-exit restarts. No Railway deployment is performed by this chang
 - Do not replay, reset the cursor, backfill or manually invoke production imports when validating/rolling back this release.
 
 See `AUDIT_2026-10-03.md` for evidence counts, remaining limits and rollout checks.
+
+## Transferencias entre bancos propios
+
+Ver [detección, cuentas pendientes, deduplicación y pruebas con correos reales](OWN_BANK_TRANSFERS.md).

@@ -78,6 +78,13 @@
       "when": 1788310800000,
       "tag": "0018_usd_money_invariant",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791028800000,
+      "tag": "0019_own_bank_transfer_imports",
+      "breakpoints": true
     }
   ]
 }

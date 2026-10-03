@@ -1,3 +1,4 @@
+import { parseOwnBankTransfer } from '../parsers/own-bank-transfer.mjs';
 import { createHash } from 'node:crypto';
 import { parseBci } from '../parsers/bci.mjs';
 import { parseTenpo } from '../parsers/tenpo.mjs';
@@ -42,7 +43,7 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
         if (email.authentication?.reason === 'authentication_failed') return await skip('authentication_failed');
         throw new Error('authentication_missing');
       }
-      const parsed = validateParsed({ bci: parseBci, tenpo: parseTenpo, mercadopago: parseMercadoPago }[provider](email));
+      const parsed = validateParsed(parseOwnBankTransfer(email) ?? { bci: parseBci, tenpo: parseTenpo, mercadopago: parseMercadoPago }[provider]?.(email));
       if (!parsed) {
         if (looksLikeTransactionNotice(email)) throw new Error('parser_no_match_transaction');
         return await skip('parser_no_match');
@@ -50,17 +51,17 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
       const identity = sourceIdentity(email);
       entry.messageId = hash(identity);
       entry.parserSucceeded = true;
-      const txDecision = await isTransaction(email, runtime);
+      const txDecision = parsed.ownBankTransfer ? true : await isTransaction(email, runtime);
       if (typeof txDecision !== 'boolean') throw new Error('classifier_invalid_decision');
       if (!txDecision) return await skip('not_transaction');
-      try { parsed.accountId = resolveAccount(parsed); }
+      try { parsed.accountId = parsed.ownBankTransfer ? null : resolveAccount(parsed); }
       catch (error) {
         entry.decision = 'account_unresolved'; entry.errorMessage = safeError(error); await logProcessing(entry);
         logger.error(`UID ${email.uid}: account_unresolved, stopping`);
         return { success: false, advance: false, error: entry.errorMessage };
       }
       entry.accountId = parsed.accountId;
-      const category = isInternalTransferCandidate(parsed) ? null : await chooseCategory(email, parsed.originalName, parsed.accountId, runtime);
+      const category = parsed.ownBankTransfer || isInternalTransferCandidate(parsed) ? null : await chooseCategory(email, parsed.originalName, parsed.accountId, runtime);
       const categoryId = category && isCategoryInAccountSpace(category, parsed.accountId) ? category : null;
       entry.categoryId = categoryId;
       requireBudget(runtime);
@@ -69,7 +70,7 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
       const result = await importToWallit(buildImportPayload(parsed, categoryId, identity), { ...runtime, assertRunActive });
       if (result?.success !== true) throw new Error('import_not_confirmed');
       entry.importSuccess = true; entry.importDuplicate = result.duplicate === true;
-      entry.decision = entry.importDuplicate ? 'duplicate_success' : 'imported';
+      entry.decision = entry.importDuplicate ? 'duplicate_success' : result.pendingAccounts ? 'transfer_pending_accounts' : 'imported';
       await logProcessing(entry);
       logger.log(`UID ${email.uid}: ${entry.decision}, advancing cursor`);
       return { success: true, skip: false, advance: true, reason: entry.decision };
