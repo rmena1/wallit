@@ -14,9 +14,8 @@ const email = {
 test('history uses parameterized exact original name, owner and excludes the current email', async () => {
   const lookup = createCategoryHistoryLookup({ userId: 'rai', sql: async (strings, ...values) => {
     const query = strings.join('?');
-    assert.deepEqual(values, ['destination-account', 'rai', ' UBER *TRIP ', 'bci', 'history-test']);
-    assert.match(query, /a\.space_id = m\.space_id/);
-    assert.match(query, /c\.space_id = a\.space_id/);
+    assert.deepEqual(values, ['rai', ' UBER *TRIP ', 'bci', 'history-test']);
+    assert.doesNotMatch(query, /space_id|JOIN accounts/);
     assert.match(query, /created_by_user_id = \?/);
     assert.match(query, /original_name = \?/);
     assert.match(query, /category_id IS NOT NULL/);
@@ -63,59 +62,45 @@ test('missing historical category retains both existing classifier steps', async
   assert.deepEqual(calls, ['history', 'transaction', 'category', 'import']);
 });
 
-test('a category Space rejection retries uncategorized and advances only after import confirmation', async () => {
+test('a winner from another Space is preserved and the cron advances', async () => {
   const { createImportClient } = await import('../src/lib/import-client.mjs');
-  for (const retrySucceeds of [true, false]) {
-    const payloads = [];
-    let logged;
-    const importToWallit = createImportClient({ fetchImpl: async (_url, options) => {
-      const payload = JSON.parse(options.body);
-      payloads.push(payload);
-      if (payload.categoryId) return { ok: false, status: 400, json: async () => ({
-        success: false, error: 'Category does not belong to account Space',
-      }) };
-      return { ok: retrySucceeds, status: retrySucceeds ? 200 : 400,
-        json: async () => ({ success: retrySucceeds }) };
-    } });
-    const run = createEmailProcessor({
-      findHistoricalCategory: async () => 'category-moved-after-lookup',
-      isTransaction: async () => assert.fail('historical winner skips classifier'),
-      chooseCategory: async () => assert.fail('historical winner skips classifier'),
-      importToWallit, logProcessing: async entry => { logged = entry; }, logger: { log() {}, error() {} },
-    });
-    let cursor = 100;
-    const result = await runWorker({
-      acquireAdvisoryLock: async () => true, releaseAdvisoryLock: async () => {},
-      createProcessingLog: async () => {}, closeDatabase: async () => {},
-      getCursor: async () => ({ lastUid: cursor, uidvalidity: 1 }),
-      updateCursor: async (_validity, uid) => { cursor = uid; },
-      fetchNewEmails: async () => ({ uidvalidity: 1, messages: [email] }),
-      processEmail: run,
-    }, { logger: { log() {}, error() {} } });
-    assert.equal(result.exitCode, retrySucceeds ? 0 : 1);
-    assert.equal(cursor, retrySucceeds ? email.uid : 100);
-    if (retrySucceeds) assert.equal(logged.categoryId, null);
-    assert.equal(payloads.length, 2);
-    assert.equal(payloads[1].categoryId, null);
-    assert.deepEqual(payloads[1], { ...payloads[0], categoryId: null });
-  }
+  const payloads = [];
+  const importToWallit = createImportClient({ fetchImpl: async (_url, options) => {
+    const payload = JSON.parse(options.body);
+    payloads.push(payload);
+    assert.equal(payload.categoryId, 'other-space-category');
+    return { ok: true, status: 200, json: async () => ({ success: true }) };
+  } });
+  const processEmail = createEmailProcessor({
+    findHistoricalCategory: async () => 'other-space-category',
+    isTransaction: async () => assert.fail('history skips classifier'),
+    chooseCategory: async () => assert.fail('history skips classifier'),
+    importToWallit, logProcessing: async () => {}, logger: { log() {}, error() {} },
+  });
+  let cursor = 100;
+  const result = await runWorker({
+    acquireAdvisoryLock: async () => true, releaseAdvisoryLock: async () => {},
+    createProcessingLog: async () => {}, closeDatabase: async () => {},
+    getCursor: async () => ({ lastUid: cursor, uidvalidity: 1 }),
+    updateCursor: async (_validity, uid) => { cursor = uid; },
+    fetchNewEmails: async () => ({ uidvalidity: 1, messages: [email] }),
+    processEmail,
+  }, { logger: { log() {}, error() {} } });
+  assert.equal(result.exitCode, 0);
+  assert.equal(cursor, email.uid);
+  assert.equal(payloads.length, 1);
 });
 
-test('uncategorized transport failures never retry the rejected category', async () => {
+test('transport retries preserve the winning category', async () => {
   const { createImportClient } = await import('../src/lib/import-client.mjs');
   const payloads = [];
   const send = createImportClient({ sleep: async () => {}, logger: { warn() {} },
     fetchImpl: async (_url, options) => {
-      const payload = JSON.parse(options.body);
-      payloads.push(payload);
-      if (payload.categoryId) return { ok: false, status: 400, json: async () => ({
-        success: false, error: 'Category does not belong to account Space',
-      }) };
+      payloads.push(JSON.parse(options.body));
       throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
     },
   });
   await assert.rejects(send({ kind: 'movement', type: 'expense', categoryId: 'foreign',
     sourceEmailId: 'same-identity' }), /Wallit import failed/);
-  assert.deepEqual(payloads.map(payload => payload.categoryId), ['foreign', null, null, null]);
-  assert.ok(payloads.every(payload => payload.sourceEmailId === 'same-identity'));
+  assert.deepEqual(payloads.map(payload => payload.categoryId), ['foreign', 'foreign', 'foreign']);
 });

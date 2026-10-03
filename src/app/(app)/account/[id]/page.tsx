@@ -116,7 +116,7 @@ export default async function AccountDetailPage({ params }: Props) {
         categoryEmoji: categories.emoji,
       })
       .from(movements)
-      .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+      .leftJoin(categories, eq(movements.categoryId, categories.id))
       .where(movementsWhere)
       .orderBy(desc(movements.date), desc(movements.createdAt))
       .limit(MOVEMENTS_PAGE_SIZE),

@@ -73,7 +73,7 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
       const category = parsed.ownBankTransfer || isInternalTransferCandidate(parsed) ? null
         : historicalCategory ?? await chooseCategory(email, parsed.originalName, parsed.accountId, runtime);
       // History can contain categories created after the static classifier mappings.
-      // The history query validates both movement and category against the live destination Space.
+      // Historical votes apply across Spaces; the API verifies their provenance.
       const categoryId = historicalCategory ?? (category && isCategoryInAccountSpace(category, parsed.accountId) ? category : null);
       entry.categoryId = categoryId;
       requireBudget(runtime);
@@ -81,7 +81,6 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
       requireBudget(runtime);
       const result = await importToWallit(buildImportPayload(parsed, categoryId, identity), { ...runtime, assertRunActive });
       if (result?.success !== true) throw new Error('import_not_confirmed');
-      if (result.categoryRejected) entry.categoryId = null;
       entry.importSuccess = true; entry.importDuplicate = result.duplicate === true;
       entry.decision = entry.importDuplicate ? 'duplicate_success' : result.pendingAccounts ? 'transfer_pending_accounts' : 'imported';
       await logProcessing(entry);

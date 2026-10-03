@@ -21,16 +21,6 @@ export function createImportClient({ fetchImpl = (...args) => fetch(...args),
           headers: { Authorization: `Bearer ${config.wallit.importToken}`, 'Content-Type': 'application/json' },
           body, signal: controller.signal });
         status = response.status;
-        if (status === 400 && payload.kind === 'movement' && payload.type === 'expense' && payload.categoryId) {
-          const rejection = await response.json();
-          if (rejection?.success === false && rejection.error === 'Category does not belong to account Space') {
-            // A category can move/disappear after lookup. Retry this same import
-            // uncategorized; never apply a foreign category or skip the expense.
-            clearTimeout(timer);
-            return send({ ...payload, categoryId: null }, runtime)
-              .then(result => ({ ...result, categoryRejected: true }));
-          }
-        }
         if (!response.ok) throw Object.assign(new Error('http_failure'), { retryable: retryStatus(status) });
         const result = await response.json();
         if (!result || result.success !== true || (result.duplicate !== undefined && typeof result.duplicate !== 'boolean')) {

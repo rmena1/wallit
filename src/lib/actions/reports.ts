@@ -1,7 +1,7 @@
 'use server'
 
 import { db, movements, categories, accounts } from '@/lib/db'
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { reportableMovementSqlFilters } from '@/lib/domain/reporting'
@@ -148,13 +148,16 @@ export async function getReportData(
       total: sql<number>`SUM(${reportAmount})`,
       count: sql<number>`COUNT(*)`,
     }).from(movements)
-      .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+      .leftJoin(categories, eq(movements.categoryId, categories.id))
       .where(sql`${where} AND ${movements.type} = 'expense'`)
       .groupBy(movements.categoryId, categories.name, categories.emoji)
       .orderBy(sql`SUM(${reportAmount}) DESC`),
 
     db.select({ id: categories.id, name: categories.name, emoji: categories.emoji })
-      .from(categories).where(eq(categories.spaceId, space.id)),
+      .from(categories).where(sql`${categories.spaceId} = ${space.id} OR EXISTS (
+        SELECT 1 FROM ${movements}
+        WHERE ${movements.spaceId} = ${space.id} AND ${movements.categoryId} = ${categories.id}
+      )`),
   ])
 
   const t = totals[0] || { totalIncome: 0, totalExpense: 0, count: 0 }

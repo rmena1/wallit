@@ -21,6 +21,8 @@ interface MovementData {
   amountUsd: number | null
   exchangeRate: number | null
   categoryId: string | null
+  categoryName: string | null
+  categoryEmoji: string | null
   accountId: string | null
   receivable: boolean
   received: boolean
@@ -629,6 +631,9 @@ export function EditClient({ movement, accounts, transferAccounts, transferSpace
                 <div style={{ display: 'flex', gap: 8 }}>
                   <select value={formCategoryId} disabled={isReceivableSettlementIncome} onChange={e => setFormCategoryId(e.target.value)} style={{ ...selectStyle, flex: 1, ...(isReceivableSettlementIncome ? lockedSettlementFieldStyle : {}) }}>
                     <option value="">Sin categoría</option>
+                    {movement.categoryId && !localCategories.some(c => c.id === movement.categoryId) && (
+                      <option value={movement.categoryId}>{movement.categoryEmoji} {movement.categoryName}</option>
+                    )}
                     {localCategories.map(c => (
                       <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
                     ))}

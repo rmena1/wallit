@@ -150,7 +150,7 @@ export async function getMovementById(id: string) {
       accountLastFour: accounts.lastFourDigits,
     })
     .from(movements)
-    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+    .leftJoin(categories, eq(movements.categoryId, categories.id))
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(eq(movements.id, id), eq(movements.spaceId, space.id)))
   return results[0] || null
@@ -187,7 +187,7 @@ export async function getMovements() {
       accountLastFour: accounts.lastFourDigits,
     })
     .from(movements)
-    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+    .leftJoin(categories, eq(movements.categoryId, categories.id))
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(eq(movements.spaceId, space.id))
     .orderBy(desc(movements.date), desc(movements.createdAt))
@@ -304,7 +304,7 @@ export async function getMovementsPaginated(
   const results = await db
     .select(baseSelect)
     .from(movements)
-    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
+    .leftJoin(categories, eq(movements.categoryId, categories.id))
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(whereCondition)
     .orderBy(desc(movements.date), desc(movements.createdAt))
