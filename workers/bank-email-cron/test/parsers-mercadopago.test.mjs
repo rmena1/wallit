@@ -21,7 +21,7 @@ Número de cuenta: 12345678`,
     assert.strictEqual(result.provider, 'mercadopago');
     assert.strictEqual(result.type, 'expense');
     assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '15:24');
+    assert.strictEqual(result.time, '11:24');
     assert.strictEqual(result.amount, 5000000);
     assert.strictEqual(result.beneficiary, 'Juan Pérez');
     assert.strictEqual(result.entity, 'Banco Estado');
@@ -42,7 +42,7 @@ Entidad: Banco Chile`,
     const result = parseMercadoPago(email);
     assert.ok(result);
     assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '15:24');
+    assert.strictEqual(result.time, '11:24');
     assert.strictEqual(result.beneficiary, 'María González');
   });
 
@@ -128,7 +128,7 @@ Entidad: Banco Estado`,
     const result = parseMercadoPago(email);
     assert.ok(result);
     assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '15:24');
+    assert.strictEqual(result.time, '11:24');
     assert.strictEqual(result.name, 'Netflix');
     assert.strictEqual(result.last4, '1234');
   });
@@ -145,7 +145,7 @@ Entidad: Banco Estado`,
     const result = parseMercadoPago(email);
     assert.ok(result);
     assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '10:30');
+    assert.strictEqual(result.time, '06:30');
     assert.strictEqual(result.name, 'Plan Premium - Spotify');
     assert.strictEqual(result.last4, '5678');
   });

@@ -15,7 +15,7 @@ function requireEnv(key) {
 
 function parsePositiveInt(value, label) {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${label} must be a positive integer`);
   }
   return parsed;
@@ -23,7 +23,7 @@ function parsePositiveInt(value, label) {
 
 function parseNonNegativeInt(value, label) {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`${label} must be a non-negative integer`);
   }
   return parsed;
@@ -42,6 +42,7 @@ function parseTransferAccountMap(value) {
 export const config = {
   database: {
     url: requireEnv('DATABASE_URL'),
+    timeoutMs: parsePositiveInt(getEnv('DATABASE_OPERATION_TIMEOUT_MS', '20000'), 'DATABASE_OPERATION_TIMEOUT_MS'),
   },
   
   gmail: {
@@ -54,6 +55,9 @@ export const config = {
     connectMaxRetries: parseNonNegativeInt(getEnv('IMAP_CONNECT_MAX_RETRIES', '3'), 'IMAP_CONNECT_MAX_RETRIES'),
     connectBaseDelayMs: parsePositiveInt(getEnv('IMAP_CONNECT_BASE_DELAY_MS', '500'), 'IMAP_CONNECT_BASE_DELAY_MS'),
     folder: getEnv('GMAIL_IMAP_FOLDER', 'INBOX'),
+    operationTimeoutMs: parsePositiveInt(getEnv('IMAP_OPERATION_TIMEOUT_MS', '30000'), 'IMAP_OPERATION_TIMEOUT_MS'),
+    batchSize: parsePositiveInt(getEnv('IMAP_BATCH_SIZE', '50'), 'IMAP_BATCH_SIZE'),
+    maxMessageBytes: parsePositiveInt(getEnv('IMAP_MAX_MESSAGE_BYTES', '524288'), 'IMAP_MAX_MESSAGE_BYTES'),
     initialUid: parseNonNegativeInt(getEnv('GMAIL_INITIAL_UID', '0'), 'GMAIL_INITIAL_UID'),
     lookbackDays: parsePositiveInt(getEnv('GMAIL_LOOKBACK_DAYS', '30'), 'GMAIL_LOOKBACK_DAYS'),
   },
@@ -63,6 +67,7 @@ export const config = {
     importUrl: getEnv('WALLIT_IMPORT_URL') || `${requireEnv('WALLIT_BASE_URL')}/api/import/email`,
     importToken: requireEnv('WALLIT_IMPORT_TOKEN'),
     userId: requireEnv('WALLIT_USER_ID'),
+    timeoutMs: parsePositiveInt(getEnv('WALLIT_IMPORT_TIMEOUT_MS', '15000'), 'WALLIT_IMPORT_TIMEOUT_MS'),
   },
   
   typesafe: {
@@ -97,6 +102,8 @@ export const config = {
   },
   
   exchangeRate: {
-    usdClpX100: parsePositiveInt(getEnv('USD_CLP_EXCHANGE_RATE_X100', '94650'), 'USD_CLP_EXCHANGE_RATE_X100'),
+    usdClpX100: parsePositiveInt(requireEnv('USD_CLP_EXCHANGE_RATE_X100'), 'USD_CLP_EXCHANGE_RATE_X100'),
   },
 };
+
+if (!Number.isFinite(config.category.minConfidence) || config.category.minConfidence < 0 || config.category.minConfidence > 1) throw new Error('CATEGORY_MIN_CONFIDENCE must be between 0 and 1');

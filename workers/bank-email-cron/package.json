@@ -9,15 +9,16 @@
     "build": "echo 'no build'",
     "start": "node src/index.mjs",
     "test": "node run-tests.mjs",
-    "test:watch": "node --test --watch test/*.test.mjs"
+    "test:watch": "node run-tests.mjs --watch",
+    "test:corpus": "node run-tests.mjs --corpus"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "html-to-text": "10.0.1",
     "imap": "^0.8.19",
     "mailparser": "^3.7.1",
     "postgres": "^3.4.5"
-  },
-  "devDependencies": {}
+  }
 }

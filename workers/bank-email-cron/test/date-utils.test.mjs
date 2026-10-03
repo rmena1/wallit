@@ -7,19 +7,19 @@ describe('parseEmailDate', () => {
     const date = new Date('2026-08-26T15:24:17Z');
     const result = parseEmailDate(date);
     assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '15:24');
+    assert.strictEqual(result.time, '11:24');
   });
 
   test('handles RFC2822 date strings', () => {
     const result = parseEmailDate('Wed, 26 Aug 2026 15:24:17 +0000 (UTC)');
     assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '15:24');
+    assert.strictEqual(result.time, '11:24');
   });
 
   test('handles Date.toString() format', () => {
     const result = parseEmailDate('Wed Aug 26 2026 15:24:17 GMT+0000');
     assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '15:24');
+    assert.strictEqual(result.time, '11:24');
   });
 
   test('handles Spanish prose dates', () => {
@@ -99,7 +99,7 @@ describe('extractEmailDate', () => {
     };
     const result = extractEmailDate(email);
     assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '15:24');
+    assert.strictEqual(result.time, '11:24');
   });
 
   test('extracts date from email object with string date field', () => {
@@ -109,7 +109,7 @@ describe('extractEmailDate', () => {
     };
     const result = extractEmailDate(email);
     assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '15:24');
+    assert.strictEqual(result.time, '11:24');
   });
 
   test('returns empty object when no date available', () => {
@@ -157,7 +157,7 @@ describe('Date handling edge cases', () => {
 
   test('handles midnight time', () => {
     const result = parseEmailDate('2026-08-26T00:00:00Z');
-    assert.strictEqual(result.date, '2026-08-26');
-    assert.strictEqual(result.time, '00:00');
+    assert.strictEqual(result.date, '2026-08-25');
+    assert.strictEqual(result.time, '20:00');
   });
 });

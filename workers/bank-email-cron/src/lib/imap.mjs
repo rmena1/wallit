@@ -1,7 +1,9 @@
 import Imap from 'imap';
 import { simpleParser } from 'mailparser';
+import { convert } from 'html-to-text';
+import { requireBudget, boundedTimeout } from './run-budget.mjs';
 import { config } from '../config/index.mjs';
-import { PROVIDER_FROM_ALLOWLIST } from './account-resolver.mjs';
+import { PROVIDER_FROM_ALLOWLIST, verifyGmailAuthentication } from './sender-auth.mjs';
 
 const TRANSIENT_CONNECT_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN']);
 
@@ -26,7 +28,9 @@ export class ImapClient {
     sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
     random = Math.random,
     logger = console,
+    runtime = {},
   } = {}) {
+    this.runtime = runtime;
     this.createImap = createImap;
     this.sleep = sleep;
     this.random = random;
@@ -37,6 +41,7 @@ export class ImapClient {
   async connect() {
     const { connectMaxRetries: maxRetries, connectBaseDelayMs: baseDelayMs } = config.gmail;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      requireBudget(this.runtime);
       this.logger.log(`[IMAP] Connect attempt ${attempt + 1}/${maxRetries + 1}`);
       const imap = this.createImap({
         user: config.gmail.user,
@@ -44,6 +49,9 @@ export class ImapClient {
         host: config.gmail.host,
         port: config.gmail.port,
         tls: config.gmail.tls,
+        connTimeout: boundedTimeout(config.gmail.operationTimeoutMs, this.runtime),
+        authTimeout: boundedTimeout(config.gmail.operationTimeoutMs, this.runtime),
+        socketTimeout: boundedTimeout(config.gmail.operationTimeoutMs, this.runtime),
         tlsOptions: { rejectUnauthorized: config.gmail.tlsRejectUnauthorized },
       });
       this.imap = imap;
@@ -67,7 +75,8 @@ export class ImapClient {
         return;
       } catch (error) {
         this.imap = null;
-        imap.destroy();
+        this.abortTransport(imap);
+        requireBudget(this.runtime);
         const failure = connectFailure(error);
         // Use fixed diagnostic text: server error messages can contain credentials.
         if (!failure.transient || attempt === maxRetries) {
@@ -77,140 +86,111 @@ export class ImapClient {
         }
         const delayMs = Math.min(30_000, Math.round(baseDelayMs * 2 ** attempt * (1 + this.random())));
         this.logger.warn(`[IMAP] Connect attempt ${attempt + 1} failed: ${failure.message}; retrying in ${delayMs}ms`);
-        await this.sleep(delayMs);
+        await this.sleep(Math.min(delayMs, requireBudget(this.runtime)));
       }
     }
+  }
+
+  abortTransport(imap = this.imap) {
+    // node-imap 0.8.19 destroy() only calls socket.end(). A stalled FETCH or
+    // trickling peer must not leave this process alive after rejecting work.
+    try { imap?.destroy?.(); } finally { imap?._sock?.destroy(); }
   }
 
   disconnect() {
-    this.imap?.end();
+    const imap = this.imap;
+    this.imap = null;
+    if (!imap) return;
+    const timer = setTimeout(() => this.abortTransport(imap), 1000);
+    timer.unref();
+    const closed = () => { clearTimeout(timer); imap.removeListener('end', closed); imap.removeListener('close', closed); };
+    imap.once('end', closed); imap.once('close', closed);
+    try { imap.end(); } catch { this.abortTransport(imap); }
+  }
+
+  operation(label, start) {
+    requireBudget(this.runtime);
+    return new Promise((resolve, reject) => {
+      const imap = this.imap;
+      if (!imap) return reject(new Error(`imap_${label}_disconnected`));
+      const cleanup = () => {
+        clearTimeout(timer);
+        for (const event of ['error', 'close', 'end']) imap.removeListener(event, failed);
+      };
+      const failed = () => { cleanup(); this.abortTransport(imap); reject(new Error(`imap_${label}_failed`)); };
+      const done = (error, value) => { if (error) return failed(); cleanup(); resolve(value); };
+      const timer = setTimeout(failed, boundedTimeout(config.gmail.operationTimeoutMs, this.runtime));
+      for (const event of ['error', 'close', 'end']) imap.once(event, failed);
+      try { start(done); } catch { failed(); }
+    });
   }
 
   async openFolder(folder) {
-    return new Promise((resolve, reject) => {
-      this.imap.openBox(folder, true, (err, box) => {
-        if (err) reject(err);
-        else resolve(box);
-      });
-    });
+    return this.operation('open', done => this.imap.openBox(folder, true, done));
   }
 
-  async searchBySenderSince(senders, sinceDate) {
-    return new Promise((resolve, reject) => {
-      let fromCriteria;
-      if (senders.length === 1) {
-        fromCriteria = ['FROM', senders[0]];
-      } else if (senders.length === 2) {
-        fromCriteria = ['OR', ['FROM', senders[0]], ['FROM', senders[1]]];
-      } else {
-        fromCriteria = ['OR', ['FROM', senders[0]], ['OR', ['FROM', senders[1]], ['FROM', senders[2]]]];
-      }
-      
-      const criteria = [fromCriteria];
-      
-      if (sinceDate) {
-        criteria.push(['SINCE', sinceDate]);
-      }
-
-      this.imap.search(criteria, (err, uids) => {
-        if (err) reject(err);
-        else resolve(uids || []);
-      });
-    });
+  async searchBySenderSince(senders, sinceDate, minUid = 1) {
+    const fromCriteria = senders.reduceRight((tail, sender) => tail
+      ? ['OR', ['FROM', sender], tail] : ['FROM', sender], null);
+    const criteria = [fromCriteria, ['UID', `${minUid}:*`]];
+    if (sinceDate) criteria.push(['SINCE', sinceDate]);
+    return this.operation('search', done => this.imap.search(criteria, (err, uids) => done(err, uids || [])));
   }
 
   async fetchMessagesByUid(uids) {
-    if (uids.length === 0) {
-      return [];
-    }
-
-    return new Promise((resolve, reject) => {
+    if (!uids.length) return [];
+    return this.operation('fetch', done => {
       const messages = [];
-      const fetch = this.imap.fetch(uids, {
-        bodies: '',
-        struct: true,
-      });
-
+      const fetch = this.imap.fetch(uids, { bodies: '', struct: false, markSeen: false });
+      let failed = false;
+      const fail = () => { failed = true; done(new Error('incomplete_fetch')); };
+      fetch.once('error', fail);
       fetch.on('message', (msg, seqno) => {
-        const messageData = { seqno };
-
-        msg.on('body', (stream) => {
-          let buffer = '';
-          stream.on('data', (chunk) => {
-            buffer += chunk.toString('utf8');
+        const data = { seqno };
+        msg.on('body', stream => {
+          const chunks = []; let size = 0;
+          stream.on('data', chunk => {
+            size += chunk.length;
+            if (size > config.gmail.maxMessageBytes) data.decodeError = 'message_too_large';
+            else chunks.push(Buffer.from(chunk));
           });
-          stream.once('end', () => {
-            messageData.raw = buffer;
-          });
+          stream.once('error', fail);
+          stream.once('end', () => { data.raw = data.decodeError ? null : Buffer.concat(chunks); });
         });
-
-        msg.once('attributes', (attrs) => {
-          messageData.uid = attrs.uid;
-          messageData.attrs = attrs;
-        });
-
-        msg.once('end', () => {
-          messages.push(messageData);
-        });
+        msg.once('attributes', attrs => { data.uid = attrs.uid; });
+        msg.once('error', fail);
+        msg.once('end', () => { messages.push(data); });
       });
-
-      fetch.once('error', reject);
-      fetch.once('end', () => resolve(messages));
+      fetch.once('end', () => {
+        if (failed) return;
+        // Missing/partial messages cannot be silently bypassed by later UIDs.
+        if (messages.length !== uids.length || new Set(messages.map(m => m.uid)).size !== uids.length || messages.some(m => !uids.includes(m.uid))) return fail();
+        done(null, messages);
+      });
     });
   }
 
   async fetchMessagesSince(lastUid, initialUid, lookbackDays) {
-    const allowedSenders = Object.keys(PROVIDER_FROM_ALLOWLIST);
-
-    console.log(`[IMAP] Searching for messages from allowed senders: ${allowedSenders.join(', ')} (lastUid: ${lastUid})`);
-
-    let sinceDate = null;
-    if (lastUid === 0 && lookbackDays > 0) {
-      const lookbackMs = lookbackDays * 24 * 60 * 60 * 1000;
-      sinceDate = new Date(Date.now() - lookbackMs);
-      console.log(`[IMAP] First run: applying ${lookbackDays}-day lookback (since ${sinceDate.toISOString()})`);
-    }
-
-    const matchedUids = await this.searchBySenderSince(allowedSenders, sinceDate);
-    console.log(`[IMAP] SEARCH returned ${matchedUids.length} UIDs from allowed senders`);
-
-    const effectiveMinUid = lastUid === 0 ? initialUid : lastUid + 1;
-    const uidsToFetch = matchedUids.filter(uid => uid >= effectiveMinUid);
-    
-    console.log(`[IMAP] Filtered to ${uidsToFetch.length} UIDs >= ${effectiveMinUid}`);
-
-    if (uidsToFetch.length === 0) {
-      return [];
-    }
-
-    console.log(`[IMAP] Fetching ${uidsToFetch.length} messages by UID`);
-    return await this.fetchMessagesByUid(uidsToFetch);
+    const minUid = lastUid === 0 ? Math.max(1, initialUid) : lastUid + 1;
+    const sinceDate = lastUid === 0 && lookbackDays > 0
+      ? new Date(Date.now() - lookbackDays * 86400_000) : null;
+    const matched = await this.searchBySenderSince(Object.keys(PROVIDER_FROM_ALLOWLIST), sinceDate, minUid);
+    const uids = [...new Set(matched)].filter(uid => Number.isSafeInteger(uid) && uid >= minUid)
+      .sort((a, b) => a - b).slice(0, config.gmail.batchSize);
+    this.logger.log(`[IMAP] Fetching bounded batch of ${uids.length} new UIDs`);
+    return this.fetchMessagesByUid(uids);
   }
 
-  async parseMessages(rawMessages) {
+  async parseMessages(rawMessages, uidvalidity) {
     const parsed = [];
-    for (const raw of rawMessages) {
-      try {
-        const mail = await simpleParser(raw.raw);
-        parsed.push({
-          uid: raw.uid,
-          messageId: mail.messageId?.replace(/^<|>$/g, '') || null,
-          from: mail.from?.text || mail.from?.value?.[0]?.address || '',
-          subject: mail.subject || '',
-          date: mail.date || new Date(),
-          textBody: mail.text || '',
-          _raw: raw,
-        });
-      } catch (error) {
-        console.error(`Failed to parse message UID ${raw.uid}:`, error.message);
-      }
-    }
+    for (const raw of rawMessages) { requireBudget(this.runtime); parsed.push(await parseRawMessage(raw, uidvalidity)); }
     return parsed;
   }
+
 }
 
-export async function fetchNewEmails(lastUid) {
-  const client = new ImapClient();
+export async function fetchNewEmails(lastUid, expectedUidvalidity = null, runtime = {}) {
+  const client = new ImapClient({ runtime });
   
   try {
     console.log(`[IMAP] Connecting to ${config.gmail.host}:${config.gmail.port} (TLS: ${config.gmail.tls})`);
@@ -221,6 +201,9 @@ export async function fetchNewEmails(lastUid) {
     const box = await client.openFolder(config.gmail.folder);
     console.log(`[IMAP] Folder opened: ${box.messages.total} total messages, UIDVALIDITY ${box.uidvalidity}`);
     
+    if (expectedUidvalidity !== null && Number(box.uidvalidity) !== expectedUidvalidity) {
+      return { uidvalidity: Number(box.uidvalidity), messages: [] };
+    }
     if (!box || box.messages.total === 0) {
       console.log('[IMAP] No messages in folder');
       return { uidvalidity: box?.uidvalidity || null, messages: [] };
@@ -233,17 +216,35 @@ export async function fetchNewEmails(lastUid) {
     );
     
     console.log(`[IMAP] Parsing ${rawMessages.length} fetched messages`);
-    const messages = await client.parseMessages(rawMessages);
+    const messages = await client.parseMessages(rawMessages, Number(box.uidvalidity));
     const filtered = messages.filter(m => m.uid > lastUid);
     
     console.log(`[IMAP] Returning ${filtered.length} messages after filtering UID > ${lastUid}`);
     
     return {
-      uidvalidity: box.uidvalidity,
+      uidvalidity: Number(box.uidvalidity),
       messages: filtered,
     };
   } finally {
     console.log('[IMAP] Disconnecting');
     client.disconnect();
   }
+}
+
+export async function parseRawMessage(raw, uidvalidity) {
+  const base = { uid: raw.uid, uidvalidity };
+  if (!raw.raw && !raw.decodeError) return { ...base, decodeError: 'mime_parse_failed' };
+  if (raw.decodeError) return { ...base, decodeError: raw.decodeError };
+  try {
+    const mail = await simpleParser(raw.raw, { skipImageLinks: true, skipTextToHtml: true });
+    const senders = mail.from?.value || [];
+    const from = senders.length === 1 ? senders[0].address || '' : '';
+    const messageIds = (mail.headerLines || []).filter(h => h.key === 'message-id');
+    const dates = (mail.headerLines || []).filter(h => h.key === 'date');
+    const sourceDate = dates.length === 1 ? dates[0].line.replace(/^Date:\s*/i, '').replace(/\r?\n[ \t]+/g, ' ') : null;
+    if (messageIds.length > 1) return { ...base, decodeError: 'mime_parse_failed' };
+    return { ...base, messageId: mail.messageId?.replace(/^<|>$/g, '') || null,
+      from, subject: mail.subject || '', date: sourceDate,
+      textBody: mail.text?.trim() ? mail.text : typeof mail.html === 'string' ? convert(mail.html, { wordwrap: false, selectors: [{ selector: 'a', options: { ignoreHref: true } }, { selector: 'img', format: 'skip' }] }) : '', authentication: verifyGmailAuthentication(mail.headerLines, from) };
+  } catch { return { ...base, decodeError: 'mime_parse_failed' }; }
 }

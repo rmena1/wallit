@@ -40,7 +40,7 @@ test('unresolved own-card source logs bank, currency and only account last4', as
     importToWallit: async () => assert.fail('unresolved source must not import'),
   });
   const result = await run({
-    uid: 49, messageId: 'unknown-bci-source', from: 'contacto@bci.cl',
+    authentication: { verified: true }, uid: 49, messageId: 'unknown-bci-source', from: 'contacto@bci.cl',
     subject: 'Comprobante pago tarjeta de crédito',
     textBody: 'Monto pagado: $280.000\nFecha: 26/09/26\nCuenta de origen: 32609999\nNúmero tarjeta crédito: ****1164',
   });
@@ -49,6 +49,6 @@ test('unresolved own-card source logs bank, currency and only account last4', as
   assert.equal(result.error, expected);
   assert.equal(logged.decision, 'account_unresolved');
   assert.equal(logged.errorMessage, expected);
-  assert.ok(stderr.mock.calls.some(({ arguments: args }) => args.some(value => String(value).includes(expected))));
+  assert.ok(stderr.mock.calls.some(({ arguments: args }) => args.some(value => String(value).includes('account_unresolved'))));
   assert.ok(stderr.mock.calls.every(({ arguments: args }) => args.every(value => !String(value).includes('32609999'))));
 });

@@ -1,3 +1,4 @@
+import { getProviderFromEmail } from '../lib/sender-auth.mjs';
 /** Parse Mercado Pago outgoing transfer and subscription/prose payment notices. */
 
 import { parseEmailDate } from '../lib/date-utils.mjs';
@@ -19,7 +20,7 @@ function bodyText(email) {
     .replace(/transacci(?:�|Ã³)n/gi, 'transacción')
     .replace(/suscripci(?:�|Ã³)n/gi, 'suscripción')
     .replace(/Operaci(?:�|Ã³)n/gi, 'Operación');
-  return text.split('\n').map((line) => line.trimEnd()).join('\n');
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 function clpAmount(value) {
@@ -61,10 +62,23 @@ function parseOutgoingTransfer(text, email) {
     beneficiary,
     entity,
     beneficiaryAccount: accountMatch?.[1],
+    funding: 'wallet',
     date: dateTime.date,
     time: dateTime.time,
     last4: undefined,
   };
+}
+
+function parseApprovedFundedPurchase(text, email) {
+  if (!/Tu pago fue aprobado/i.test(text)) return null;
+  const amount = text.match(/Pagaste\s*\$\s*([0-9.]+(?:,[0-9]{1,2})?)(?=\s|$)/i);
+  const merchant = text.match(/Le compraste a\s+(.+?)(?=Le compraste a|\s+Tu pago fue aprobado)/i);
+  const card = text.match(/\b(BCI)\s+(Cr[eé]dito|D[eé]bito)\s+[*xX•]{4}\s*(\d{4})(?!\d)/i);
+  if (!amount || !merchant || !card) return null;
+  const dt = parseEmailDate(email?.date);
+  return { provider: 'mercadopago', type: 'expense', currency: 'CLP', amount: moneyToCentavos(amount[1]),
+    name: merchant[1].trim(), originalName: merchant[1].trim(), date: dt.date, time: dt.time,
+    funding: 'card', fundingBank: card[1].toLowerCase(), cardHint: card[2].toLowerCase(), last4: card[3] };
 }
 
 function parseSubscriptionProse(text, email) {
@@ -82,6 +96,7 @@ function parseSubscriptionProse(text, email) {
       date: dateTime.date,
       time: dateTime.time,
       last4: pagaste[3],
+      funding: 'card',
       cardHint: pagaste[2] ? pagaste[2].toLowerCase() : undefined,
     };
   }
@@ -101,6 +116,7 @@ function parseSubscriptionProse(text, email) {
       date: dateTime.date,
       time: dateTime.time,
       last4: sub[5] || undefined,
+      funding: sub[5] ? 'card' : 'unknown',
       cardHint: sub[4] ? sub[4].toLowerCase() : undefined,
     };
   }
@@ -110,12 +126,10 @@ function parseSubscriptionProse(text, email) {
 
 /** @returns {object|null} normalized parser result, or null when unrecognized */
 export function parseMercadoPago(email) {
-  const provider = String(email?._source_email_provider ?? '').toLowerCase();
-  const sender = String(email?.from ?? '').toLowerCase();
-  if (provider !== 'mercadopago' && !sender.includes('mercadopago')) return null;
+  if (getProviderFromEmail(email?.from) !== 'mercadopago') return null;
 
   const text = bodyText(email);
-  return parseOutgoingTransfer(text, email) ?? parseSubscriptionProse(text, email);
+  return parseOutgoingTransfer(text, email) ?? parseApprovedFundedPurchase(text, email) ?? parseSubscriptionProse(text, email);
 }
 
 export default parseMercadoPago;
