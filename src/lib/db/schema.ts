@@ -154,6 +154,8 @@ export const movements = pgTable('movements', {
   index('idx_movements_account').on(table.accountId),
   index('idx_movements_review').on(table.spaceId, table.needsReview),
   index('idx_movements_reportable').on(table.spaceId, table.reportable),
+  index('idx_movements_category_history').on(table.createdByUserId, table.originalName)
+    .where(sql`${table.categoryId} IS NOT NULL`),
   uniqueIndex('idx_movements_source_email')
     .on(table.createdByUserId, table.sourceEmailProvider, table.sourceEmailId)
     .where(sql`${table.sourceEmailId} IS NOT NULL`),

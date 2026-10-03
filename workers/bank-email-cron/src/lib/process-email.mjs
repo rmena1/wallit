@@ -25,7 +25,7 @@ function safeError(error) {
     ? message : 'processing_failed';
 }
 
-export function createEmailProcessor({ isTransaction, chooseCategory, importToWallit, logProcessing, logger = console, assertRunActive = async () => {} }) {
+export function createEmailProcessor({ isTransaction, chooseCategory, importToWallit, logProcessing, logger = console, assertRunActive = async () => {}, findHistoricalCategory = async () => null }) {
   return async function processEmail(email, runtime = {}) {
     const provider = getProviderFromEmail(email.from);
     const entry = { uid: email.uid, messageId: hash(email.messageId || `uid:${email.uidvalidity}:${email.uid}`),
@@ -51,7 +51,16 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
       const identity = sourceIdentity(email);
       entry.messageId = hash(identity);
       entry.parserSucceeded = true;
-      const txDecision = parsed.ownBankTransfer ? true : await isTransaction(email, runtime);
+      let historyAccountId = null;
+      if (parsed.type === 'expense' && !parsed.ownBankTransfer && !isInternalTransferCandidate(parsed)) {
+        // Preserve the existing classifier/error flow if account resolution fails.
+        try { historyAccountId = resolveAccount(parsed); } catch { /* reported below */ }
+      }
+      const historicalCategory = historyAccountId
+        ? await findHistoricalCategory({ originalName: parsed.originalName, provider: parsed.provider,
+          sourceEmailId: identity, accountId: historyAccountId })
+        : null;
+      const txDecision = parsed.ownBankTransfer || historicalCategory ? true : await isTransaction(email, runtime);
       if (typeof txDecision !== 'boolean') throw new Error('classifier_invalid_decision');
       if (!txDecision) return await skip('not_transaction');
       try { parsed.accountId = parsed.ownBankTransfer ? null : resolveAccount(parsed); }
@@ -61,14 +70,18 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
         return { success: false, advance: false, error: entry.errorMessage };
       }
       entry.accountId = parsed.accountId;
-      const category = parsed.ownBankTransfer || isInternalTransferCandidate(parsed) ? null : await chooseCategory(email, parsed.originalName, parsed.accountId, runtime);
-      const categoryId = category && isCategoryInAccountSpace(category, parsed.accountId) ? category : null;
+      const category = parsed.ownBankTransfer || isInternalTransferCandidate(parsed) ? null
+        : historicalCategory ?? await chooseCategory(email, parsed.originalName, parsed.accountId, runtime);
+      // History can contain categories created after the static classifier mappings.
+      // The history query validates both movement and category against the live destination Space.
+      const categoryId = historicalCategory ?? (category && isCategoryInAccountSpace(category, parsed.accountId) ? category : null);
       entry.categoryId = categoryId;
       requireBudget(runtime);
       await assertRunActive();
       requireBudget(runtime);
       const result = await importToWallit(buildImportPayload(parsed, categoryId, identity), { ...runtime, assertRunActive });
       if (result?.success !== true) throw new Error('import_not_confirmed');
+      if (result.categoryRejected) entry.categoryId = null;
       entry.importSuccess = true; entry.importDuplicate = result.duplicate === true;
       entry.decision = entry.importDuplicate ? 'duplicate_success' : result.pendingAccounts ? 'transfer_pending_accounts' : 'imported';
       await logProcessing(entry);
