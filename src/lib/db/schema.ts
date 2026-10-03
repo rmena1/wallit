@@ -315,3 +315,38 @@ export type NewExchangeRate = typeof exchangeRates.$inferInsert
 
 export type EmergencyPayment = typeof emergencyPayments.$inferSelect
 export type NewEmergencyPayment = typeof emergencyPayments.$inferInsert
+
+// Bank transfer evidence is retained even when an endpoint has no Wallit account.
+// Pending imports create no income/expense and do not invent an account or Space.
+export const ownBankTransferImports = pgTable('own_bank_transfer_imports', {
+  id: text('id').primaryKey(),
+  createdByUserId: text('created_by_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  operationKey: text('operation_key').notNull(),
+  date: text('date').notNull(),
+  time: text('time'),
+  amount: bigint('amount', { mode: 'number' }).notNull(),
+  currency: text('currency').notNull().default('CLP'),
+  fromBank: text('from_bank').notNull(),
+  fromNumber: text('from_number'),
+  fromProduct: text('from_product'),
+  fromAccountId: text('from_account_id').references(() => accounts.id, { onDelete: 'set null' }),
+  toBank: text('to_bank').notNull(),
+  toNumber: text('to_number'),
+  toProduct: text('to_product'),
+  toAccountId: text('to_account_id').references(() => accounts.id, { onDelete: 'set null' }),
+  transferId: text('transfer_id').references(() => transfers.id, { onDelete: 'set null' }),
+  status: text('status').notNull(),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+}, table => [uniqueIndex('idx_own_bank_transfer_operation').on(table.createdByUserId, table.operationKey),
+  check('own_bank_transfer_amount_positive', sql`${table.amount} > 0`),
+  check('own_bank_transfer_currency', sql`${table.currency} = 'CLP'`),
+  check('own_bank_transfer_status', sql`${table.status} IN ('linked', 'pending_accounts')`)])
+
+export const ownBankTransferReceipts = pgTable('own_bank_transfer_receipts', {
+  id: text('id').primaryKey(),
+  importId: text('import_id').notNull().references(() => ownBankTransferImports.id, { onDelete: 'cascade' }),
+  createdByUserId: text('created_by_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(),
+  emailId: text('email_id').notNull(),
+  reference: text('reference'),
+}, table => [uniqueIndex('idx_own_bank_transfer_receipt').on(table.createdByUserId, table.provider, table.emailId)])

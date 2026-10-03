@@ -49,7 +49,7 @@ export function resolveAccount(parsedResult) {
     // A sender-provider match must not debit the wallet for a known BCI card.
     if (parsedResult.funding === 'card') {
       if (last4 === '1164' && currency === 'CLP' && /^cr[eé]dito$/i.test(cardHint || '') && bankKey(parsedResult.fundingBank) === 'bci') return config.accounts.bciClp;
-      if (last4 === '6969' && currency === 'CLP' && bankKey(parsedResult.fundingBank) === 'mercadopago') return config.accounts.mercadopago;
+      if (last4 === '6991' && currency === 'CLP' && bankKey(parsedResult.fundingBank) === 'mercadopago') return config.accounts.mercadopago;
       throw new Error('Mercado Pago: unresolved funding card');
     }
     if (parsedResult.funding === 'unknown') throw new Error('Mercado Pago: unresolved funding source');
@@ -62,7 +62,7 @@ export function resolveAccount(parsedResult) {
 function bankKey(value) {
   const text = String(value || '').toLowerCase().trim();
   if (/^(?:banco\s+)?bci(?:\s*\/\s*mach)?$/.test(text)) return 'bci';
-  if (/^tenpo(?: banco)?$/.test(text)) return 'tenpo';
+  if (/^tenpo(?: banco| prepago(?: s\.a\.)?)?$/.test(text)) return 'tenpo';
   if (/^mercado\s*pago$/.test(text)) return 'mercadopago';
   return text;
 }
@@ -94,7 +94,7 @@ export function resolveTransferAccount(bank, currency, account, marker) {
     'tenpo:CLP:7648': config.accounts.tenpoCredit,
     'tenpo:CLP:credit': config.accounts.tenpoCredit,
     'tenpo:CLP:0146': config.accounts.tenpoVista,
-    'mercadopago:CLP:6969': config.accounts.mercadopago,
+    'mercadopago:CLP:6991': config.accounts.mercadopago,
     ...config.transferAccountMap,
   };
   return map[`${key}:${currency}:${signal}`] || null;

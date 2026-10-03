@@ -1,5 +1,7 @@
 export const PROVIDER_FROM_ALLOWLIST = Object.freeze({
   'contacto@bci.cl': 'bci',
+  'transferencias@bci.cl': 'bci',
+  'no-reply@mail.machbank.cl': 'mach',
   'no-reply@tenpo.cl': 'tenpo',
   'info@mercadopago.com': 'mercadopago',
 });
@@ -29,5 +31,11 @@ export function verifyGmailAuthentication(headerLines, from) {
   const results = value.split(';').slice(1);
   const aligned = results.some(result => /\bdmarc=pass\b/i.test(result)
     && result.match(/\bheader\.from=([^\s;()]+)/i)?.[1]?.toLowerCase() === domain);
-  return { verified: aligned, reason: aligned ? 'gmail_dmarc_pass' : 'authentication_failed' };
+  // MACH's real forwarded receipt has no DMARC verdict. Gmail does verify an
+  // exact-domain DKIM signature. Do not use this fallback after a DMARC failure.
+  const machDkim = domain === 'mail.machbank.cl' && !results.some(result => /\bdmarc=/i.test(result))
+    && results.some(result => /\bdkim=pass\b/i.test(result)
+      && result.match(/\bheader\.i=@([^\s;()]+)/i)?.[1]?.toLowerCase() === domain);
+  return { verified: aligned || machDkim,
+    reason: aligned ? 'gmail_dmarc_pass' : machDkim ? 'gmail_aligned_dkim_pass' : 'authentication_failed' };
 }

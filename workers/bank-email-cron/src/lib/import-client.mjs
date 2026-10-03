@@ -44,6 +44,13 @@ export function createImportClient({ fetchImpl = (...args) => fetch(...args),
 export const importToWallit = createImportClient();
 
 export function buildImportPayload(parsedResult, categoryId, sourceEmailId) {
+  if (parsedResult.ownBankTransfer) return {
+    kind: 'own-bank-transfer', userId: config.wallit.userId,
+    sourceEmailProvider: parsedResult.provider, sourceEmailId,
+    currency: parsedResult.currency, amount: parsedResult.amount, date: parsedResult.date,
+    time: parsedResult.time || null, originalName: parsedResult.originalName,
+    ...parsedResult.ownBankTransfer,
+  };
   const payload = {
     kind: 'movement',
     userId: config.wallit.userId,

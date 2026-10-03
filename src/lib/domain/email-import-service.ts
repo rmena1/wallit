@@ -1,5 +1,6 @@
-import { and, eq, isNotNull, sql } from 'drizzle-orm'
-import { accounts, categories, db, movements, spaces, spaceMemberships, transfers } from '@/lib/db'
+import { normalizeBankEndpoint, bankOperationKey, type BankEndpoint } from './own-bank-transfer'
+import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
+import { accounts, categories, db, movements, spaces, spaceMemberships, transfers, ownBankTransferImports, ownBankTransferReceipts } from '@/lib/db'
 import { expectedClpCents } from '@/lib/domain/money'
 import { generateId } from '@/lib/utils'
 
@@ -46,20 +47,34 @@ export type EmailTransferImport = SourceIdentity & MoneyFacts & {
   destinationName?: string
 }
 
-export type EmailImportInput = EmailMovementImport | EmailTransferImport
+export type OwnBankTransferImport = SourceIdentity & {
+  kind: 'own-bank-transfer'
+  currency: 'CLP'
+  amount: number
+  date: string
+  time?: string | null
+  originalName?: string | null
+  from: BankEndpoint
+  to: BankEndpoint
+  operationTime: string | null
+  reference: string | null
+}
+export type EmailImportInput = EmailMovementImport | EmailTransferImport | OwnBankTransferImport
 
 type ImportResult = {
   success: boolean
   error?: string
   duplicate?: boolean
   movementId?: string
+  pendingAccounts?: boolean
+  bankTransferImportId?: string
   transferId?: string
   sourceMovementId?: string
   destinationMovementId?: string
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
-const PROVIDERS = new Set(['bci', 'tenpo', 'mercadopago'])
+const PROVIDERS = new Set(['bci', 'tenpo', 'mercadopago', 'mach'])
 const PG_INTEGER_MAX = 2_147_483_647
 
 function fail(error: string): ImportResult {
@@ -102,12 +117,13 @@ function normalizeMoney(input: MoneyFacts) {
   return { currency, amount: positiveSafeInteger(input.amount, 'amount'), amountUsd: null, exchangeRate: null }
 }
 
-async function getImportAccount(userId: string, accountId: string) {
-  const [account] = await db.select({
+async function getImportAccount(userId: string, accountId: string, executor: Pick<typeof db, 'select'> = db) {
+  const [account] = await executor.select({
     id: accounts.id,
     spaceId: accounts.spaceId,
     currency: accounts.currency,
     bankName: accounts.bankName,
+    lastFourDigits: accounts.lastFourDigits,
   }).from(accounts)
     .innerJoin(spaces, and(eq(spaces.id, accounts.spaceId), sql`${spaces.archivedAt} IS NULL`))
     .innerJoin(spaceMemberships, and(eq(spaceMemberships.spaceId, accounts.spaceId), eq(spaceMemberships.userId, userId)))
@@ -177,12 +193,12 @@ async function importMovement(input: EmailMovementImport): Promise<ImportResult>
   })
 }
 
-async function importTransfer(input: EmailTransferImport): Promise<ImportResult> {
+async function importTransfer(input: EmailTransferImport, executor: Pick<typeof db, 'transaction' | 'select'> = db): Promise<ImportResult> {
   const identity = normalizeIdentity(input)
   const date = normalizeDate(input.date)
   const [fromAccount, toAccount] = await Promise.all([
-    getImportAccount(identity.userId, String(input.fromAccountId ?? '')),
-    getImportAccount(identity.userId, String(input.toAccountId ?? '')),
+    getImportAccount(identity.userId, String(input.fromAccountId ?? ''), executor),
+    getImportAccount(identity.userId, String(input.toAccountId ?? ''), executor),
   ])
   if (!fromAccount || !toAccount) return fail('Transfer account is not accessible by user')
   if (fromAccount.id === toAccount.id) return fail('Transfer accounts must be different')
@@ -205,7 +221,7 @@ async function importTransfer(input: EmailTransferImport): Promise<ImportResult>
   const sourceName = String(input.sourceName ?? `Transferencia a ${toAccount.bankName}`).trim()
   const destinationName = String(input.destinationName ?? `Transferencia desde ${fromAccount.bankName}`).trim()
 
-  return db.transaction(async (tx) => {
+  return executor.transaction(async (tx) => {
     const sourceMovementId = generateId()
     const [insertedSource] = await tx.insert(movements).values({
       id: sourceMovementId,
@@ -277,8 +293,97 @@ async function importTransfer(input: EmailTransferImport): Promise<ImportResult>
   })
 }
 
+async function importOwnBankTransfer(input: OwnBankTransferImport): Promise<ImportResult> {
+  const identity = normalizeIdentity(input)
+  const date = normalizeDate(input.date)
+  if (input.currency !== 'CLP') return fail('Unsupported bank transfer currency')
+  const money = normalizeMoney(input)
+  const from = normalizeBankEndpoint(input.from)
+  const to = normalizeBankEndpoint(input.to)
+  if (from.bank === to.bank && from.number && from.number === to.number) return fail('Transfer accounts must be different')
+  if (input.reference !== null && (typeof input.reference !== 'string' || !/^\d{1,64}$/.test(input.reference))) return fail('Invalid transfer reference')
+  for (const endpoint of [from, to]) {
+    if (!endpoint.accountId) continue
+    const account = await getImportAccount(identity.userId, endpoint.accountId)
+    if (!account) return fail('Transfer account is not accessible by user')
+    const bank = normalizeBankEndpoint({ ...endpoint, bank: account.bankName }).bank
+    if (bank !== endpoint.bank || account.currency !== 'CLP' || account.lastFourDigits !== endpoint.number?.slice(-4)) {
+      return fail('Mapped bank account does not match email evidence')
+    }
+  }
+  const operationKey = bankOperationKey({ ...input, from, to, date, amount: money.amount,
+    sourceEmailProvider: identity.provider, sourceEmailId: identity.emailId })
+  return db.transaction(async tx => {
+    // Serialize imports for one user, including retries with different email IDs.
+    // The ledger pair and evidence are committed together or rolled back together.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${identity.userId}, 19019))`)
+    const [receipt] = await tx.select({ record: ownBankTransferImports }).from(ownBankTransferReceipts)
+      .innerJoin(ownBankTransferImports, eq(ownBankTransferImports.id, ownBankTransferReceipts.importId))
+      .where(and(eq(ownBankTransferReceipts.createdByUserId, identity.userId),
+        eq(ownBankTransferReceipts.provider, identity.provider), eq(ownBankTransferReceipts.emailId, identity.emailId))).limit(1)
+    const [operation] = await tx.select().from(ownBankTransferImports).where(and(
+      eq(ownBankTransferImports.createdByUserId, identity.userId), eq(ownBankTransferImports.operationKey, operationKey))).limit(1)
+    let record = receipt?.record ?? operation
+    const duplicate = Boolean(record)
+    if (receipt && receipt.record.operationKey !== operationKey) throw new Error('Conflicting bank transfer retry')
+    if (record && !receipt) {
+      const [sameProvider] = await tx.select().from(ownBankTransferReceipts).where(and(
+        eq(ownBankTransferReceipts.importId, record.id), eq(ownBankTransferReceipts.provider, identity.provider))).limit(1)
+      if (sameProvider && sameProvider.reference !== input.reference) throw new Error('Ambiguous bank transfer match')
+    }
+    // An operation match is not enough: this particular bank notice may already
+    // have an ordinary movement from the old importer. Never acknowledge it as
+    // a duplicate while leaving that separate debit/credit in the ledger.
+    const [previousMovement] = await tx.select({ id: movements.id, transferId: transfers.id }).from(movements)
+      .leftJoin(transfers, or(eq(transfers.sourceMovementId, movements.id), eq(transfers.destinationMovementId, movements.id)))
+      .where(and(eq(movements.createdByUserId, identity.userId), eq(movements.sourceEmailProvider, identity.provider),
+        eq(movements.sourceEmailId, identity.emailId))).limit(1)
+    if (previousMovement && (!previousMovement.transferId
+      || (record && previousMovement.transferId !== record.transferId)
+      || !from.accountId || !to.accountId)) {
+      throw new Error('Email was already imported as a separate movement; reconciliation required')
+    }
+    if (!record) {
+      // Also stop before creating either side when a prior bank movement could
+      // be the counterpart. Minute precision is only a conflict warning here,
+      // never evidence to merge or reclassify an existing movement automatically.
+      const time = input.operationTime?.slice(0, 5) || input.time
+      if (time && from.accountId && to.accountId) {
+        const [legacyCounterpart] = await tx.select({ id: movements.id }).from(movements)
+          .leftJoin(transfers, or(eq(transfers.sourceMovementId, movements.id), eq(transfers.destinationMovementId, movements.id)))
+          .where(and(eq(movements.createdByUserId, identity.userId), eq(movements.date, date),
+            eq(movements.amount, money.amount), eq(movements.currency, 'CLP'), eq(movements.time, time),
+            isNotNull(movements.sourceEmailId), isNull(transfers.id),
+            or(and(eq(movements.accountId, from.accountId), eq(movements.type, 'expense'), eq(movements.sourceEmailProvider, from.bank)),
+              and(eq(movements.accountId, to.accountId), eq(movements.type, 'income'), eq(movements.sourceEmailProvider, to.bank))),
+          )).limit(1)
+        if (legacyCounterpart) throw new Error('Possible previously imported bank counterpart; reconciliation required')
+      }
+      let transferId: string | null = null
+      if (from.accountId && to.accountId) {
+        const linked = await importTransfer({ ...input, kind: 'transfer', fromAccountId: from.accountId,
+          toAccountId: to.accountId }, tx)
+        if (!linked.success || !linked.transferId) throw new Error(linked.error || 'Bank transfer import failed')
+        transferId = linked.transferId
+      }
+      const [insertedRecord] = await tx.insert(ownBankTransferImports).values({
+        id: generateId(), createdByUserId: identity.userId, operationKey, date, time: input.operationTime || input.time || null,
+        amount: money.amount, currency: 'CLP', fromBank: from.bank, fromNumber: from.number, fromProduct: from.product,
+        fromAccountId: from.accountId, toBank: to.bank, toNumber: to.number, toProduct: to.product,
+        toAccountId: to.accountId, transferId, status: transferId ? 'linked' : 'pending_accounts',
+      }).returning()
+      record = insertedRecord
+    }
+    if (!receipt) await tx.insert(ownBankTransferReceipts).values({ id: generateId(), importId: record.id,
+      createdByUserId: identity.userId, provider: identity.provider, emailId: identity.emailId, reference: input.reference })
+    return { success: true, duplicate, bankTransferImportId: record.id,
+      pendingAccounts: record.status === 'pending_accounts', ...(record.transferId ? { transferId: record.transferId } : {}) }
+  })
+}
+
 export async function importEmailTransaction(input: EmailImportInput): Promise<ImportResult> {
   try {
+    if (input?.kind === 'own-bank-transfer') return await importOwnBankTransfer(input)
     if (input?.kind === 'movement') return await importMovement(input)
     if (input?.kind === 'transfer') return await importTransfer(input)
     return fail('Unsupported import kind')
