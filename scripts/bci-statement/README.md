@@ -1,6 +1,36 @@
 # BCI Personas y Líder: lector determinista
 
-**Personas verificado mediante una corrida real para el 18/08–02/10/2026:** corriente ****8080, 25 movimientos y disponible 2484842; TC ****1164 CLP, 83 movimientos y disponible -248236; TC USD, 31 movimientos y disponible -193.46. El banco se navega exclusivamente mediante Node/Playwright, sin modelos. **Líder no se volvió a abrir; el alcance de cinco cuentas sigue sin validación completa por el Turnstile ya observado.**
+**Personas verificado mediante una corrida real para el 18/08–02/10/2026:** corriente ****8080, 25 movimientos y disponible 2484842; TC ****1164 CLP, 83 movimientos y disponible -248236; TC USD, 31 movimientos y disponible -193.46. El banco se navega exclusivamente mediante Node/Playwright, sin modelos. **Líder verificado por separado el 04/10/2026, en la sesión visible entregada por CDP y con un solo envío de credenciales después del control humano: 37 movimientos CLP y 3 USD en el mismo período.** El modo conjunto de cinco cuentas conserva su implementación anterior.
+
+## Corrida exclusiva de Líder con control humano
+
+```sh
+node scripts/bci-statement/live.mjs --from 2026-08-18 --to 2026-10-02 --bank lider
+```
+
+Este camino adicional requiere solamente `BCI_LIDER_RUT`, `BCI_LIDER_CLAVE` y `DISPLAY`. Abre Chromium visible con contexto propio; no inicia sesión en Personas ni escribe en Wallit. También está disponible `lider-live.mjs` con las mismas fechas.
+
+Ante un control humano, imprime por stderr una línea `LIDER_CONTROL_URL <URL exacta>` y espera sin límite, sin recargar ni cerrar la página. Detecta widgets visibles, texto de robot y respuestas pendientes en campos ocultos. La persona completa el control en esa ventana. El script comprueba su desaparición/completitud antes del único envío de credenciales. La espera humana no consume los plazos activos de navegación, respuesta o descarga; los dos caminos de Líder comparten una guardia de envío persistente en la sesión del navegador. No se guardan credenciales, cookies ni trazas. El navegador visible se conserva también al emitir el resultado; en el camino que lo abre, el proceso permanece asociado al navegador hasta que la persona lo cierre. Los errores conservan la ventana para inspección y no vuelven a enviar el login.
+
+**Corrida real del 04/10 completada:** disponible actual CLP **998667**, USD **522.40**; 37 filas CLP y 3 USD del 18/08 al 02/10. El disponible CLP esperado de 1003523 ya no es el actual: el banco muestra una compra de 4856 del 03/10, excluida del período. No se sustituye el disponible bancario por el esperado. `acceptance.matches_original_available: false` deja explícita esa diferencia, aunque la extracción y cobertura sí estén completas. El objetivo original no está cumplido. Las nuevas salidas incluyen `ready: false` cuando no coinciden los disponibles exigidos; no se modifica la evidencia histórica para agregar este campo.
+
+Para continuar un Chrome existente sin abrir otra ventana, recargar ni reiniciar el login:
+
+```sh
+node scripts/bci-statement/lider-existing.mjs \
+  --cdp http://127.0.0.1:9231 --from 2026-08-18 --to 2026-10-02 \
+  --output-dir /workspace/bci-movimientos/lider-live-2026-10-04
+```
+
+Si esa página está autenticada, sólo extrae. Si sigue en `/login`, espera el control humano, llena los campos con el entorno y efectúa el único envío. Conserva el navegador entregado al terminar. Un error no reintenta el ingreso ni cierra la ventana.
+
+La extracción nueva espera la respuesta real de saldos y contrasta ambos disponibles con la tabla renderizada; no acepta los ceros temporales de carga. Comprueba el número total de movimientos por facturar contra la respuesta bancaria. Descarga los PDF mediante el selector público y espera que todas las páginas renderizadas correspondan al mes seleccionado. No duplica las filas facturadas del portal con las de las cartolas: usa la fecha de operación y descripción exactas del PDF, incluidos `(T)` y `(A)`, y las filas vigentes por facturar.
+
+Las cartolas de agosto y septiembre cubren 27/07–26/08 y 27/08–26/09. Se validan todas sus páginas y la cuadratura `saldo anterior + movimientos = total facturado`, con decimales exactos. La vista vigente por facturar completa la cobertura al 04/10. Los PDF son documentos combinados de la misma tarjeta del portal ****9015; su sección internacional imprime un identificador terminado en ****1468, conservado como `document_last_four` sin alterar el documento. La vista USD por facturar confirma cero filas; las cartolas históricas aportan tres filas USD dentro del período.
+
+El resultado real y sus dos PDF están fuera del repositorio en `/workspace/bci-movimientos/lider-live-2026-10-04/`. `resultado.json` incluye disponibles actuales, movimientos filtrados, fuentes con SHA-256, cuadraturas, límites de cobertura y las filas vigentes posteriores al período en un campo separado. Las pruebas `test_lider_pdf.py` usan estos documentos reales (ubicación configurable con `BCI_LIDER_CAPTURE_DIR`) y rechazan páginas o cargos faltantes.
+
+La comprobación posterior de la entrada CDP detectó `SESSION_EXPIRED` después de la extracción válida. Se conservó el resultado ya cuadrado, no se reintentó el login y Chrome quedó abierto. Pasaron las 37 pruebas JavaScript y las cuatro pruebas Python específicas de Líder.
 
 ## Ejecución de Personas
 
@@ -25,7 +55,7 @@ Stdout contiene un JSON únicamente tras completar todas las cuentas del alcance
 - Movimientos: Nacional/Internacional y Facturados/No facturados mantienen sus descargas Excel. El historial agrega Estado de cuenta y los períodos anteriores necesarios. La variante con opciones ISO devuelve el último Excel aunque se elija agosto; se usa su control «Revisar documento», cuyo PDF sí corresponde al ciclo seleccionado. Se valida la fecha de cierre de cada documento. No se modifica la petición del portal ni se acepta septiembre como evidencia de agosto.
 - Los PDF se leen con `pdftotext`, sin OCR ni modelos. Se comprueban tarjeta, moneda, período, numeración de todas las páginas y suma de movimientos contra los totales bancarios. Se conservan descripción y fecha de operación, incluso espacios interiores. En CLP se toma el cargo mensual de la fila y se conservan también monto de operación, total e información de cuota.
 
-Turnstile, reCAPTCHA, hCaptcha o «no soy un robot» terminan la sesión con error, sin resolverlos ni reintentar el login. Las pruebas de estos controles usan red completamente interceptada; no ingresan a Líder.
+En los caminos anteriores de Personas/modo conjunto, Turnstile, reCAPTCHA, hCaptcha o «no soy un robot» terminan la sesión con error, sin resolverlos ni reintentar el login. El camino exclusivo nuevo de Líder espera la intervención humana en la misma página. Las pruebas de estos controles usan red completamente interceptada; no ingresan a Líder.
 
 ## Evidencia del período
 
@@ -107,3 +137,5 @@ El abono de $280.000 se devuelve exactamente como `PAGOS NACIONAL WEB (Abono)` e
 
 
 No se modificaron los cron de correo ni de tipo de cambio.
+
+La [revisión independiente y sus correcciones](REVIEW.md) documenta los cinco hallazgos confirmados, el matiz de los campos auxiliares de CAPTCHA y la verificación de integridad de la evidencia.
