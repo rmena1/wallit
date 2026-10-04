@@ -11,12 +11,15 @@ const ROOTS = { personas: 'https://www.bci.cl/personas', lider: 'https://www.lid
 const WAIT = 20000;
 const PAGE_WAIT = 60000; // Observed card iframe can keep loading beyond 20 seconds.
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Opt-in for the separate visible Líder session; Personas keeps its original policy.
+const humanControls = new WeakMap();
+export function setHumanControlHandler(context, handler) { humanControls.set(context, handler); }
 export class BankError extends Error {
   constructor(code, stage, message) { super(message); this.code = code; this.stage = stage; }
 }
 function fail(code, stage, message) { throw new BankError(code, stage, message); }
 export function credentials(env, bank = 'all') {
-  const keys = bank === 'personas' ? CREDENTIAL_KEYS.filter(k => k.startsWith('BCI_PERSONAS_')) : CREDENTIAL_KEYS;
+  const keys = bank === 'personas' ? CREDENTIAL_KEYS.filter(k => k.startsWith('BCI_PERSONAS_')) : bank === 'lider' ? CREDENTIAL_KEYS.filter(k => k.startsWith('BCI_LIDER_')) : CREDENTIAL_KEYS;
   const missing = keys.filter(k => !env[k]?.trim());
   if (missing.length) fail('MISSING_CREDENTIALS', 'configuration', `Faltan variables: ${missing.join(', ')}`);
   return Object.fromEntries(keys.map(k => [k, env[k]]));
@@ -135,10 +138,12 @@ async function bodyTexts(page) {
   return Promise.all(portalFrames(page).map(f => f.locator('body').innerText({ timeout: 1500 }).catch(() => '')));
 }
 async function checkPage(page, stage) {
+  const humanControl = humanControls.get(page.context());
+  if (humanControl) await humanControl(page);
   const texts = await bodyTexts(page);
   const robotControls = await find(page, f => f.locator('input[name="cf-turnstile-response"], input[name="g-recaptcha-response"], .h-captcha, .cf-turnstile, .g-recaptcha, iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha.com"]').filter({ visible: true }));
   const challengeFields = await Promise.all(portalFrames(page).map(f => f.locator('input[name="cf-turnstile-response"], textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"], input[name="h-captcha-response"]').count()));
-  if (robotControls.length || challengeFields.some(Boolean) || texts.some(t => /no soy un robot|i.m not a robot|verifica que eres humano|verify you are human/i.test(t)))
+  if (!humanControl && (robotControls.length || challengeFields.some(Boolean) || texts.some(t => /no soy un robot|i.m not a robot|verifica que eres humano|verify you are human/i.test(t))))
     fail('LOGIN_CHALLENGE', stage, 'El banco exige un control de robot o Turnstile; se detuvo la sesión sin resolverlo ni reintentar el ingreso.');
   if (texts.some(t => /sesión (?:ha )?(?:expirad|caducad)|sesi[oó]n finalizada|session expired/i.test(t)))
     fail('SESSION_EXPIRED', stage, 'La sesión bancaria expiró.');
@@ -152,6 +157,8 @@ function trusted(url, bank) {
 }
 export async function goto(page, url, stage) {
   const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: WAIT });
+  const humanControl = humanControls.get(page.context());
+  if (humanControl) await humanControl(page);
   if (!response || response.status() >= 400) fail('BANK_HTTP_ERROR', stage, `El portal no respondió correctamente (HTTP ${response?.status() ?? 'sin respuesta'}).`);
   await settle(page, stage);
 }
@@ -623,7 +630,7 @@ export async function readPersonas(page, directory, log, requested) {
   return accounts;
   } finally { observed.close(); }
 }
-async function leaderBalances(page) {
+export async function leaderBalances(page) {
   const stage = 'lider.balances';
   await goto(page, ROOTS.lider + 'private-home/my-card/balances', stage);
   if (!new URL(page.url()).pathname.startsWith('/private-home')) fail('SESSION_EXPIRED', stage, 'Líder redirigió al ingreso.');
@@ -652,7 +659,7 @@ async function leaderBalances(page) {
   if (!balances.CLP || !balances.USD) fail('MISSING_BALANCE', stage, 'No se identificaron ambos disponibles en Saldos de Líder.');
   return balances;
 }
-async function leaderRows(page, currency, billing) {
+export async function leaderRows(page, currency, billing) {
   const stage = `lider.${currency}.${billing}`;
   const all = []; const visited = new Set(); let explicitEmpty = false;
   for (let p = 1; p <= 100; p++) {
@@ -660,7 +667,7 @@ async function leaderRows(page, currency, billing) {
     const tables = await visible(page.locator('app-movements table'));
     if (tables.length !== 1) fail('PAGE_CHANGED', stage, 'Tabla de movimientos Líder ausente o ambigua.');
     const table = tables[0];
-    const rows = await table.locator('tr').evaluateAll(es => es.filter(e => e.getBoundingClientRect().height && !e.closest('tfoot')).map(r => Array.from(r.children, c => c.innerText.trim())));
+    const rows = await table.locator('tr').evaluateAll(es => es.filter(e => e.getBoundingClientRect().height && !e.closest('tfoot')).map(r => Array.from(r.children, c => c.textContent.trim())));
     const header = rows.find(r => r.includes('Fecha') && r.includes('Monto'));
     if (!header || !header.some(c => /Descripci[oó]n/i.test(c))) fail('PAGE_CHANGED', stage, 'Cabecera de movimientos Líder cambió.');
     const fingerprint = JSON.stringify(rows);
@@ -676,7 +683,7 @@ async function leaderRows(page, currency, billing) {
     }
     if (explicitEmpty && all.length) fail('CONTRADICTORY_EMPTY', stage, 'El banco mostró filas y estado vacío simultáneamente.');
     // Published portal component has numbered pages; arrows only appear above 4 pages.
-    const nextNumber = table.locator('.paginationNumber').filter({ hasText: new RegExp(`^${p + 1}$`) });
+    const nextNumber = table.locator('.paginationNumber').filter({ hasText: new RegExp(`^\\s*${p + 1}\\s*$`) });
     const numbered = await visible(nextNumber);
     if (numbered.length === 1) { await numbered[0].click(); continue; }
     const arrow = await visible(table.locator('.cubeArrow').filter({ has: page.locator('.arrow-right') }));
@@ -686,7 +693,7 @@ async function leaderRows(page, currency, billing) {
   }
   fail('PAGINATION_LIMIT', stage, 'La paginación excedió el límite de seguridad.');
 }
-async function readLider(page, log, requested) {
+export async function readLider(page, log, requested) {
   log('lider.balances'); const balances = await leaderBalances(page);
   await goto(page, ROOTS.lider + 'private-home/my-card/movements', 'lider.movements');
   const accounts = [];
@@ -706,6 +713,7 @@ async function readLider(page, log, requested) {
   return accounts;
 }
 export async function run({ from, to, bank = 'all', env = process.env, launch, headless = true, log = () => {}, adapters = { login, readPersonas, readLider } }) {
+  if (bank === 'lider') return (await import('./lider-session.mjs')).runLider({ from, to, env, log });
   if (!['all', 'personas'].includes(bank)) fail('INVALID_BANK', 'configuration', 'Banco no admitido.');
   const banks = bank === 'personas' ? ['personas'] : ['personas', 'lider'];
   const requested = period(from, to); const creds = credentials(env, bank);
@@ -765,10 +773,10 @@ export async function main(args = process.argv.slice(2), { launch, adapters, std
   try {
     const options = args.slice(4);
     if (args[0] !== '--from' || args[2] !== '--to' ||
-        options.some((value, i) => value !== '--headed' && !(value === '--bank' && options[i + 1] === 'personas') && !(value === 'personas' && options[i - 1] === '--bank')) ||
+        options.some((value, i) => value !== '--headed' && !(value === '--bank' && ['personas', 'lider'].includes(options[i + 1])) && !(['personas', 'lider'].includes(value) && options[i - 1] === '--bank')) ||
         options.filter(v => v === '--headed').length > 1 || options.filter(v => v === '--bank').length > 1)
-      fail('INVALID_ARGUMENTS', 'configuration', 'Uso: node live.mjs --from YYYY-MM-DD --to YYYY-MM-DD [--headed] [--bank personas]');
-    const result = await run({ from: args[1], to: args[3], bank: options.includes('--bank') ? 'personas' : 'all', launch, adapters, headless: !options.includes('--headed'), log: stage => stderr.write(JSON.stringify({ stage }) + '\n') });
+      fail('INVALID_ARGUMENTS', 'configuration', 'Uso: node live.mjs --from YYYY-MM-DD --to YYYY-MM-DD [--headed] [--bank personas|lider]');
+    const result = await run({ from: args[1], to: args[3], bank: options.includes('--bank') ? options[options.indexOf('--bank') + 1] : 'all', launch, adapters, headless: !options.includes('--headed'), log: stage => stderr.write((stage.startsWith('LIDER_CONTROL_URL ') ? stage : JSON.stringify({ stage })) + '\n') });
     stdout.write(JSON.stringify(result, null, 2) + '\n'); return 0;
   } catch (error) {
     const e = error instanceof BankError ? error : new BankError('RUN_FAILED', 'runtime', 'Falló la extracción completa.');
