@@ -1,6 +1,8 @@
 import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount, createMovement, screenshot } from './helpers'
 import { movementLedger } from '../src/lib/domain/movement-ledger'
+import { db, movements } from '../src/lib/db'
+import { eq } from 'drizzle-orm'
 import {
   countMovementsInSpace,
   getClpAccountBalance,
@@ -48,6 +50,62 @@ async function switchSpace(page: Page, name: string) {
 }
 
 test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
+  test('marks an outgoing transfer receivable paid using only $383.000 of a $522.517 balance', async ({ page }) => {
+    const email = await registerAndLogin(page)
+    const userId = await getUserId(email)
+    if (!userId) throw new Error('User not found in DB')
+    const personalSpaceId = await getPersonalSpaceId(userId)
+    const casaSpaceId = await createSpaceForUser(userId, 'Casa', '🏠')
+    const personalAccountId = await createRegularAccount(userId, { bankName: 'BCI', lastFourDigits: '1164', initialBalance: 100_000_000, spaceId: personalSpaceId })
+    const casaAccountId = await createRegularAccount(userId, { bankName: 'Casa', lastFourDigits: '1234', initialBalance: 100_000_000, spaceId: casaSpaceId })
+    const categoryId = await seedCategory(userId, { name: 'Pago TC', emoji: '💳', spaceId: personalSpaceId })
+    const original = await movementLedger.recordTransfer(personalSpaceId, userId, {
+      fromAccountId: personalAccountId, toAccountId: casaAccountId,
+      destinationSpaceId: casaSpaceId,
+      fromAmount: 38_300_000, toAmount: 38_300_000,
+      fromCurrency: 'CLP', toCurrency: 'CLP', date: '2026-09-30', note: 'Pago TC Líder',
+      source: { reportable: true, categoryId, receivable: true, receivableText: 'Casa pago tc' },
+      destination: { reportable: false },
+    })
+    expect(original.success).toBe(true)
+    const receivableId = (await getMovementIdByName(userId, 'Casa pago tc', personalSpaceId))!
+    // Both legs already contain the remaining balance; do not subtract $6.000 again.
+    const balance = await seedInterspaceTransfer(userId, {
+      sourceSpaceId: casaSpaceId, destinationSpaceId: personalSpaceId,
+      sourceAccountId: casaAccountId, destinationAccountId: personalAccountId,
+      amount: 52_251_700, note: 'Saldo disponible',
+    })
+    const personalBefore = await getClpAccountBalance(personalAccountId)
+    const casaRowsBefore = await db.select().from(movements).where(eq(movements.accountId, casaAccountId))
+    const netAmount = (rows: typeof casaRowsBefore) => rows.reduce((sum, row) => sum + (row.type === 'income' ? row.amount : -row.amount), 0)
+
+    await page.goto('/')
+    await page.getByRole('button', { name: /Por cobrar/i }).click()
+    await page.getByRole('button', { name: 'Marcar como cobrado Casa pago tc', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
+    await dialog.getByRole('button', { name: /Vincular existente/i }).click()
+    await expect(dialog.getByText(/Disponible \$522\.517/)).toBeVisible()
+    await dialog.getByRole('radio', { name: /Transferencia desde Casa/ }).click()
+    await dialog.getByRole('button', { name: /Confirmar/i }).click()
+    await expect(dialog).not.toBeVisible()
+    await expect(page.getByRole('button', { name: 'Marcar como cobrado Casa pago tc', exact: true })).toHaveCount(0)
+
+    expect(await getTransferMovementAmounts(balance.transferId)).toMatchObject({ sourceAmount: 13_951_700, destinationAmount: 13_951_700 })
+    expect(await getTransferMovementAmounts(original.transferId!)).toMatchObject({ sourceAmount: 38_300_000, destinationAmount: 38_300_000 })
+    // One original receivable and one linked collection, with no duplicate expense.
+    expect(await countMovementsInSpace(personalSpaceId, 'Casa pago tc')).toBe(2)
+    const [settled] = await db.select().from(movements).where(eq(movements.id, receivableId))
+    expect(settled).toMatchObject({ amount: 38_300_000, received: true, receivable: true, type: 'expense' })
+    expect(await getMovementWorkflowState(personalSpaceId, 'Cobro: Casa pago tc')).toMatchObject({ amount: 38_300_000, receivableId })
+    expect(await getClpAccountBalance(personalAccountId)).toBe(personalBefore)
+    // The settlement's outgoing leg awaits review; include it in the conserved total.
+    const casaRowsAfter = await db.select().from(movements).where(eq(movements.accountId, casaAccountId))
+    expect(netAmount(casaRowsAfter)).toBe(netAmount(casaRowsBefore))
+    const duplicate = await movementLedger.settleReceivableWithExistingMovement(personalSpaceId, userId, receivableId, balance.destinationMovementId)
+    expect(duplicate.success).toBe(false)
+    expect(await getTransferMovementAmounts(balance.transferId)).toMatchObject({ sourceAmount: 13_951_700, destinationAmount: 13_951_700 })
+  })
+
   test('settles an imported-style USD receivable into a CLP account at the $10 tolerance boundary', async ({ page }) => {
     const email = await registerUser(page)
     await ensureAccount(page)
