@@ -124,7 +124,7 @@ const MovementCard = memo(function MovementCard({ movement: m, isMarking, onOpen
         transition: 'opacity 0.2s ease',
       }}
     >
-      {m.receivable && !m.received && !isTransfer && (
+      {m.receivable && !m.received && (
         <button
           type="button"
           aria-label={`Marcar como cobrado ${m.name}`}
