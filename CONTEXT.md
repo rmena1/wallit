@@ -17,8 +17,7 @@ A **Transfer** whose source account and destination account belong to different 
 _Avoid_: Space contribution, aporte a Space
 
 **Receivable Settlement Expense**:
-A reportable expense in one **Space** that pays back another **Space** for a **Receivable** that was temporarily funded outside the paying **Space**.
-_Avoid_: Transfer, reimbursement transfer, aporte
+An expense in one **Space** that pays back another **Space** for a **Receivable** that was temporarily funded outside the paying **Space**. It starts pending review and can be confirmed as a reportable expense with a category. If it originated by consuming an **Inter-Space Transfer**, it can also be confirmed in review as an **Inter-Space Transfer** with the expense side non-reportable, without undoing the collection.
 
 **Settlement Remainder Transfer**:
 The remaining operational **Transfer** after part of an existing **Transfer** is consumed to create a **Receivable Settlement Expense**.
@@ -161,7 +160,7 @@ _Avoid_: Viewer
 - A reportable incoming **Inter-Space Transfer** side cannot be marked as a **Receivable**.
 - An operational **Inter-Space Transfer** side has no category because it is excluded from income/expense reports.
 - Receivables, emergency expenses, loans, loan paybacks, and similar tracking workflows use **Movements** for balance effects but are excluded from income/expense reports.
-- A **Receivable Settlement Expense** is not a **Transfer**: it is a reportable outgoing **Movement** in the paying **Space** and a receivable-settling payment for the funded **Space**.
+- A **Receivable Settlement Expense** is an outgoing **Movement** in the paying **Space** and a receivable-settling payment for the funded **Space**. When created by consuming an **Inter-Space Transfer**, review can confirm it as a transfer with the expense side non-reportable. The existing outgoing and incoming settlement movements become the two transfer legs; both stay outside reports, the settlement remains linked, and the receivable stays collected. Amounts, dates, accounts, and the remainder transfer are unchanged; no additional income is created. Confirming as a reportable expense with a category remains available.
 - A **Receivable Settlement Expense** can be created directly from an account in another **Space** or by transforming an existing **Transfer** into the settlement workflow.
 - A **Receivable Settlement Expense** copies the original receivable expense description into the paying **Space**, but starts without category so the paying **Space** can classify it during review.
 - A **Receivable Settlement Expense** starts as a **Pending Review Movement** in the paying **Space**, whether it is created from a new payment or transformed from an existing **Transfer**.
@@ -211,6 +210,6 @@ _Avoid_: Viewer
 
 - "Movement" was previously used broadly for both atomic account-level money movements and higher-level financial workflows. Resolved: a **Movement** is atomic, account-level, and balance-affecting; composed workflows like **Transfer** are modeled through relationships between Movements.
 - "Aporte a Space" was considered for moving money from Personal to Casa. Resolved: the canonical term is **Inter-Space Transfer**, because the operation is symmetric and general, not specific to household contributions.
-- "Transferencia que salda un por cobrar" was considered for household reimbursements. Resolved: this should not be a **Transfer**; the canonical term is **Receivable Settlement Expense**, because the paying **Space** is recording a real expense while the funded **Space** is only settling a receivable.
+- "Transferencia que salda un por cobrar" was considered for household reimbursements. Resolved: the canonical workflow is **Receivable Settlement Expense**. A settlement born from consuming an **Inter-Space Transfer** may be confirmed in review as an **Inter-Space Transfer** with both existing legs non-reportable, preserving the collection; direct new payments retain expense classification.
 - A single existing **Transfer** can cover multiple **Receivables**. Resolved: each settlement consumes one receivable at a time from the **Transfer** using a 5% tolerance after currency conversion; the remaining operational amount stays as a **Settlement Remainder Transfer** until fully consumed.
 - Earlier discussion suggested exact full coverage for settlement. Overridden: settlement allows a ±5% tolerance for same-currency and different-currency payments. Existing payments above the upper bound are partially consumed with a remainder; new cross-Space entered amounts outside the band are rejected.

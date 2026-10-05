@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { confirmPendingAsReportable, confirmPendingTransfer, deletePendingMovement, deletePendingTransfer, getPendingReviewMovements, markAsReceivable, splitMovement } from '@/lib/actions/review'
+import { confirmSettlementAsTransfer, confirmPendingAsReportable, confirmPendingTransfer, deletePendingMovement, deletePendingTransfer, getPendingReviewMovements, markAsReceivable, splitMovement } from '@/lib/actions/review'
 import { confirmPendingAsTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { formatMovementDisplayAmount, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
@@ -53,6 +53,7 @@ interface PendingMovement {
   transferCanReview?: boolean
   transferSourceMovement?: PendingTransferMovement | null
   transferDestinationMovement?: PendingTransferMovement | null
+  canConfirmSettlementAsTransfer?: boolean
   receivableSettlementRole?: 'receivable' | 'outgoing' | 'incoming' | null
 }
 
@@ -353,6 +354,21 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     }
   }
 
+  async function handleConfirmSettlementTransfer() {
+    if (!current) return
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await confirmSettlementAsTransfer(current.id)
+      if (!result.success) setError(result.error || 'Error al confirmar transferencia')
+      else goNext(true)
+    } catch {
+      setError('Error al confirmar transferencia')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function handleConfirm() {
     if (!current) return
     setLoading(true)
@@ -390,7 +406,9 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
       }
 
       if (isReceivableSettlementExpense && isTransferMode) {
-        setError('Este gasto salda un por cobrar entre Spaces y no puede transformarse en transferencia')
+        setError(current.canConfirmSettlementAsTransfer
+          ? 'Usa la opción de confirmar como transferencia entre Spaces con gasto sin reportar'
+          : 'Este settlement no nació de una transferencia entre Spaces')
         return
       }
 
@@ -819,7 +837,9 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
                 fontSize: 12, color: '#fbbf24', backgroundColor: '#1f1a0b',
                 border: '1px solid #854d0e', borderRadius: 8, padding: '8px 10px',
               }}>
-                Gasto de settlement por cobrar: clasifícalo como gasto. Monto, fecha, cuenta y workflows quedan bloqueados para mantener ambos Spaces alineados.
+                Gasto de settlement por cobrar: {current?.canConfirmSettlementAsTransfer
+                  ? 'puedes confirmarlo como gasto con categoría o como transferencia entre Spaces con el gasto sin reportar. El por cobrar sigue cobrado y ambas patas quedan fuera de reportes al confirmar como transferencia.'
+                  : 'clasifícalo como gasto.'} Monto, fecha y cuentas quedan bloqueados para mantener ambos Spaces alineados.
               </div>
             )}
 
@@ -1101,6 +1121,15 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
           </div>
           )}
         </div>
+
+        {current?.canConfirmSettlementAsTransfer && !isExistingPendingTransfer && (
+          <button onClick={handleConfirmSettlementTransfer} disabled={loading} style={{
+            width: '100%', padding: '12px', marginTop: 8, borderRadius: 10,
+            border: '1px solid #2563eb', backgroundColor: '#172554', color: '#bfdbfe', cursor: 'pointer',
+          }}>
+            Confirmar como transferencia entre Spaces · gasto sin reportar
+          </button>
+        )}
 
         {/* Primary action buttons */}
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>

@@ -37,6 +37,11 @@ export async function getPendingReviewMovements() {
       categoryEmoji: categories.emoji,
       accountBankName: accounts.bankName,
       accountLastFour: accounts.lastFourDigits,
+      canConfirmSettlementAsTransfer: sql<boolean>`EXISTS (
+        SELECT 1 FROM ${receivableSettlements}
+        WHERE ${receivableSettlements.outgoingMovementId} = ${movements.id}
+          AND ${receivableSettlements.consumedTransferId} IS NOT NULL
+      )`,
       receivableSettlementRole: sql<'receivable' | 'outgoing' | 'incoming' | null>`(
         SELECT CASE
           WHEN ${receivableSettlements.receivableId} = ${movements.id} THEN 'receivable'
@@ -283,4 +288,16 @@ export async function getAccountsAndCategories() {
       .orderBy(categories.name),
   ])
   return { accounts: userAccounts, categories: userCategories }
+}
+
+export async function confirmSettlementAsTransfer(id: string) {
+  const { user: session, space } = await getCurrentSpace()
+  const result = await movementLedger.confirmSettlementAsTransfer(space.id, session.id, id)
+  if (result.success) {
+    revalidatePath('/')
+    revalidatePath('/review')
+    revalidatePath('/reports')
+    revalidatePath('/receivables')
+  }
+  return result
 }
