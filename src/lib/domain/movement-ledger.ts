@@ -1,4 +1,4 @@
-import { and, eq, isNull, or, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm'
 import { accounts, categories, db, emergencyPayments, movements, receivableSettlements, spaces, spaceMemberships, transfers, type Account, type Movement, type ReceivableSettlement, type Space, type Transfer } from '@/lib/db'
 import { convertUsdToClp, getUsdToClpRate } from '@/lib/exchange-rate'
 import { formatCurrency, generateId } from '@/lib/utils'
@@ -1007,6 +1007,47 @@ export const movementLedger = {
     return ok()
   },
 
+  // Reuse the settlement legs: this classification never creates another payment.
+  async confirmSettlementAsTransfer(spaceId: string, actorUserId: string, movementId: string): Promise<LedgerResult> {
+    const link = await getReceivableSettlementMovementLink(movementId)
+    if (!link || link.role !== 'outgoing' || !link.settlement.consumedTransferId || link.settlement.payingSpaceId !== spaceId) {
+      return fail('Solo un gasto de settlement nacido de una transferencia entre Spaces puede confirmarse así')
+    }
+    const { settlement } = link
+    const [payingSpace, fundedSpace] = await Promise.all([
+      getMemberSpace(actorUserId, spaceId),
+      getMemberSpace(actorUserId, settlement.fundedSpaceId),
+    ])
+    if (!payingSpace || !fundedSpace) return fail('Necesitas acceso a ambos Spaces para confirmar esta transferencia')
+
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:receivable-settlement:${settlement.id}`}, 0))`)
+      const [locked] = await tx.select().from(receivableSettlements).where(eq(receivableSettlements.id, settlement.id)).for('update')
+      if (!locked) return fail('Settlement no encontrado')
+      const legs = await tx.select().from(movements).where(inArray(movements.id, [locked.outgoingMovementId, locked.incomingMovementId])).for('update')
+      const outgoing = legs.find((leg) => leg.id === locked.outgoingMovementId)
+      const incoming = legs.find((leg) => leg.id === locked.incomingMovementId)
+      if (!outgoing?.needsReview || outgoing.spaceId !== spaceId || outgoing.type !== 'expense' ||
+          !incoming || incoming.spaceId !== locked.fundedSpaceId || incoming.type !== 'income' || incoming.needsReview ||
+          incoming.receivableId !== locked.receivableId || locked.fundedSpaceId === spaceId) {
+        return fail('El settlement no está disponible para esta confirmación')
+      }
+      const [existing] = await tx.select().from(transfers).where(or(
+        inArray(transfers.sourceMovementId, legs.map((leg) => leg.id)),
+        inArray(transfers.destinationMovementId, legs.map((leg) => leg.id)),
+      ))
+      if (existing) return fail('El settlement ya pertenece a una transferencia')
+      const transferId = generateId()
+      await tx.insert(transfers).values({
+        id: transferId, sourceSpaceId: spaceId, destinationSpaceId: locked.fundedSpaceId,
+        sourceMovementId: outgoing.id, destinationMovementId: incoming.id, createdByUserId: actorUserId,
+      })
+      await tx.update(movements).set({ reportable: false, categoryId: null, needsReview: false, updatedAt: new Date() })
+        .where(inArray(movements.id, legs.map((leg) => leg.id)))
+      return ok({ transferId })
+    })
+  },
+
   // Imported categories may belong to another Space. Preserve an unchanged
   // category on review/edit; replacements still require a local category.
   async confirmPendingAsReportable(spaceId: string, movementId: string, input: ReportableInput): Promise<LedgerResult> {
@@ -1021,19 +1062,25 @@ export const movementLedger = {
       if (!input.name.trim()) return fail('Name is required')
       if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
-      await db.update(movements).set({
-        name: input.name.trim(),
-        categoryId: input.categoryId || null,
-        type: 'expense',
-        needsReview: false,
-        emergency: false,
-        emergencySettled: false,
-        loan: false,
-        loanSettled: false,
-        updatedAt: new Date(),
-      }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:receivable-settlement:${settlementLink.settlement.id}`}, 0))`)
+        const [pending] = await tx.select().from(movements).where(eq(movements.id, movementId)).for('update')
+        if (!pending?.needsReview) return fail('Movement is not pending review')
+        await tx.update(movements).set({
+          name: input.name.trim(),
+          categoryId: input.categoryId || null,
+          type: 'expense',
+          reportable: true,
+          needsReview: false,
+          emergency: false,
+          emergencySettled: false,
+          loan: false,
+          loanSettled: false,
+          updatedAt: new Date(),
+        }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId)))
 
-      return ok()
+        return ok()
+      })
     }
     if (!input.name.trim()) return fail('Name is required')
     if (input.emergency && input.type !== 'expense') return fail('Only expenses can be emergency movements')
