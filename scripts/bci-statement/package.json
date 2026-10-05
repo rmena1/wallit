@@ -2,6 +2,6 @@
   "name": "bci-statement-reader",
   "private": true,
   "type": "module",
-  "scripts": {"start": "node live.mjs", "test": "node --test live.test.mjs lider-session.test.mjs"},
+  "scripts": {"start": "node live.mjs", "test": "node --test live.test.mjs lider-session.test.mjs live-startup.test.mjs"},
   "dependencies": {"playwright": "1.58.0"}
 }

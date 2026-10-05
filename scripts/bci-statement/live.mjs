@@ -783,4 +783,8 @@ export async function main(args = process.argv.slice(2), { launch, adapters, std
     stderr.write(JSON.stringify({ error: { code: e.code, stage: e.stage, message: e.message } }) + '\n'); return 1;
   }
 }
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) process.exitCode = await main();
+// Finish evaluating this module before the Líder session imports its helpers
+// back from here. Awaiting main at top level deadlocks that dynamic import.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().then(code => { process.exitCode = code; });
+}
