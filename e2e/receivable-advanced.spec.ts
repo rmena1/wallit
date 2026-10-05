@@ -611,6 +611,75 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     expect(blockedDelete.error).toContain('por cobrar')
   })
 
+  test('keeps the current transfer amount available across consecutive partial collections', async ({ page }) => {
+    test.setTimeout(180_000)
+    const email = await registerUser(page)
+    const userId = (await getUserId(email))!
+    const personalSpaceId = await getPersonalSpaceId(userId)
+    const casaSpaceId = await createSpaceForUser(userId, 'Casa saldo parcial', '🏠')
+    const sourceAccountId = await createRegularAccount(userId, { bankName: 'Tenpo', lastFourDigits: '0146', initialBalance: 100_000_000, spaceId: casaSpaceId })
+    const destinationAccountId = await createRegularAccount(userId, { bankName: 'Mercado Pago', lastFourDigits: '6991', initialBalance: 0, spaceId: personalSpaceId })
+    // Amounts are stored in cents: $528.517 = 52_851_700.
+    const amounts = [600_000, ...Array(8).fill(6_000_000), 4_251_700]
+    const names = ['Copec parcial', ...Array.from({ length: 9 }, (_, i) => `Pendiente parcial ${i + 1}`)]
+    const receivableIds = []
+    for (let i = 0; i < amounts.length; i++) {
+      receivableIds.push(await seedReceivable(userId, destinationAccountId, names[i], amounts[i], personalSpaceId))
+    }
+    const transfer = await seedInterspaceTransfer(userId, {
+      sourceSpaceId: casaSpaceId, destinationSpaceId: personalSpaceId,
+      sourceAccountId, destinationAccountId, amount: 52_851_700,
+    })
+    await page.goto('/')
+    const balanceBefore = await getClpAccountBalance(destinationAccountId)
+    let remaining = 52_851_700
+    for (let i = 0; i < amounts.length; i++) {
+      await page.getByRole('button', { name: `Marcar como cobrado ${names[i]}`, exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
+      await dialog.getByRole('button', { name: /Vincular existente/i }).click()
+      const candidate = dialog.getByRole('radio', { name: /Transferencia desde Casa saldo parcial/ })
+      await expect(candidate).toHaveCount(1)
+      await expect(candidate).toContainText(`Disponible $${(remaining / 100).toLocaleString('es-CL')}`)
+      if (i === 1) {
+        // The first collection is already reflected in both legs; do not subtract it again.
+        expect(remaining).toBe(52_251_700)
+        await expect(candidate).not.toContainText('$528.517')
+      }
+      await candidate.click()
+      await dialog.getByRole('button', { name: /Confirmar/i }).click()
+      await expect(dialog).not.toBeVisible()
+      remaining -= amounts[i]
+      await expect.poll(async () => (await getTransferMovementAmounts(transfer.transferId))?.destinationAmount ?? 0).toBe(remaining)
+      const current = await getTransferMovementAmounts(transfer.transferId)
+      if (remaining > 0) {
+        expect(current?.sourceAmount).toBe(remaining)
+        expect(current?.destinationAmount).toBe(remaining)
+        expect(await getTransferIdForMovement(transfer.sourceMovementId)).toBe(transfer.transferId)
+        expect(await getTransferIdForMovement(transfer.destinationMovementId)).toBe(transfer.transferId)
+      } else {
+        expect(current).toBeNull()
+      }
+      expect(await countMovementsInSpace(casaSpaceId, names[i])).toBe(1)
+      expect(await countMovementsInSpace(personalSpaceId, `Cobro: ${names[i]}`)).toBe(1)
+      expect(await getClpAccountBalance(destinationAccountId)).toBe(balanceBefore)
+      if (i === 1) {
+        expect(remaining).toBe(46_251_700)
+        // Repeating the same collection cannot create a duplicate or consume more.
+        const duplicate = await movementLedger.settleReceivableWithExistingMovement(personalSpaceId, userId, receivableIds[i], transfer.destinationMovementId)
+        expect(duplicate.success).toBe(false)
+        expect(await getTransferMovementAmounts(transfer.transferId)).toEqual(current)
+        expect(await countMovementsInSpace(casaSpaceId, names[i])).toBe(1)
+        expect(await countMovementsInSpace(personalSpaceId, `Cobro: ${names[i]}`)).toBe(1)
+      }
+    }
+    await seedReceivable(userId, destinationAccountId, 'Otro por cobrar', 100_000, personalSpaceId)
+    await page.reload()
+    await page.getByRole('button', { name: 'Marcar como cobrado Otro por cobrar', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: /Cobrar gasto/i })
+    await dialog.getByRole('button', { name: /Vincular existente/i }).click()
+    await expect(dialog.getByRole('radio', { name: /Transferencia desde Casa saldo parcial/ })).toHaveCount(0)
+  })
+
   test('undoing a full transfer settlement restores transfer reportability and categories', async ({ page }) => {
     const email = await registerUser(page)
     const userId = await getUserId(email)

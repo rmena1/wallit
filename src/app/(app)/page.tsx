@@ -182,6 +182,9 @@ export default async function Home() {
       .where(and(
         eq(transfers.destinationSpaceId, space.id),
         sql`${transfers.sourceSpaceId} <> ${transfers.destinationSpaceId}`,
+        // Partial collections already reduce both legs. Their current amounts are
+        // the available balance; consumed_transfer_id is history, not exclusion.
+        sql`${movements.amount} > 0`,
         eq(movements.needsReview, false),
         sql`${movements.receivableId} IS NULL`,
         sql`${movements.loanId} IS NULL`,
@@ -196,14 +199,14 @@ export default async function Home() {
         sql`NOT EXISTS (
           SELECT 1
           FROM receivable_settlements settlement
-          WHERE settlement.consumed_transfer_id = ${transfers.id}
-             OR settlement.outgoing_movement_id = ${transfers.sourceMovementId}
+          WHERE settlement.outgoing_movement_id = ${transfers.sourceMovementId}
              OR settlement.incoming_movement_id = ${transfers.destinationMovementId}
         )`,
         sql`EXISTS (
           SELECT 1
           FROM movements source_movement
           WHERE source_movement.id = ${transfers.sourceMovementId}
+            AND source_movement.amount > 0
             AND source_movement.needs_review = false
             AND source_movement.receivable_id IS NULL
             AND source_movement.loan_id IS NULL
