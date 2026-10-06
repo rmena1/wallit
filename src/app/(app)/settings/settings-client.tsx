@@ -345,6 +345,7 @@ export function SettingsPage({ accounts, accountBalances, categories, currentSpa
       </header>
 
       <main style={{ maxWidth: 540, margin: '0 auto', padding: '16px 16px 96px' }}>
+        <a href="/oauth/connections" style={{ display: 'block', color: '#4ade80', padding: '12px 16px', marginBottom: 20, border: '1px solid #303030', borderRadius: 12 }}>Conexiones MCP · Administrar y revocar acceso</a>
         {/* Spaces Section */}
         <div style={{
           backgroundColor: '#101827', borderRadius: 16,

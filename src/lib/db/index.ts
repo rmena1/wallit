@@ -1,6 +1,7 @@
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 import * as schema from './schema'
+import { domainExecution } from '@/lib/domain/execution-context'
 
 // Lazy initialization to avoid errors during build time
 let _db: ReturnType<typeof createDb> | null = null
@@ -30,7 +31,7 @@ export function getDb() {
 // Proxy that lazily initializes on first property access
 export const db: ReturnType<typeof createDb> = new Proxy({} as ReturnType<typeof createDb>, {
   get(_target, prop, receiver) {
-    const instance = getDb()
+    const instance = domainExecution.getStore()?.client ?? getDb()
     const value = Reflect.get(instance, prop, receiver)
     if (typeof value === 'function') {
       return value.bind(instance)

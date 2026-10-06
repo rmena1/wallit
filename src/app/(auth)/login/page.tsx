@@ -16,6 +16,8 @@ export default function LoginPage() {
 
     try {
       const formData = new FormData(e.currentTarget)
+      const returnTo = new URLSearchParams(window.location.search).get('returnTo')
+      if (returnTo) formData.set('returnTo', returnTo)
       const result = await login(formData)
       if (!result.success) {
         setError(result.error || 'An error occurred')

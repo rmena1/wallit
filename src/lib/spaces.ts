@@ -6,6 +6,7 @@ import { and, eq, isNull, ne, sql } from 'drizzle-orm'
 import { db, spaces, spaceMemberships, users, categories, type Space } from '@/lib/db'
 import { requireAuth, type SessionUser } from '@/lib/auth/session'
 import { generateId } from '@/lib/utils'
+import { domainExecution } from '@/lib/domain/execution-context'
 
 export const ACTIVE_SPACE_COOKIE = 'wallit_active_space'
 
@@ -139,7 +140,7 @@ export async function getOrCreatePersonalSpace(userId: string): Promise<Availabl
 }
 
 export async function getAvailableSpaces(userId: string): Promise<AvailableSpace[]> {
-  await getOrCreatePersonalSpace(userId)
+  if (!domainExecution.getStore()) await getOrCreatePersonalSpace(userId)
 
   return db
     .select({
@@ -186,6 +187,8 @@ export async function getCurrentSpaceForUser(userId: string): Promise<{ space: A
 }
 
 export const getCurrentSpace = cache(async (): Promise<CurrentSpaceContext> => {
+  const execution = domainExecution.getStore()
+  if (execution) return { user: execution.user, space: execution.space, spaces: execution.spaces }
   const user = await requireAuth()
   const { space, spaces } = await getCurrentSpaceForUser(user.id)
   return { user, space, spaces }

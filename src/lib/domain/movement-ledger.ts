@@ -1,3 +1,4 @@
+import { insertLedgerMovements } from '@/lib/domain/ledger-insert'
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm'
 import { accounts, categories, db, emergencyPayments, movements, receivableSettlements, spaces, spaceMemberships, transfers, type Account, type Movement, type ReceivableSettlement, type Space, type Transfer } from '@/lib/db'
 import { convertUsdToClp, getUsdToClpRate } from '@/lib/exchange-rate'
@@ -710,7 +711,7 @@ async function deleteReceivableSettlementRecord(spaceId: string, actorUserId: st
         const sourceMovementId = generateId()
         const destinationMovementId = generateId()
         const now = new Date()
-        await tx.insert(movements).values([
+        await insertLedgerMovements(tx).values([
           {
             id: sourceMovementId,
             spaceId: lockedSettlement.consumedTransferSourceSpaceId!,
@@ -870,7 +871,7 @@ async function consumeIncomingTransferForReceivableSettlement(
     const outgoingMovementId = generateId()
     const incomingMovementId = generateId()
 
-    await tx.insert(movements).values([
+    await insertLedgerMovements(tx).values([
       {
         id: outgoingMovementId,
         spaceId: lockedTransfer.sourceSpaceId,
@@ -975,6 +976,42 @@ async function consumeIncomingTransferForReceivableSettlement(
 }
 
 export const movementLedger = {
+  async editPendingMovement(spaceId: string, movementId: string, input: ReportableInput): Promise<LedgerResult> {
+    const original = await getOwnedMovement(spaceId, movementId)
+    if (!original?.needsReview) return fail('Movement is not pending review')
+    if (hasDependentWorkflow(original) || original.receivable || original.emergency || original.loan || await movementIsTransfer(original.id) || await movementIsReceivableSettlement(original.id)) return fail('Use the explicit workflow operation for this movement')
+    if (!input.name.trim()) return fail('Name is required')
+    if (input.emergency || input.loan) return fail('Classify operational workflows in an explicit review operation')
+    const normalized = await normalizeMoney(spaceId, input)
+    if ('error' in normalized) return fail(normalized.error)
+    if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+    await db.update(movements).set({
+      name: input.name.trim(), date: input.date, amount: normalized.amount,
+      type: input.type, currency: input.currency, accountId: normalized.account.id,
+      categoryId: input.categoryId, amountUsd: normalized.amountUsd,
+      exchangeRate: normalized.exchangeRate, time: input.time ?? null,
+      needsReview: true, updatedAt: new Date(),
+    }).where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId), eq(movements.needsReview, true)))
+    return ok()
+  },
+
+  // MCP operational creations also require acknowledgement. This changes only
+  // review status; dependent payment/settlement money facts remain untouched.
+  async confirmPendingOperational(spaceId: string, actorUserId: string, movementId: string): Promise<LedgerResult> {
+    const original = await getOwnedMovement(spaceId, movementId)
+    if (!original?.needsReview) return fail('Movement is not pending review')
+    if (await movementIsTransfer(movementId)) return fail('Confirm the entire transfer instead')
+    const link = await getReceivableSettlementMovementLink(movementId)
+    if (link) {
+      if (!(await getMemberSpace(actorUserId, link.settlement.fundedSpaceId)) || !(await getMemberSpace(actorUserId, link.settlement.payingSpaceId))) return fail('Necesitas acceso a ambos Spaces')
+      if (link.role !== 'incoming') return fail('Classify the outgoing settlement expense explicitly')
+    }
+    if (!original.receivableId && !original.loanId && !original.emergency && !original.loan && !original.receivable) return fail('Movement has no operational workflow to acknowledge')
+    await db.update(movements).set({ needsReview: false, updatedAt: new Date() })
+      .where(and(eq(movements.id, movementId), eq(movements.spaceId, spaceId), eq(movements.needsReview, true)))
+    return ok()
+  },
+
   async recordReportableMovement(spaceId: string, actorUserId: string, input: ReportableInput): Promise<LedgerResult> {
     if (!input.name.trim()) return fail('Name is required')
     const normalized = await normalizeMoney(spaceId, input)
@@ -984,7 +1021,7 @@ export const movementLedger = {
     if (input.loan && input.type !== 'income') return fail('Only income movements can be loans')
     if (input.emergency && input.loan) return fail('A movement cannot be both emergency and loan')
 
-    await db.insert(movements).values({
+    await insertLedgerMovements(db).values({
       id: generateId(),
       spaceId: spaceId,
       createdByUserId: actorUserId,
@@ -1442,7 +1479,7 @@ export const movementLedger = {
     await db.transaction(async (tx) => {
       await tx.update(movements).set({ received: true, updatedAt: new Date() }).where(and(eq(movements.id, receivableId), eq(movements.spaceId, spaceId)))
       if (paymentAccount) {
-        await tx.insert(movements).values({
+        await insertLedgerMovements(tx).values({
           id: generateId(),
           spaceId: spaceId,
           createdByUserId: actorUserId,
@@ -1528,7 +1565,7 @@ export const movementLedger = {
       const outgoingMovementId = generateId()
       const incomingMovementId = generateId()
 
-      await tx.insert(movements).values([
+      await insertLedgerMovements(tx).values([
         {
           id: outgoingMovementId,
           spaceId: input.payingSpaceId,
@@ -1640,7 +1677,7 @@ export const movementLedger = {
           receivableId: null,
           updatedAt: now,
         }).where(eq(movements.id, existingIncomeId))
-        await tx.insert(movements).values({
+        await insertLedgerMovements(tx).values({
           id: generateId(),
           spaceId,
           createdByUserId: actorUserId,
@@ -1703,7 +1740,7 @@ export const movementLedger = {
       await tx.delete(movements).where(and(eq(movements.id, originalId), eq(movements.spaceId, spaceId)))
       for (let i = 0; i < splits.length; i++) {
         const split = splits[i]
-        await tx.insert(movements).values({
+        await insertLedgerMovements(tx).values({
           id: generateId(),
           spaceId: spaceId,
           createdByUserId: actorUserId,
@@ -1798,7 +1835,7 @@ export const movementLedger = {
     const destinationNeedsReview = isPendingMemberDestination || transferSideNeedsReview(destinationReportable, toAccount?.id ?? null, destinationCategoryId)
 
     await db.transaction(async (tx) => {
-      await tx.insert(movements).values([
+      await insertLedgerMovements(tx).values([
         {
           id: fromMovementId,
           spaceId,
@@ -2056,7 +2093,7 @@ export const movementLedger = {
         ...transferSideReportingFields(sourceReportable, sourceCategoryId, sourceNeedsReview),
         updatedAt: new Date(),
       }).where(and(eq(movements.id, input.movementId), eq(movements.spaceId, spaceId)))
-      await tx.insert(movements).values({
+      await insertLedgerMovements(tx).values({
         id: pairedMovementId,
         spaceId: destinationSpaceId,
         createdByUserId: actorUserId,
@@ -2141,7 +2178,7 @@ export const movementLedger = {
         transferId = generateId()
         const fromMovementId = generateId()
         const toMovementId = generateId()
-        await tx.insert(movements).values([
+        await insertLedgerMovements(tx).values([
           {
             id: fromMovementId,
             spaceId: spaceId,

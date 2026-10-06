@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server'
 // Routes that don't require authentication
 const publicRoutes = ['/login', '/register', '/forgot-password', '/api/health']
 const authenticatedApiRoutes = ['/api/import/email']
+const oauthRoutes = ['/api/mcp', '/oauth/authorize', '/oauth/token', '/oauth/register', '/oauth/revoke', '/oauth/connections']
 
 // Routes that should redirect to home if already authenticated
 const authRoutes = ['/login', '/register', '/forgot-password']
@@ -41,7 +42,9 @@ export function middleware(request: NextRequest) {
   // If accessing protected routes while not authenticated, redirect to login
   if (!isAuthenticated
     && !publicRoutes.some(route => route === '/api/health' ? pathname === route : pathname.startsWith(route))
-    && !authenticatedApiRoutes.some(route => pathname === route)) {
+    && !authenticatedApiRoutes.some(route => pathname === route)
+    && !oauthRoutes.includes(pathname)
+    && !pathname.startsWith('/.well-known/')) {
     return applySecurityHeaders(NextResponse.redirect(new URL('/login', request.url)))
   }
   

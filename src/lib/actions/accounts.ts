@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { categoryReadAccess } from '@/lib/domain/read-access'
 import { db, accounts, movements, categories, investmentSnapshots, transfers, type Account } from '@/lib/db'
 import { eq, and, desc, sql } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
@@ -356,7 +357,7 @@ export async function getAccountMovements(accountId: string, offset: number, lim
       categoryEmoji: categories.emoji,
     })
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess()))
     .where(whereCondition)
     .orderBy(desc(movements.date), desc(movements.createdAt))
     .limit(limit)
