@@ -10,6 +10,6 @@ export default defineConfig({
   use: { baseURL: 'http://127.0.0.1:3217', trace: 'off' },
   webServer: {
     command: 'npm run dev -- --hostname 127.0.0.1 --port 3217', url: 'http://127.0.0.1:3217/api/health', reuseExistingServer: false, timeout: 120_000,
-    env: { DATABASE_URL: databaseUrl, MCP_ORIGIN: 'http://127.0.0.1:3217', AUTH_SECRET: 'mcp-fixture-signing-secret-for-local-tests-only' },
+    env: { DATABASE_URL: databaseUrl, MCP_ORIGIN: 'http://127.0.0.1:3217', MCP_OAUTH_SECRET: 'mcp-fixture-signing-secret-for-local-tests-only' },
   },
 })

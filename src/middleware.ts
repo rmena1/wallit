@@ -20,8 +20,9 @@ const securityHeaders = {
   'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
 }
 
-function applySecurityHeaders(response: NextResponse): NextResponse {
+function applySecurityHeaders(response: NextResponse, includeCsp = true): NextResponse {
   for (const [key, value] of Object.entries(securityHeaders)) {
+    if (key === 'Content-Security-Policy' && !includeCsp) continue
     response.headers.set(key, value)
   }
   return response
@@ -48,7 +49,9 @@ export function middleware(request: NextRequest) {
     return applySecurityHeaders(NextResponse.redirect(new URL('/login', request.url)))
   }
   
-  return applySecurityHeaders(NextResponse.next())
+  // The consent route emits a validated callback-specific form-action policy.
+  // Two CSP headers would intersect and retain the global self-only restriction.
+  return applySecurityHeaders(NextResponse.next(), pathname !== '/oauth/authorize')
 }
 
 export const config = {

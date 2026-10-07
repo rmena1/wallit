@@ -19,14 +19,15 @@ import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm'
 
 const id = z.string().min(1).max(120)
 const text = z.string().trim().min(1).max(200)
-const cents = z.number().int().positive().max(2_147_483_647)
+const cents = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
+const integerCents = cents.max(2_147_483_647)
 const date = z.iso.date()
 const currency = z.enum(['CLP', 'USD'])
 const money = {
   name: text, date, amount: cents, type: z.enum(['income', 'expense']), currency,
   accountId: id, categoryId: id.nullable().default(null),
   amountInputMode: z.enum(['inputCurrency', 'canonicalClp']).default('inputCurrency'),
-  amountUsd: cents.nullable().optional(), exchangeRate: cents.nullable().optional(),
+  amountUsd: integerCents.nullable().optional(), exchangeRate: integerCents.nullable().optional(),
   time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   emergency: z.boolean().optional(), loan: z.boolean().optional(),
 }
@@ -112,6 +113,7 @@ export const mcpTools: ToolDefinition[] = [
   define('wallit_review_confirm', 'Explicitly confirm an existing standalone pending movement. Never create a new movement.', 'wallit:review', { ...write, id, ...money }, a => movementLedger.confirmPendingAsReportable(a.spaceId, a.id, a)),
   define('wallit_review_confirm_operational', 'Explicitly acknowledge existing pending operational payment, loan or emergency legs.', 'wallit:review', { ...write, id }, a => movementLedger.confirmPendingOperational(a.spaceId, ledger().userId, a.id)),
   define('wallit_transfer_create', 'Record a transfer between two accounts/Spaces you can access. Both new legs are pending review.', 'wallit:write', { ...write, ...transferInput }, a => movementLedger.recordTransfer(a.spaceId, ledger().userId, { ...a, allowIncompleteClassification: true })),
+  define('wallit_transfer_send_to_member', 'Send from a shared Space to a current member: the recipient chooses their account during review. This grants no access to their private finances. Both new legs enter review.', 'wallit:write', { ...write, memberUserId: id, fromAccountId: id, fromAmount: cents, toAmount: cents, fromCurrency: currency, toCurrency: currency, date, note: z.string().max(200).optional(), source: side.optional() }, async a => ({ ...await movementLedger.recordTransfer(a.spaceId, ledger().userId, { ...a, toAccountId: null, destinationSpaceId: context().pendingMemberDestinationId, allowIncompleteClassification: true }), destinationPending: true })),
   define('wallit_transfer_get', 'Read both transfer legs only while you have access to both Spaces.', 'wallit:read', { ...read, movementId: id }, a => transfer.getTransferByMovementId(a.movementId)),
   define('wallit_transfer_update', 'Edit the whole transfer through its Ledger invariants, preserving pending status.', 'wallit:write', { ...write, transferId: id, ...transferInput }, a => transfer.updateTransfer(a.transferId, a)),
   define('wallit_transfer_delete', 'Delete a whole transfer and its linked legs after dependency checks.', 'wallit:write', { ...write, transferId: id }, a => transfer.deleteTransfer(a.transferId)),
@@ -127,7 +129,7 @@ export const mcpTools: ToolDefinition[] = [
   define('wallit_settlement_confirm_transfer', 'Explicitly classify an existing consumed-transfer settlement as operational transfer.', 'wallit:review', { ...write, id }, a => review.confirmSettlementAsTransfer(a.id)),
   define('wallit_emergencies_list', 'Read unsettled emergency expenses.', 'wallit:read', read, () => emergency.getUnsettledEmergencies()),
   define('wallit_emergency_get', 'Read an emergency expense and payment details.', 'wallit:read', { ...read, id }, a => emergency.getEmergencyDetail(a.id)),
-  define('wallit_emergency_pay', 'Record a partial emergency payment between accounts. New legs enter review.', 'wallit:write', { ...write, id, fromAccountId: id, toAccountId: id, amount: cents, date }, a => emergency.settleEmergencyPartial(a.id, a.fromAccountId, a.toAccountId, a.amount, a.date)),
+  define('wallit_emergency_pay', 'Record a partial emergency payment between accounts. New legs enter review.', 'wallit:write', { ...write, id, fromAccountId: id, toAccountId: id, amount: integerCents, date }, a => emergency.settleEmergencyPartial(a.id, a.fromAccountId, a.toAccountId, a.amount, a.date)),
   define('wallit_emergency_settle_direct', 'Settle an emergency expense directly without creating a movement.', 'wallit:write', { ...write, id }, a => emergency.settleEmergencyDirect(a.id)),
   define('wallit_loans_list', 'Read unsettled loans.', 'wallit:read', read, () => loan.getUnsettledLoans()),
   define('wallit_loan_get', 'Read a loan and its payback expenses.', 'wallit:read', { ...read, id }, a => loan.getLoanDetail(a.id)),
@@ -139,7 +141,7 @@ export const mcpTools: ToolDefinition[] = [
   define('wallit_report_category_movements', 'Read reportable expenses for a category/date range.', 'wallit:read', { ...read, startDate: date, endDate: date, categoryId: id.nullable(), accountId: id.optional() }, a => movement.getReportCategoryMovements(a.startDate, a.endDate, a.categoryId, a.accountId)),
   define('wallit_exchange_rate', 'Read the current cached/live USD→CLP rate × 100.', 'wallit:read', read, () => transfer.getCurrentExchangeRate()),
   define('wallit_import_movement', 'Import bank evidence through the existing retry-safe email importer, bound to your identity. Always pending review.', 'wallit:write', { ...write, sourceEmailProvider: z.enum(['bci', 'tenpo', 'mercadopago', 'mach']), sourceEmailId: z.string().min(1).max(500), ...money, originalName: text.optional() }, a => importEmailTransaction({ ...a, kind: 'movement', userId: ledger().userId, needsReview: true, amountUsd: a.amountUsd ?? undefined, exchangeRate: a.exchangeRate ?? undefined, time: a.time ?? undefined })),
-  define('wallit_import_transfer', 'Import retry-safe CLP/USD transfer evidence into two accessible accounts; both new legs enter review.', 'wallit:write', { ...write, ...sourceIdentity, fromAccountId: id, toAccountId: id, currency, amount: cents, amountUsd: cents.optional(), exchangeRate: cents.optional(), toCurrency: currency.optional(), toAmount: cents.optional(), toAmountUsd: cents.optional(), toExchangeRate: cents.optional(), date, time: z.string().max(5).optional(), originalName: text.optional(), sourceName: text.optional(), destinationName: text.optional() }, a => importEmailTransaction({ ...a, kind: 'transfer', userId: ledger().userId })),
+  define('wallit_import_transfer', 'Import retry-safe CLP/USD transfer evidence into two accessible accounts; both new legs enter review.', 'wallit:write', { ...write, ...sourceIdentity, fromAccountId: id, toAccountId: id, currency, amount: cents, amountUsd: integerCents.optional(), exchangeRate: integerCents.optional(), toCurrency: currency.optional(), toAmount: cents.optional(), toAmountUsd: integerCents.optional(), toExchangeRate: integerCents.optional(), date, time: z.string().max(5).optional(), originalName: text.optional(), sourceName: text.optional(), destinationName: text.optional() }, a => importEmailTransaction({ ...a, kind: 'transfer', userId: ledger().userId })),
   define('wallit_import_own_bank_transfer', 'Import own-bank evidence through the domain importer. Missing mapped accounts produce evidence only; mapped legs enter review.', 'wallit:write', { ...write, ...sourceIdentity, amount: cents, date, from: bankEndpoint, to: bankEndpoint, operationTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/).nullable(), reference: z.string().regex(/^\d{1,64}$/).nullable(), originalName: text.optional() }, a => importEmailTransaction({ ...a, currency: 'CLP', kind: 'own-bank-transfer', userId: ledger().userId })),
   define('wallit_bank_imports_list', 'Read your bank-transfer evidence and receipt identities within the authorized Spaces.', 'wallit:read', { ...read, ...paging }, async a => {
     const accessibleAccounts = await db.select({ id: accounts.id }).from(accounts).where(inArray(accounts.spaceId, context().spaces.map(s => s.id)))

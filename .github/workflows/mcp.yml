@@ -31,5 +31,6 @@ jobs:
       - run: npm run test:unit
       - run: npx tsc --noEmit
       - run: npm run db:migrate
+      - run: npx playwright install --with-deps chromium
       - run: npx playwright test --config mcp.playwright.config.ts
       - run: npm run build

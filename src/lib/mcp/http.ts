@@ -1,6 +1,11 @@
 import { publicOrigin, resourceUri, MCP_SCOPES } from './oauth-policy'
 
 export const noStore = { 'Cache-Control': 'no-store', 'Pragma': 'no-cache' }
+// Chromium checks form-action against the post-submit redirect as well.
+// Only the redirect validated against the registered client is allowed here.
+export function consentCsp(registeredRedirect: string) {
+  return `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${new URL(registeredRedirect).origin}; frame-ancestors 'none'; base-uri 'none';`
+}
 export function oauthJson(value: unknown, status = 200) { return Response.json(value, { status, headers: noStore }) }
 export function challenge(scope = MCP_SCOPES.join(' '), status = 401) {
   return Response.json({ error: status === 401 ? 'unauthorized' : 'insufficient_scope' }, { status, headers: {

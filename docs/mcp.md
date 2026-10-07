@@ -9,7 +9,7 @@ Production endpoint: `https://wallit.libt.app/api/mcp` (Streamable HTTP, statele
 - Authorization/registration/token/revocation: `/oauth/authorize`, `/oauth/register`, `/oauth/token`, `/oauth/revoke`
 - User-managed connections and immediate family revocation: `/oauth/connections`, linked from Settings.
 
-OAuth uses public-client dynamic registration (`token_endpoint_auth_method=none`), authorization code, mandatory PKCE S256, exact registered redirect URIs, mandatory resource audience, state, issuer callback identification, and explicit Wallit browser consent. Access tokens expire after 15 minutes, refresh tokens rotate with a 30-day lifetime, and grants expire after 90 days. A consumed code or refresh replay revokes the entire family. Only token hashes are stored. Each MCP request checks expiry, grant revocation and audience; each domain call rechecks the grant and current membership within its transaction.
+OAuth uses public-client dynamic registration (`token_endpoint_auth_method=none`), authorization code, mandatory PKCE S256, exact registered redirect URIs, mandatory resource audience, state, issuer callback identification, and explicit Wallit browser consent. Access tokens expire after 15 minutes, refresh tokens rotate with a 30-day lifetime, and grants expire after 90 days. A consumed code or refresh replay revokes the entire family. Only token hashes are stored. Consent CSP permits the exact validated callback origin so a real browser can complete the redirect, without relaxing the application-wide policy. Each MCP request checks expiry, grant revocation and audience; each domain call rechecks the grant and current membership within its transaction.
 
 The consent screen identifies the logged-in account, application and redirect, explains scopes and persistence, requires an explicit confirmation checkbox, and offers all current/future Spaces or a selected subset. It is bound to the current session, a signed expiring form, an HTTP-only SameSite cookie and the exact Origin. Connection revocation also requires a signed session-bound form and Origin validation. DCR creates public application metadata, without client secrets or financial permissions; it cannot grant account access.
 
@@ -28,13 +28,13 @@ The catalog calls the existing actions and explicit Movement Ledger/import opera
 
 All movement insertion sites in the Ledger and importer pass through `insertLedgerMovements`. MCP origin forces `needsReview=true`, including bulk, both transfer legs, splits, receivable/emergency payments and settlement remainders. A commit-time postcondition also restores pending status when a downstream workflow changes it. New movements cannot be confirmed in the same tool call. Only an explicitly named review tool with the review scope can confirm previously existing movements; ordinary edits preserve pending status. UI and bank cron origin preserve their existing behavior.
 
-Every mutation requires `idempotencyKey` (16–120 characters). Use a new random key for a new intent, and reuse the same key and complete arguments after an uncertain result. A durable user-scoped operation record contains a canonical request fingerprint, tool, Space, arguments, result and timestamp. The same key with changed input fails. A serializable transaction commits domain changes, audit and retry result together; advisory locks serialize participating MCP writers, and serialization/deadlock conflicts retry up to three times. Revocation locks conflict with active domain execution. Referenced accounts, linked transfers/settlements and import duplicate results must remain within current membership and consent. Errors return domain validation messages or generic failure codes, never SQL details or credentials.
+Every mutation requires `idempotencyKey` (16–120 characters). Use a new random key for a new intent, and reuse the same key and complete arguments after an uncertain result. A durable user-scoped operation record contains a canonical request fingerprint, tool, Space, arguments, result and timestamp. The same key with changed input fails. A serializable transaction commits domain changes, audit and retry result together; advisory locks serialize participating MCP writers, and serialization/deadlock conflicts retry up to three times. Revocation locks conflict with active domain execution. Referenced accounts, linked transfers/settlements and fresh/cached import duplicate results must remain within current membership and consent. The existing UI also permits sending from a shared Space to a current member: the dedicated send tool resolves the recipient inbox internally, creates an unassigned pending incoming leg, and returns only the sender’s movement ID. This narrow domain permission exposes no recipient accounts, balances or other movements; later reads/edits still require membership in both Spaces. Errors return domain validation messages or generic failure codes, never SQL details or credentials.
 
 Reads are bounded where timeline/audit/import lists offer pagination (default 50, maximum 200). Review queues and current account/category lists follow the existing UI's complete-list semantics. Historical category/other-Space labels outside consent are hidden. Audit listing returns operation IDs, tool and timestamp, without token records or cross-Space arguments/results.
 
 ## Parity inventory
 
-The following 63 tools map the existing UI and domain capabilities. `tools/list` is the executable input-schema source; strict schemas reject extra fields such as a review-policy override.
+The following 64 tools map the existing UI and domain capabilities. `tools/list` is the executable input-schema source; strict schemas reject extra fields such as a review-policy override.
 
 | Capability in Wallit | MCP parity |
 | --- | --- |
@@ -46,7 +46,7 @@ The following 63 tools map the existing UI and domain capabilities. `tools/list`
 | Investments | Current value and snapshot history/performance/edit/delete |
 | Dashboard/account/timeline | Balances, total/net liquidity, paginated movements, details, receivables, review queue |
 | Income and expenses | Create/bulk/edit/pending correction/delete, normalized CLP/USD money |
-| Transfers | Create/read/whole-transfer edit/delete/review, inter-Space/currency, transform movement |
+| Transfers | Create/read/whole-transfer edit/delete/review, inter-Space/currency, transform movement; narrowly authorized sends to current shared-Space members |
 | Receivables | Mark/unmark, splits, new/existing/cross-Space settlements, transfer-consumption/remainders and explicit classification |
 | Emergencies and loans | Lists/details, partial/direct emergency payment and cash/existing-expense loan settlement |
 | Reports | Date/category/account filtering, category expenses, daily cashflow and balances |
@@ -92,6 +92,7 @@ The following 63 tools map the existing UI and domain capabilities. `tools/list`
 | `wallit_review_confirm` | `wallit:review` | Explicitly confirm an existing standalone pending movement. Never create a new movement. |
 | `wallit_review_confirm_operational` | `wallit:review` | Explicitly acknowledge existing pending operational payment, loan or emergency legs. |
 | `wallit_transfer_create` | `wallit:write` | Record a transfer between two accounts/Spaces you can access. Both new legs are pending review. |
+| `wallit_transfer_send_to_member` | `wallit:write` | Send from a shared Space to a current member: the recipient chooses their account during review. This grants no access to their private finances. Both new legs enter review. |
 | `wallit_transfer_get` | `wallit:read` | Read both transfer legs only while you have access to both Spaces. |
 | `wallit_transfer_update` | `wallit:write` | Edit the whole transfer through its Ledger invariants, preserving pending status. |
 | `wallit_transfer_delete` | `wallit:write` | Delete a whole transfer and its linked legs after dependency checks. |
@@ -132,7 +133,7 @@ The parent must add a custom remote MCP server at the production endpoint in Plu
 
 ## Configuration and verification
 
-Production already supplies `DATABASE_URL` and `AUTH_SECRET`. Consent signing requires `AUTH_SECRET` of at least 32 characters; it is never returned. `MCP_ORIGIN` defaults to `https://wallit.libt.app` and may only be an HTTPS origin in production. A development override accepts HTTP loopback. Migration `0021_remote_mcp.sql` adds only the five authorization/audit tables, without changing financial rows or the bank cron configuration. Apply through the existing deployment migration command.
+Production already supplies `DATABASE_URL` and `AUTH_SECRET`. Consent signing uses `MCP_OAUTH_SECRET`, or falls back to `AUTH_SECRET` only when no dedicated key is configured. The signing key must have at least 32 characters and is never returned. A dedicated key keeps the existing login configuration independent. Generating and persisting a new production key requires explicit user authorization; do not store it in the repository. `MCP_ORIGIN` defaults to `https://wallit.libt.app` and may only be an HTTPS origin in production. A development override accepts HTTP loopback. Migration `0021_remote_mcp.sql` adds only the five authorization/audit tables, without changing financial rows or the bank cron configuration. Apply through the existing deployment migration command.
 
 Local fixture validation:
 
@@ -145,6 +146,6 @@ MCP_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/wallit_mcp_test npx playwrigh
 npm run build
 ```
 
-The test configuration refuses remote databases and non-fixture database names. Real HTTP OAuth/MCP tests exercise every catalog entry (some dependency-rejection paths as well), review origin policy, money/workflows, isolation, scopes/roles, origin, PKCE/redirect/resource validation, expiry/replay/revocation, atomic rollback and concurrent durable retry. CI repeats unit/type/migration/fixture transport/build checks with PostgreSQL 17. Independent review is required before merge. Production checks must verify the exact merged commit and Railway SUCCESS, anonymous 401/discovery/health, then authenticated read after the user's connection consent. Do not test writes on real financial accounts.
+The test configuration refuses remote databases and non-fixture database names. Real HTTP OAuth/MCP tests exercise every catalog entry (some dependency-rejection paths as well), review origin policy, money/workflows, isolation, scopes/roles, origin, PKCE/redirect/resource validation, expiry/replay/revocation, browser login/consent/callback/CSRF/revocation, member inbox sends, large CLP amounts, atomic rollback and concurrent durable retry. CI repeats unit/type/migration/fixture transport/build checks with PostgreSQL 17. Independent review is required before merge. Production checks must verify the exact merged commit and Railway SUCCESS, anonymous 401/discovery/health, then authenticated read after the user's connection consent. Do not test writes on real financial accounts.
 
 Deployment and installed-plugin verification evidence is recorded in the final task handoff. Until cloud installation and authenticated production read are verified, the integration is prepared rather than fully validated end to end.

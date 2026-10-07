@@ -166,6 +166,17 @@ async function getPendingMemberPersonalDestination(actorUserId: string, sourceSp
   return { id: destination.id, name: destination.name, destinationUserId: destination.createdByUserId }
 }
 
+/** UI permission: send from a shared Space to a member's unassigned inbox leg.
+ * This grants no access to that member's accounts, balances or other movements.
+ */
+export async function getPendingTransferMemberDestination(actorUserId: string, sourceSpaceId: string, memberUserId: string): Promise<string | null> {
+  const source = await getMemberSpace(actorUserId, sourceSpaceId)
+  if (!source || source.isPersonal || memberUserId === actorUserId) return null
+  const [personal] = await db.select({ id: spaces.id }).from(spaces).where(and(eq(spaces.createdByUserId, memberUserId), eq(spaces.isPersonal, true), isNull(spaces.archivedAt))).limit(1)
+  if (!personal) return null
+  return (await getPendingMemberPersonalDestination(actorUserId, sourceSpaceId, personal.id))?.id ?? null
+}
+
 async function normalizePendingTransferLeg(amount: number, currency: Currency): Promise<Pick<NormalizedMoney, 'amount' | 'amountUsd' | 'exchangeRate'> | { error: string }> {
   if (!Number.isInteger(amount) || amount <= 0) return { error: 'Amount must be a positive integer' }
   if (currency === 'CLP') return { amount, amountUsd: null, exchangeRate: null }

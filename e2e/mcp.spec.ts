@@ -1,6 +1,8 @@
 import { test, expect, request as api, type APIRequestContext } from '@playwright/test'
 import postgres from 'postgres'
 import { createHash, randomBytes } from 'node:crypto'
+import { createServer } from 'node:http'
+import { hash as hashPassword } from 'bcryptjs'
 
 const origin = 'http://127.0.0.1:3217'
 const databaseUrl = process.env.MCP_TEST_DATABASE_URL!
@@ -189,6 +191,9 @@ test('narrow grants hide historical labels, linked Space data and duplicate impo
   second.categoryId = (await call(request, auth.token, 'wallit_categories_list', { spaceId: second.spaceId }))[0].id
   const emailId = key() + '@fixture.test'
   await call(request, auth.token, 'wallit_import_movement', write(second, { ...money(second), sourceEmailProvider: 'bci', sourceEmailId: emailId }))
+  const duplicateArgs = write(f, { ...money(f), sourceEmailProvider: 'bci', sourceEmailId: emailId })
+  const duplicate = await call(request, auth.token, 'wallit_import_movement', duplicateArgs)
+  expect(duplicate.createdMovementIds).toEqual([])
   const movement = await call(request, auth.token, 'wallit_movement_create', write(f, money(f)))
   // Simulate a historical category link retained by Wallit's migration/domain rules.
   await sql`UPDATE categories SET name = 'Private fixture category' WHERE id = ${second.categoryId}`
@@ -198,6 +203,7 @@ test('narrow grants hide historical labels, linked Space data and duplicate impo
   await call(request, narrow.token, 'wallit_transfer_get', { spaceId: f.spaceId, movementId: transfer.createdMovementIds[0] }, true)
   await call(request, narrow.token, 'wallit_transfer_confirm', write(f, { transferId: transfer.result.transferId }), true)
   await call(request, narrow.token, 'wallit_import_movement', write(f, { ...money(f), sourceEmailProvider: 'bci', sourceEmailId: emailId }), true)
+  await call(request, narrow.token, 'wallit_import_movement', duplicateArgs, true)
   const reports = await call(request, narrow.token, 'wallit_reports', { spaceId: f.spaceId, startDate: '2026-10-01', endDate: '2026-10-31' })
   const timeline = await call(request, narrow.token, 'wallit_movements_list', { spaceId: f.spaceId })
   const queue = await call(request, narrow.token, 'wallit_review_list', { spaceId: f.spaceId })
@@ -207,6 +213,9 @@ test('narrow grants hide historical labels, linked Space data and duplicate impo
   // Own movement descriptions remain historical facts; joined private Space labels do not.
   expect(timeline.data.find((item: { transferId?: string }) => item.transferId === transfer.result.transferId).transferOtherSpaceName).toBeNull()
   expect(queue.items.find((item: { transferId?: string }) => item.transferId === transfer.result.transferId).transferDestinationMovement).toBeNull()
+  const secondOnly = await grant(f, 'wallit:read wallit:write', [second.spaceId])
+  await call(request, secondOnly.token, 'wallit_category_delete', write(second, { id: second.categoryId }), true)
+  expect((await sql`SELECT category_id FROM movements WHERE id = ${movement.createdMovementIds[0]}`)[0].category_id).toBe(second.categoryId)
 })
 
 test('financial parity: categories, account settings, investments, reports, imports and operational workflows', async ({ request }) => {
@@ -303,6 +312,90 @@ test('cross-Space settlements, consumed transfers and restored legs preserve rev
   await call(request, auth.token, 'wallit_member_add', { ...write(f), spaceId: shared, email: member.userId + '@example.test' })
   await call(request, memberAuth.token, 'wallit_space_leave', { ...write(member), spaceId: shared })
   await call(request, auth.token, 'wallit_space_archive', { ...write(f), spaceId: shared })
+})
+
+test('browser login returns to OAuth; consent is explicit, CSRF-protected and revocable', async ({ page, request }) => {
+  let callbackReached = false
+  const callback = createServer((_req, res) => {
+    callbackReached = true
+    res.writeHead(200, { 'Content-Type': 'text/html' })
+    res.end('<h1>Fixture callback</h1>')
+  })
+  await new Promise<void>(resolve => callback.listen(0, '127.0.0.1', resolve))
+  const address = callback.address()
+  if (!address || typeof address === 'string') throw new Error('Missing fixture callback address')
+  const callbackOrigin = `http://127.0.0.1:${address.port}`
+  try {
+  const f = await fixture(), password = 'local-mcp-fixture-password'
+  await sql`UPDATE users SET password_hash = ${await hashPassword(password, 10)} WHERE id = ${f.userId}`
+  const registration = await request.post('/oauth/register', { data: { client_name: 'Fixture Codex', redirect_uris: [`${callbackOrigin}/callback`] } })
+  expect(registration.status()).toBe(201)
+  const clientId = (await registration.json()).client_id
+  const verifier = randomBytes(32).toString('base64url')
+  const params = new URLSearchParams({ client_id: clientId, redirect_uri: `${callbackOrigin}/callback`, response_type: 'code', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', resource: `${origin}/api/mcp`, state: 'fixture-state', scope: 'wallit:read' })
+  for (const invalid of [{ redirect_uri: 'https://attacker.example.test' }, { code_challenge_method: 'plain' }, { scope: 'wallit:superuser' }]) {
+    const invalidParams = new URLSearchParams(params)
+    Object.entries(invalid).forEach(([key, value]) => invalidParams.set(key, value))
+    expect((await request.get(`/oauth/authorize?${invalidParams}`)).status()).toBe(400)
+  }
+  await page.goto(`/oauth/authorize?${params}`)
+  await expect(page).toHaveURL(/\/login\?returnTo=/)
+  await page.getByLabel('Email').fill(f.userId + '@example.test')
+  await page.getByLabel('Contraseña').fill(password)
+  await page.getByRole('button', { name: /Iniciar sesión/ }).click()
+  await expect(page.getByRole('heading', { name: 'Conectar Fixture Codex' })).toBeVisible()
+  const consentPage = await page.reload()
+  expect(consentPage!.headers()['content-security-policy']).toContain(`form-action 'self' ${callbackOrigin};`)
+  expect(consentPage!.headers()['content-security-policy']).not.toContain("form-action 'self';")
+  await expect(page.locator('input[name="confirm"]')).not.toBeChecked()
+  const signed = await page.locator('input[name="consent"]').inputValue()
+  const csrf = await page.locator('input[name="csrf"]').inputValue()
+  const consentBody = { consent: signed, csrf, confirm: 'yes', decision: 'allow', spaceAccess: 'all' }
+  expect((await page.request.post('/oauth/authorize', { headers: { Origin: 'https://attacker.example.test' }, form: consentBody })).status()).toBe(400)
+  expect((await page.request.post('/oauth/authorize', { headers: { Origin: origin }, form: { ...consentBody, csrf: 'wrong' } })).status()).toBe(400)
+  expect(Number((await sql`SELECT count(*) AS n FROM mcp_grants WHERE user_id = ${f.userId}`)[0].n)).toBe(0)
+  await page.screenshot({ path: '/tmp/wallit-mcp-consent-desktop.png', fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: '/tmp/wallit-mcp-consent-mobile.png', fullPage: true })
+  await page.locator('input[name="confirm"]').check()
+  const approvalResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/oauth/authorize' && response.request().method() === 'POST')
+  await page.getByRole('button', { name: 'Autorizar conexión' }).click()
+  expect((await approvalResponse).status()).toBe(303)
+  await expect.poll(() => callbackReached).toBe(true)
+  await expect(page).toHaveURL(url => url.origin === callbackOrigin)
+  expect(Number((await sql`SELECT count(*) AS n FROM mcp_grants WHERE user_id = ${f.userId}`)[0].n)).toBe(1)
+  const replay = await page.request.post(`${origin}/oauth/authorize`, { headers: { Origin: origin }, form: consentBody, maxRedirects: 0 })
+  expect(replay.status()).toBe(400)
+  await page.goto('/oauth/connections')
+  await expect(page.getByRole('heading', { name: 'Conexiones', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Revocar conexión' }).click()
+  await expect(page.getByText('No tienes conexiones activas.')).toBeVisible()
+  expect((await sql`SELECT revoked_at FROM mcp_grants WHERE user_id = ${f.userId}`)[0].revoked_at).not.toBeNull()
+  } finally {
+    await new Promise<void>((resolve, reject) => callback.close(error => error ? reject(error) : resolve()))
+  }
+})
+
+test('shared-Space member sends create pending recipient legs without private access', async ({ request }) => {
+  const a = await fixture(), b = await fixture(), auth = await grant(a)
+  const shared = await call(request, auth.token, 'wallit_space_create', write(a, { name: 'Member payment fixture', emoji: '🏠' }))
+  const source = { ...a, spaceId: shared.result.id }
+  await call(request, auth.token, 'wallit_member_add', write(source, { email: b.userId + '@example.test' }))
+  source.accountId = (await call(request, auth.token, 'wallit_account_create', write(source, { bankName: 'bci', accountType: 'Corriente', lastFourDigits: '4444', currency: 'CLP' }))).result.account.id
+  const sent = await call(request, auth.token, 'wallit_transfer_send_to_member', write(source, { memberUserId: b.userId, fromAccountId: source.accountId, fromAmount: 3_000_000_000, toAmount: 3_000_000_000, fromCurrency: 'CLP', toCurrency: 'CLP', date: '2026-10-06' }))
+  expect(sent.createdMovementIds.length).toBe(1)
+  const rows = await sql`SELECT id, needs_review, space_id, account_id FROM movements WHERE id IN (SELECT source_movement_id FROM transfers WHERE id = ${sent.result.transferId}) OR id IN (SELECT destination_movement_id FROM transfers WHERE id = ${sent.result.transferId})`
+  expect(rows.length).toBe(2)
+  expect(rows.every(row => row.needs_review)).toBe(true)
+  expect(rows.find(row => row.space_id === b.spaceId).account_id).toBeNull()
+  await call(request, auth.token, 'wallit_accounts_list', { spaceId: b.spaceId }, true)
+  await call(request, auth.token, 'wallit_transfer_get', { spaceId: source.spaceId, movementId: sent.createdMovementIds[0] }, true)
+  const recipient = await grant(b)
+  const queue = await call(request, recipient.token, 'wallit_review_list', { spaceId: b.spaceId })
+  expect(queue.items.some((row: { transferId?: string }) => row.transferId === sent.result.transferId)).toBe(true)
+  await call(request, auth.token, 'wallit_member_remove', write(source, { userId: b.userId }))
+  await call(request, auth.token, 'wallit_transfer_send_to_member', write(source, { memberUserId: b.userId, fromAccountId: source.accountId, fromAmount: 10000, toAmount: 10000, fromCurrency: 'CLP', toCurrency: 'CLP', date: '2026-10-06' }), true)
 })
 
 test('concurrent callers serialize retries without duplicate creation or lost pending status', async ({ request }) => {

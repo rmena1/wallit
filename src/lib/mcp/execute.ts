@@ -1,6 +1,7 @@
 import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
 import { getDb, movements, mcpGrants, mcpOperations, accounts, transfers, receivableSettlements, ownBankTransferImports } from '@/lib/db'
 import { domainExecution } from '@/lib/domain/execution-context'
+import { getPendingTransferMemberDestination } from '@/lib/domain/movement-ledger'
 import { getAvailableSpaces } from '@/lib/spaces'
 import { randomToken, tokenHash } from './oauth-policy'
 import type { McpPrincipal } from './oauth'
@@ -45,11 +46,22 @@ async function executeAttempt(principal: McpPrincipal, name: string, raw: unknow
     if (!selected) throw new McpError('forbidden', 'Space unavailable')
     if (name === 'wallit_space_create' && grant.spaceIds !== null) throw new McpError('forbidden', 'Creating Spaces requires consent for all Spaces')
     const allowedIds = new Set(allowed.map(space => space.id))
+    // The UI allows a narrowly scoped send to a current shared-Space member.
+    // Resolve the unassigned destination internally; never expose recipient finances.
+    const pendingMemberDestinationId = name === 'wallit_transfer_send_to_member'
+      ? await domainExecution.run(initial, () => getPendingTransferMemberDestination(principal.user.id, selected.id, String(args.memberUserId)))
+      : undefined
+    if (name === 'wallit_transfer_send_to_member' && !pendingMemberDestinationId) throw new McpError('forbidden', 'Member destination unavailable')
+    // Category deletion SET NULLs historical movement links, sometimes in other Spaces.
+    if (name === 'wallit_category_delete') {
+      const references = await tx.select({ spaceId: movements.spaceId }).from(movements).where(eq(movements.categoryId, String(args.id)))
+      if (references.some(row => !allowedIds.has(row.spaceId))) throw new McpError('forbidden', 'Category has references outside authorized Spaces')
+    }
     for (const field of ['destinationSpaceId', 'payingSpaceId']) {
       if (args[field] && !allowedIds.has(String(args[field]))) throw new McpError('forbidden', 'Space unavailable')
     }
     // Serialize MCP writers sharing any Space. Serializable isolation also detects UI/cron races.
-    if (tool.write) for (const spaceId of [...allowedIds].sort()) await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:mcp:space:${spaceId}`}, 0))`)
+    if (tool.write) for (const spaceId of [...new Set([...allowedIds, ...(pendingMemberDestinationId ? [pendingMemberDestinationId] : [])])].sort()) await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:mcp:space:${spaceId}`}, 0))`)
     // Validate all referenced accounts against membership AND the grant, including nested/bulk inputs.
     const referencedAccounts: string[] = []
     const collectAccounts = (value: unknown) => {
@@ -77,43 +89,48 @@ async function executeAttempt(principal: McpPrincipal, name: string, raw: unknow
       const [prior] = await tx.select().from(mcpOperations).where(and(eq(mcpOperations.userId, principal.user.id), eq(mcpOperations.key, String(args.idempotencyKey))))
       if (prior) {
         if (prior.fingerprint !== fingerprint) throw new McpError('idempotency_conflict', 'Idempotency key already used with different input')
+        if (name.startsWith('wallit_import_')) await authorizeImportResult(tx, principal.user.id, grant.spaceIds === null, allowedIds, (prior.result as { result: unknown }).result)
         return prior.result
       }
     }
     const pendingBefore = tool.write && !tool.review ? await tx.select({ id: movements.id }).from(movements).where(and(inArray(movements.spaceId, [...allowedIds]), eq(movements.needsReview, true))) : []
-    const execution = { ...initial, space: selected, spaces: allowed }
+    const execution = { ...initial, space: selected, spaces: allowed, pendingMemberDestinationId: pendingMemberDestinationId ?? undefined }
     const result = await domainExecution.run(execution, () => tool.run(args))
     if (result && typeof result === 'object' && 'success' in result && result.success === false) throw new McpError('domain_error', 'error' in result ? String(result.error) : 'Operation rejected')
-    // Import deduplication can resolve an earlier identity in a different Space.
-    // Recheck its actual result before returning IDs or committing receipt changes.
-    if (name.startsWith('wallit_import_') && result && typeof result === 'object') {
-      const imported = result as Record<string, unknown>
-      const ids = ['movementId', 'sourceMovementId', 'destinationMovementId'].map(key => imported[key]).filter((id): id is string => typeof id === 'string')
-      if (ids.length) {
-        const rows = await tx.select({ id: movements.id, spaceId: movements.spaceId }).from(movements).where(inArray(movements.id, ids))
-        if (ids.some(id => !rows.some(row => row.id === id && allowedIds.has(row.spaceId)))) throw new McpError('forbidden', 'Import unavailable')
-      }
-      if (typeof imported.transferId === 'string') {
-        const [root] = await tx.select().from(transfers).where(eq(transfers.id, imported.transferId))
-        if (!root || !allowedIds.has(root.sourceSpaceId) || !allowedIds.has(root.destinationSpaceId)) throw new McpError('forbidden', 'Import unavailable')
-      }
-      if (typeof imported.bankTransferImportId === 'string') {
-        const [record] = await tx.select().from(ownBankTransferImports).where(and(eq(ownBankTransferImports.id, imported.bankTransferImportId), eq(ownBankTransferImports.createdByUserId, principal.user.id)))
-        const accountIds = [record?.fromAccountId, record?.toAccountId].filter((id): id is string => typeof id === 'string')
-        const rows = accountIds.length ? await tx.select({ id: accounts.id, spaceId: accounts.spaceId }).from(accounts).where(inArray(accounts.id, accountIds)) : []
-        if (!record || (grant.spaceIds !== null && !accountIds.length) || accountIds.some(id => !rows.some(row => row.id === id && allowedIds.has(row.spaceId)))) throw new McpError('forbidden', 'Import unavailable')
-      }
-    }
-    const createdMovementIds = [...execution.createdMovementIds]
+    if (name.startsWith('wallit_import_')) await authorizeImportResult(tx, principal.user.id, grant.spaceIds === null, allowedIds, result)
+    const attemptedMovementIds = [...execution.createdMovementIds]
+    // ON CONFLICT DO NOTHING is used by imports. Audit only persisted new IDs.
+    const created = attemptedMovementIds.length ? await tx.select({ id: movements.id, spaceId: movements.spaceId }).from(movements).where(inArray(movements.id, attemptedMovementIds)) : []
+    const createdMovementIds = created.map(row => row.id)
     const pendingIds = [...new Set([...createdMovementIds, ...pendingBefore.map(m => m.id)])]
     if (createdMovementIds.length) {
-      const created = await tx.select({ spaceId: movements.spaceId }).from(movements).where(inArray(movements.id, createdMovementIds))
-      if (created.some(row => !allowedIds.has(row.spaceId))) throw new McpError('forbidden', 'Created movement outside authorized Spaces')
+      if (created.some(row => !allowedIds.has(row.spaceId) && row.spaceId !== pendingMemberDestinationId)) throw new McpError('forbidden', 'Created movement outside authorized Spaces')
     }
     // A workflow can update a new leg after insertion. Enforce the origin postcondition at commit too.
     if (pendingIds.length) await tx.update(movements).set({ needsReview: true }).where(and(inArray(movements.id, pendingIds), eq(movements.needsReview, false)))
-    const safeResult = JSON.parse(JSON.stringify(tool.write ? { result, createdMovementIds, operationId: randomToken() } : result))
+    const visibleCreatedIds = created.filter(row => allowedIds.has(row.spaceId)).map(row => row.id)
+    const safeResult = JSON.parse(JSON.stringify(tool.write ? { result, createdMovementIds: visibleCreatedIds, operationId: randomToken() } : result))
     if (tool.write) await tx.insert(mcpOperations).values({ id: safeResult.operationId, userId: principal.user.id, grantId: grant.id, key: String(args.idempotencyKey), fingerprint, tool: name, spaceId: selected.id, arguments: args, result: safeResult })
     return safeResult
   }, { isolationLevel: 'serializable' })
+}
+
+async function authorizeImportResult(client: Pick<ReturnType<typeof getDb>, 'select'>, userId: string, allSpaces: boolean, allowedIds: Set<string>, result: unknown) {
+  if (!result || typeof result !== 'object') throw new McpError('forbidden', 'Import unavailable')
+  const imported = result as Record<string, unknown>
+  const ids = ['movementId', 'sourceMovementId', 'destinationMovementId'].map(key => imported[key]).filter((id): id is string => typeof id === 'string')
+  if (ids.length) {
+    const rows = await client.select({ id: movements.id, spaceId: movements.spaceId }).from(movements).where(inArray(movements.id, ids))
+    if (ids.some(id => !rows.some(row => row.id === id && allowedIds.has(row.spaceId)))) throw new McpError('forbidden', 'Import unavailable')
+  }
+  if (typeof imported.transferId === 'string') {
+    const [root] = await client.select().from(transfers).where(eq(transfers.id, imported.transferId))
+    if (!root || !allowedIds.has(root.sourceSpaceId) || !allowedIds.has(root.destinationSpaceId)) throw new McpError('forbidden', 'Import unavailable')
+  }
+  if (typeof imported.bankTransferImportId === 'string') {
+    const [record] = await client.select().from(ownBankTransferImports).where(and(eq(ownBankTransferImports.id, imported.bankTransferImportId), eq(ownBankTransferImports.createdByUserId, userId)))
+    const accountIds = [record?.fromAccountId, record?.toAccountId].filter((id): id is string => typeof id === 'string')
+    const rows = accountIds.length ? await client.select({ id: accounts.id, spaceId: accounts.spaceId }).from(accounts).where(inArray(accounts.id, accountIds)) : []
+    if (!record || (!allSpaces && !accountIds.length) || accountIds.some(id => !rows.some(row => row.id === id && allowedIds.has(row.spaceId)))) throw new McpError('forbidden', 'Import unavailable')
+  }
 }

@@ -23,7 +23,7 @@ export function validRedirect(value: string): boolean {
   } catch { return false }
 }
 export function signConsent(data: Record<string, unknown>): string {
-  const secret = process.env.AUTH_SECRET
+  const secret = process.env.MCP_OAUTH_SECRET ?? process.env.AUTH_SECRET
   if (!secret || secret.length < 32) throw new Error('OAuth signing unavailable')
   const body = Buffer.from(JSON.stringify(data)).toString('base64url')
   return `${body}.${createHmac('sha256', secret).update(body).digest('base64url')}`

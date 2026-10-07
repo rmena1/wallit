@@ -16,6 +16,7 @@ if (existsSync(cachedLdPathFile)) {
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: '**/mcp.spec.ts',
   outputDir: './e2e-results',
   fullyParallel: false,
   retries: 0,

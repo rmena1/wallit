@@ -9,6 +9,7 @@ export type DomainExecution = {
   space: AvailableSpace
   spaces: AvailableSpace[]
   allSpaces: boolean
+  pendingMemberDestinationId?: string
   client: ReturnType<typeof getDb>
   createdMovementIds: Set<string>
 }
