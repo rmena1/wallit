@@ -208,6 +208,8 @@ _Avoid_: Viewer
 
 ## Flagged ambiguities
 
+- Remote MCP is an authenticated user-facing caller with explicit OAuth scopes and consented **Spaces**, constrained by current **Memberships**. Every new **Movement** created through this caller starts as a **Pending Review Movement**, including operational payment and **Transfer** legs that other callers normally confirm immediately. MCP cannot override this origin rule; a separate explicit review operation can confirm existing movements. Browser UI and bank-import cron retain their existing origin policies.
+
 - "Movement" was previously used broadly for both atomic account-level money movements and higher-level financial workflows. Resolved: a **Movement** is atomic, account-level, and balance-affecting; composed workflows like **Transfer** are modeled through relationships between Movements.
 - "Aporte a Space" was considered for moving money from Personal to Casa. Resolved: the canonical term is **Inter-Space Transfer**, because the operation is symmetric and general, not specific to household contributions.
 - "Transferencia que salda un por cobrar" was considered for household reimbursements. Resolved: the canonical workflow is **Receivable Settlement Expense**. A settlement born from consuming an **Inter-Space Transfer** may be confirmed in review as an **Inter-Space Transfer** with both existing legs non-reportable, preserving the collection; direct new payments retain expense classification.

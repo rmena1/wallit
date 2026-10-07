@@ -1,4 +1,4 @@
-import { pgTable, text, integer, bigint, boolean, timestamp, index, uniqueIndex, check } from 'drizzle-orm/pg-core'
+import { pgTable, text, integer, bigint, boolean, timestamp, index, uniqueIndex, check, jsonb } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 
 // ============================================================================
@@ -24,6 +24,53 @@ export const sessions = pgTable('sessions', {
   index('idx_sessions_user').on(table.userId),
   index('idx_sessions_expires').on(table.expiresAt),
 ])
+
+// MCP credentials are opaque, independently expiring, and stored only as hashes.
+export const mcpClients = pgTable('mcp_clients', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  redirectUris: jsonb('redirect_uris').$type<string[]>().notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+export const mcpGrants = pgTable('mcp_grants', {
+  id: text('id').primaryKey(),
+  consentHash: text('consent_hash').notNull().unique(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  clientId: text('client_id').notNull().references(() => mcpClients.id),
+  scopes: jsonb('scopes').$type<string[]>().notNull(),
+  spaceIds: jsonb('space_ids').$type<string[] | null>(), // null: all current/future memberships
+  resource: text('resource').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  revokedAt: timestamp('revoked_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, table => [index('idx_mcp_grants_user').on(table.userId)])
+export const mcpCodes = pgTable('mcp_codes', {
+  hash: text('hash').primaryKey(),
+  grantId: text('grant_id').notNull().references(() => mcpGrants.id, { onDelete: 'cascade' }),
+  redirectUri: text('redirect_uri').notNull(),
+  challenge: text('challenge').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  usedAt: timestamp('used_at'),
+})
+export const mcpTokens = pgTable('mcp_tokens', {
+  hash: text('hash').primaryKey(),
+  grantId: text('grant_id').notNull().references(() => mcpGrants.id, { onDelete: 'cascade' }),
+  kind: text('kind').$type<'access' | 'refresh'>().notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  usedAt: timestamp('used_at'),
+}, table => [index('idx_mcp_tokens_grant').on(table.grantId)])
+export const mcpOperations = pgTable('mcp_operations', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  grantId: text('grant_id').notNull().references(() => mcpGrants.id, { onDelete: 'cascade' }),
+  key: text('key').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  tool: text('tool').notNull(),
+  spaceId: text('space_id').notNull(),
+  arguments: jsonb('arguments').$type<Record<string, unknown>>().notNull(),
+  result: jsonb('result').$type<unknown>().notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, table => [uniqueIndex('idx_mcp_operations_user_key').on(table.userId, table.key)])
 
 // ============================================================================
 // SPACES

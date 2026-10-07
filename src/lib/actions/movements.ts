@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { categoryReadAccess, otherSpaceReadAccess } from '@/lib/domain/read-access'
 import { db, movements, categories, accounts, transfers, receivableSettlements } from '@/lib/db'
 import { eq, and, desc, gte, isNull, lte, sql, type SQL } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
@@ -150,7 +151,7 @@ export async function getMovementById(id: string) {
       accountLastFour: accounts.lastFourDigits,
     })
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess()))
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(eq(movements.id, id), eq(movements.spaceId, space.id)))
   return results[0] || null
@@ -187,7 +188,7 @@ export async function getMovements() {
       accountLastFour: accounts.lastFourDigits,
     })
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess()))
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(eq(movements.spaceId, space.id))
     .orderBy(desc(movements.date), desc(movements.createdAt))
@@ -288,6 +289,7 @@ export async function getMovementsPaginated(
           SELECT 1
           FROM space_memberships other_membership
           WHERE other_membership.user_id = ${session.id}
+            AND ${otherSpaceReadAccess()}
             AND other_membership.space_id = CASE
               WHEN ${transfers.sourceMovementId} = ${movements.id} THEN ${transfers.destinationSpaceId}
               ELSE ${transfers.sourceSpaceId}
@@ -304,7 +306,7 @@ export async function getMovementsPaginated(
   const results = await db
     .select(baseSelect)
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess()))
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(whereCondition)
     .orderBy(desc(movements.date), desc(movements.createdAt))

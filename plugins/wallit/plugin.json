@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "wallit",
+  "version": "1.0.0",
+  "description": "Operate your Wallit finances through authenticated remote tools. New movements enter review.",
+  "homepage": "https://wallit.libt.app",
+  "repository": "https://github.com/rmena1/wallit",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Wallit",
+        "shortDescription": "Manage your finances and review movements",
+        "developerName": "Wallit",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://wallit.libt.app",
+        "brandColor": "#22c55e",
+        "defaultPrompt": ["Revisa mis movimientos pendientes en Wallit.", "Muéstrame mis saldos y reportes de Wallit."]
+      }
+    }
+  }
+}

@@ -34,6 +34,13 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
           },
+
+        ],
+      },
+      {
+        // Authorization emits its own policy for the validated OAuth callback.
+        source: "/((?!oauth/authorize$).*)",
+        headers: [
           {
             key: "Content-Security-Policy",
             value: process.env.NODE_ENV === 'production'

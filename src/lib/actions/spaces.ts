@@ -1,6 +1,7 @@
 'use server'
 
 import { cookies } from 'next/headers'
+import { domainExecution } from '@/lib/domain/execution-context'
 import { revalidatePath } from 'next/cache'
 import { and, eq, isNull, ne, sql } from 'drizzle-orm'
 import { db, spaces, spaceMemberships, users } from '@/lib/db'
@@ -31,6 +32,7 @@ function fail(error: string): SpaceActionResult {
 }
 
 async function setActiveSpaceCookie(spaceId: string) {
+  if (domainExecution.getStore()) return
   const cookieStore = await cookies()
   cookieStore.set(ACTIVE_SPACE_COOKIE, spaceId, {
     httpOnly: true,
@@ -242,7 +244,7 @@ export async function leaveSpace(spaceId: string): Promise<SpaceActionResult> {
     .where(and(eq(spaceMemberships.spaceId, spaceId), eq(spaceMemberships.userId, user.id)))
     .returning({ id: spaceMemberships.id })
   if (!removedMembership) return fail('Space no disponible')
-  if (space.id === spaceId) {
+  if (space.id === spaceId && !domainExecution.getStore()) {
     const cookieStore = await cookies()
     cookieStore.delete(ACTIVE_SPACE_COOKIE)
   }
@@ -266,7 +268,7 @@ export async function archiveSpace(spaceId: string): Promise<SpaceActionResult> 
     .where(eq(spaces.id, spaceId))
     .returning({ id: spaces.id })
   if (!archivedSpace) return fail('Space no disponible')
-  if (space.id === spaceId) {
+  if (space.id === spaceId && !domainExecution.getStore()) {
     const cookieStore = await cookies()
     cookieStore.delete(ACTIVE_SPACE_COOKIE)
   }

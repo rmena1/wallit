@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server'
 // Routes that don't require authentication
 const publicRoutes = ['/login', '/register', '/forgot-password', '/api/health']
 const authenticatedApiRoutes = ['/api/import/email']
+const oauthRoutes = ['/api/mcp', '/oauth/authorize', '/oauth/token', '/oauth/register', '/oauth/revoke', '/oauth/connections']
 
 // Routes that should redirect to home if already authenticated
 const authRoutes = ['/login', '/register', '/forgot-password']
@@ -19,8 +20,9 @@ const securityHeaders = {
   'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
 }
 
-function applySecurityHeaders(response: NextResponse): NextResponse {
+function applySecurityHeaders(response: NextResponse, includeCsp = true): NextResponse {
   for (const [key, value] of Object.entries(securityHeaders)) {
+    if (key === 'Content-Security-Policy' && !includeCsp) continue
     response.headers.set(key, value)
   }
   return response
@@ -41,11 +43,15 @@ export function middleware(request: NextRequest) {
   // If accessing protected routes while not authenticated, redirect to login
   if (!isAuthenticated
     && !publicRoutes.some(route => route === '/api/health' ? pathname === route : pathname.startsWith(route))
-    && !authenticatedApiRoutes.some(route => pathname === route)) {
+    && !authenticatedApiRoutes.some(route => pathname === route)
+    && !oauthRoutes.includes(pathname)
+    && !pathname.startsWith('/.well-known/')) {
     return applySecurityHeaders(NextResponse.redirect(new URL('/login', request.url)))
   }
   
-  return applySecurityHeaders(NextResponse.next())
+  // The consent route emits a validated callback-specific form-action policy.
+  // Two CSP headers would intersect and retain the global self-only restriction.
+  return applySecurityHeaders(NextResponse.next(), pathname !== '/oauth/authorize')
 }
 
 export const config = {

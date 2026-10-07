@@ -1,3 +1,4 @@
+import { insertLedgerMovements } from '@/lib/domain/ledger-insert'
 import { normalizeBankEndpoint, bankOperationKey, type BankEndpoint } from './own-bank-transfer'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { accounts, categories, db, movements, spaces, spaceMemberships, transfers, ownBankTransferImports, ownBankTransferReceipts } from '@/lib/db'
@@ -169,7 +170,7 @@ async function importMovement(input: EmailMovementImport): Promise<ImportResult>
   try { money = normalizeMoney(input) } catch (error) { return fail(error instanceof Error ? error.message : 'Invalid money') }
 
   return db.transaction(async (tx) => {
-    const [inserted] = await tx.insert(movements).values({
+    const [inserted] = await insertLedgerMovements(tx).values({
       id: generateId(),
       spaceId: account.spaceId,
       createdByUserId: identity.userId,
@@ -237,7 +238,7 @@ async function importTransfer(input: EmailTransferImport, executor: Pick<typeof 
 
   return executor.transaction(async (tx) => {
     const sourceMovementId = generateId()
-    const [insertedSource] = await tx.insert(movements).values({
+    const [insertedSource] = await insertLedgerMovements(tx).values({
       id: sourceMovementId,
       spaceId: fromAccount.spaceId,
       createdByUserId: identity.userId,
@@ -278,7 +279,7 @@ async function importTransfer(input: EmailTransferImport, executor: Pick<typeof 
 
     const destinationMovementId = generateId()
     const transferId = generateId()
-    await tx.insert(movements).values({
+    await insertLedgerMovements(tx).values({
       id: destinationMovementId,
       spaceId: toAccount.spaceId,
       createdByUserId: identity.userId,

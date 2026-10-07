@@ -150,6 +150,8 @@ export async function login(formData: FormData): Promise<AuthActionResult> {
   
   // Create session and redirect
   await createSession(user[0].id)
+  const returnTo = formData.get('returnTo')
+  if (typeof returnTo === 'string' && returnTo.startsWith('/oauth/authorize?') && returnTo.length < 12000) redirect(returnTo)
   redirect('/')
 }
 

@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { categoryReadAccess } from '@/lib/domain/read-access'
 import { db, movements, categories, accounts, transfers, receivableSettlements } from '@/lib/db'
 import { movementLedger, type AmountInputMode } from '@/lib/domain/movement-ledger'
 import { eq, and, desc, inArray, or, sql } from 'drizzle-orm'
@@ -57,7 +58,7 @@ export async function getPendingReviewMovements() {
       )`,
     })
     .from(movements)
-    .leftJoin(categories, eq(movements.categoryId, categories.id))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess()))
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(eq(movements.spaceId, space.id), eq(movements.needsReview, true)))
     .orderBy(desc(movements.date), desc(movements.createdAt))

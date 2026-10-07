@@ -92,6 +92,13 @@
       "when": 1791054000000,
       "tag": "0020_category_history_index",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791329358715,
+      "tag": "0021_remote_mcp",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,7 @@ import { cookies } from 'next/headers'
 import { randomBytes } from 'crypto'
 import { db, sessions, users } from '@/lib/db'
 import { eq, and, gt, lt } from 'drizzle-orm'
+import { domainExecution } from '@/lib/domain/execution-context'
 
 const SESSION_COOKIE_NAME = 'wallit_session'
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
@@ -73,6 +74,8 @@ export async function createSession(userId: string): Promise<string> {
  * Wrapped with React.cache() to deduplicate DB lookups within a single request.
  */
 export const getSession = cache(async (): Promise<SessionUser | null> => {
+  const execution = domainExecution.getStore()
+  if (execution) return execution.user
   const cookieStore = await cookies()
   const sessionId = cookieStore.get(SESSION_COOKIE_NAME)?.value
   
