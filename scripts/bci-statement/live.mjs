@@ -155,10 +155,18 @@ async function checkPage(page, stage) {
 function trusted(url, bank) {
   try { const u = new URL(url); return u.protocol === 'https:' && (bank === 'personas' ? (u.hostname === 'bci.cl' || u.hostname.endsWith('.bci.cl')) : u.hostname === 'www.liderbciserviciosfinancieros.cl'); } catch { return false; }
 }
+// Cloudflare managed challenges answer with an error status (403/503) and a challenge page; report them as security controls, not HTTP failures.
+async function isAccessChallenge(page, response) {
+  if (/challenge/i.test(response.headers()['cf-mitigated'] ?? '') || /[?&]__cf_chl_/.test(page.url())) return true;
+  const texts = await bodyTexts(page);
+  return texts.some(t => /comprobaci[oó]n adicional|resuelva el siguiente desaf[ií]o|verify you are human|checking your browser|just a moment/i.test(t));
+}
 export async function goto(page, url, stage) {
   const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: WAIT });
   const humanControl = humanControls.get(page.context());
   if (humanControl) await humanControl(page);
+  if (response && response.status() >= 400 && await isAccessChallenge(page, response))
+    fail('BANK_ACCESS_CHALLENGE', stage, `El acceso del banco fue interceptado por una validación de seguridad (HTTP ${response.status()}, ${page.url()}); se detuvo sin resolverla.`);
   if (!response || response.status() >= 400) fail('BANK_HTTP_ERROR', stage, `El portal no respondió correctamente (HTTP ${response?.status() ?? 'sin respuesta'}).`);
   await settle(page, stage);
 }

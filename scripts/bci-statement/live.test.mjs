@@ -146,6 +146,20 @@ test('bank HTTP failure stops the browser before sending credentials', async () 
   } finally { await browser.close(); }
 });
 
+test('a Cloudflare challenge page with HTTP 403 is reported as an access challenge without sending credentials', async () => {
+  const browser = await chromium.launch({ headless: true, env: browserEnvironment() });
+  let submissions = 0;
+  try {
+    const context = await browser.newContext();
+    await context.route('**/*', async route => {
+      if (route.request().method() === 'POST') submissions++;
+      await route.fulfill({ status: 403, headers: { 'cf-mitigated': 'challenge' }, contentType: 'text/html; charset=utf-8', body: '<title>Error en la pagina</title><p>Estimado Usuario Por política de seguridad, se le solicita una comprobación adicional. Por favor resuelva el siguiente desafío:</p>' });
+    });
+    await assert.rejects(login(context, 'personas', credentials(process.env)), { code: 'BANK_ACCESS_CHALLENGE' });
+    assert.equal(submissions, 0);
+  } finally { await browser.close(); }
+});
+
 for (const variant of ['direct', 'optional-device', 'json-handoff', 'hidden-handoff', 'titular']) {
   test(`login preserves the ${variant} route without a second credential submission`, async () => {
     const browser = await chromium.launch({ headless: true, env: browserEnvironment() });
