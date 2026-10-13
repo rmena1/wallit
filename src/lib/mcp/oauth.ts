@@ -1,6 +1,6 @@
 import { and, eq, gt, isNull } from 'drizzle-orm'
 import { db, mcpClients, mcpCodes, mcpGrants, mcpTokens, users } from '@/lib/db'
-import { randomToken, tokenHash, resourceUri, pkceChallenge } from './oauth-policy'
+import { randomToken, tokenHash, resourceUri, validResource, pkceChallenge, ignoreUnknownScopes } from './oauth-policy'
 
 type Grant = typeof mcpGrants.$inferSelect
 export type McpPrincipal = { user: { id: string; email: string }; grant: Grant }
@@ -27,7 +27,7 @@ export async function authenticateMcp(header: string | null): Promise<McpPrincip
 
 /** Grant locking makes code redemption and refresh rotation single use across replicas. */
 export async function exchangeToken(form: URLSearchParams) {
-  if (form.get('resource') !== resourceUri()) return { error: 'invalid_target' }
+  if (!validResource(form.get('resource'))) return { error: 'invalid_target' }
   const clientId = form.get('client_id')
   const [client] = clientId ? await db.select().from(mcpClients).where(eq(mcpClients.id, clientId)).limit(1) : []
   if (!client) return { error: 'invalid_client' }
@@ -58,7 +58,7 @@ export async function exchangeToken(form: URLSearchParams) {
       if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || pkceChallenge(verifier) !== code.challenge || form.get('redirect_uri') !== code.redirectUri) return { error: 'invalid_grant' }
       await tx.update(mcpCodes).set({ usedAt: new Date() }).where(eq(mcpCodes.hash, code.hash))
     } else {
-      if (form.has('scope') && form.get('scope') !== grant.scopes.join(' ')) return { error: 'invalid_scope' }
+      if (form.has('scope') && ignoreUnknownScopes(form.get('scope')!) !== grant.scopes.join(' ')) return { error: 'invalid_scope' }
       await tx.update(mcpTokens).set({ usedAt: new Date() }).where(eq(mcpTokens.hash, credential.hash))
     }
     return issueTokens(tx, grant)

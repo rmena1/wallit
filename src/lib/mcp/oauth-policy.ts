@@ -8,13 +8,19 @@ export function publicOrigin(): string {
   return origin
 }
 export const resourceUri = () => `${publicOrigin()}/api/mcp`
+// Only omission and trailing slashes are compatible aliases for this audience.
+export const validResource = (value: string | null) => value === null || value.replace(/\/+$/, '') === resourceUri()
 export const tokenHash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const randomToken = () => randomBytes(32).toString('base64url')
 export const pkceChallenge = (verifier: string) => createHash('sha256').update(verifier).digest('base64url')
+// Preserve the spelling/order of known scopes for refresh's exact-grant check.
+export function ignoreUnknownScopes(value: string): string {
+  return value.split(' ').filter(scope => !scope || MCP_SCOPES.includes(scope as typeof MCP_SCOPES[number])).join(' ')
+}
 export function parseScopes(value: string): string[] {
   const scopes = [...new Set(value.split(' ').filter(Boolean))]
-  if (!scopes.length || scopes.some(scope => !MCP_SCOPES.includes(scope as typeof MCP_SCOPES[number]))) throw new Error('invalid_scope')
-  return scopes
+  if (!scopes.length) throw new Error('invalid_scope')
+  return scopes.filter(scope => MCP_SCOPES.includes(scope as typeof MCP_SCOPES[number]))
 }
 export function validRedirect(value: string): boolean {
   try {

@@ -29,13 +29,36 @@ async function fixture(): Promise<Fixture> {
 async function browserSession(f: Fixture) {
   return api.newContext({ baseURL: origin, storageState: { cookies: [{ name: 'wallit_session', value: f.session, domain: '127.0.0.1', path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' }], origins: [] } })
 }
-async function grant(f: Fixture, scopes = 'wallit:read wallit:write wallit:review wallit:admin', selected?: string[]) {
+// Respect the production DCR limit as the fixture suite grows.
+const registrationTimes: number[] = []
+async function registerClient(browser: APIRequestContext, redirectUri: string) {
+  if (registrationTimes.length >= 20) {
+    const wait = registrationTimes.shift()! + 60_100 - Date.now()
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait))
+  }
+  const response = await browser.post('/oauth/register', { data: { client_name: 'Fixture Codex', redirect_uris: [redirectUri], token_endpoint_auth_method: 'none' } })
+  registrationTimes.push(Date.now())
+  return response
+}
+async function grant(f: Fixture, scopes = 'wallit:read wallit:write wallit:review wallit:admin', selected?: string[], compatibility?: { resource: string | null; state: string | null }) {
   const browser = await browserSession(f)
-  const registration = await browser.post('/oauth/register', { data: { client_name: 'Fixture Codex', redirect_uris: ['https://client.example.test/callback'], token_endpoint_auth_method: 'none' } })
+  const registration = await registerClient(browser, 'https://client.example.test/callback')
   expect(registration.status()).toBe(201)
   const clientId: string = (await registration.json()).client_id
   const verifier = randomBytes(32).toString('base64url')
   const params = new URLSearchParams({ client_id: clientId, redirect_uri: 'https://client.example.test/callback', response_type: 'code', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', resource: `${origin}/api/mcp`, state: 'fixture-state', scope: scopes })
+  if (compatibility) {
+    for (const [name, value] of Object.entries(compatibility)) {
+      if (value === null) params.delete(name)
+      else params.set(name, value)
+    }
+  }
+  if (compatibility) for (const invalid of [{ resource: 'https://other.example.test/api/mcp' }, { resource: origin }, { resource: '' }, { code_challenge: '' }, { code_challenge_method: 'plain' }]) {
+    const invalidParams = new URLSearchParams(params)
+    for (const [name, value] of Object.entries(invalid)) invalidParams.set(name, value)
+    const rejected = await browser.get(`/oauth/authorize?${invalidParams}`)
+    expect(rejected.status()).toBe(400)
+  }
   const page = await browser.get(`/oauth/authorize?${params}`)
   expect(page.status()).toBe(200)
   const html = await page.text()
@@ -47,9 +70,11 @@ async function grant(f: Fixture, scopes = 'wallit:read wallit:write wallit:revie
   expect(allow.status()).toBe(303)
   const callback = new URL(allow.headers().location)
   expect(callback.searchParams.get('iss')).toBe(origin)
-  expect(callback.searchParams.get('state')).toBe('fixture-state')
+  expect(callback.searchParams.get('state')).toBe(compatibility ? compatibility.state : 'fixture-state')
   const code = callback.searchParams.get('code')!
-  const tokenRequest = { client_id: clientId, grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: 'https://client.example.test/callback', resource: `${origin}/api/mcp` }
+  const tokenRequest: Record<string, string> = { client_id: clientId, grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: 'https://client.example.test/callback', resource: `${origin}/api/mcp` }
+  if (compatibility?.resource === null) delete tokenRequest.resource
+  else if (compatibility) tokenRequest.resource = compatibility.resource
   const invalidPkce = await browser.post('/oauth/token', { form: { ...tokenRequest, code_verifier: randomBytes(32).toString('base64url') } })
   expect(invalidPkce.status()).toBe(400)
   const invalidResource = await browser.post('/oauth/token', { form: { ...tokenRequest, resource: 'https://other.example.test/api/mcp' } })
@@ -59,6 +84,10 @@ async function grant(f: Fixture, scopes = 'wallit:read wallit:write wallit:revie
   const tokenResponse = await browser.post('/oauth/token', { form: tokenRequest })
   expect(tokenResponse.status()).toBe(200)
   const tokens = await tokenResponse.json()
+  expect(tokens.scope).toBe([...new Set(scopes.split(' ').filter(scope => ['wallit:read', 'wallit:write', 'wallit:review', 'wallit:admin'].includes(scope)))].join(' '))
+  const [stored] = await sql`SELECT resource, scopes FROM mcp_grants WHERE client_id = ${clientId}`
+  expect(stored.resource).toBe(`${origin}/api/mcp`)
+  expect(stored.scopes.join(' ')).toBe(tokens.scope)
   await browser.dispose()
   return { token: tokens.access_token as string, refresh: tokens.refresh_token as string, clientId, tokenRequest }
 }
@@ -82,6 +111,48 @@ test.afterAll(async () => {
   await sql`DELETE FROM mcp_clients WHERE name = 'Fixture Codex'`
   await sql`DELETE FROM exchange_rates WHERE source = 'fixture'`
   await sql.end()
+})
+
+for (const resource of [null, `${origin}/api/mcp`, `${origin}/api/mcp/`]) {
+  test(`OAuth compatibility: resource ${resource ?? 'omitted'}, optional state and ignored scopes`, async ({ request }) => {
+    const f = await fixture()
+    const auth = await grant(f, 'openid wallit:read offline_access wallit:write wallit:review wallit:admin wallit:read', undefined, { resource, state: null })
+    expect((await rpc(request, auth.token, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'fixture', version: '1' } })).status()).toBe(200)
+    const refresh: Record<string, string> = { client_id: auth.clientId, grant_type: 'refresh_token', refresh_token: auth.refresh }
+    if (resource !== null) refresh.resource = resource
+    for (const invalid of ['https://other.example.test/api/mcp', origin, '']) {
+      const rejected = await request.post('/oauth/token', { form: { ...refresh, resource: invalid } })
+      expect(rejected.status()).toBe(400)
+      expect(await rejected.json()).toEqual({ error: 'invalid_target' })
+    }
+    expect((await request.post('/oauth/token', { form: refresh })).status()).toBe(200)
+  })
+}
+
+test('ignored scopes never grant data access or permit escalation during refresh', async ({ request }) => {
+  const f = await fixture()
+  const readOnly = await grant(f, 'openid wallit:read offline_access')
+  const assertReadOnly = async (token: string) => {
+    const accounts = await call(request, token, 'wallit_accounts_list', { spaceId: f.spaceId })
+    expect(accounts.some((account: { id: string }) => account.id === f.accountId)).toBe(true)
+    expect((await rpc(request, token, 'tools/call', { name: 'wallit_movement_create', arguments: write(f, money(f)) })).status()).toBe(403)
+  }
+  await assertReadOnly(readOnly.token)
+  const refresh = { client_id: readOnly.clientId, grant_type: 'refresh_token', refresh_token: readOnly.refresh }
+  for (const scope of ['openid wallit:read wallit:write offline_access', 'openid offline_access', 'wallit:read wallit:read', ' wallit:read']) {
+    const rejected = await request.post('/oauth/token', { form: { ...refresh, scope } })
+    expect(rejected.status()).toBe(400)
+    expect(await rejected.json()).toEqual({ error: 'invalid_scope' })
+  }
+  const renewed = await request.post('/oauth/token', { form: { ...refresh, scope: 'openid wallit:read offline_access' } })
+  expect(renewed.status()).toBe(200)
+  const tokens = await renewed.json()
+  expect(tokens.scope).toBe('wallit:read')
+  await assertReadOnly(tokens.access_token)
+  const noPermissions = await grant(f, 'openid offline_access wallit:unknown')
+  for (const name of ['wallit_accounts_list', 'wallit_movement_create']) {
+    expect((await rpc(request, noPermissions.token, 'tools/call', { name, arguments: write(f, money(f)) })).status()).toBe(403)
+  }
 })
 
 test('anonymous MCP methods challenge with 401 and standards discovery', async ({ request }) => {
@@ -328,12 +399,12 @@ test('browser login returns to OAuth; consent is explicit, CSRF-protected and re
   try {
   const f = await fixture(), password = 'local-mcp-fixture-password'
   await sql`UPDATE users SET password_hash = ${await hashPassword(password, 10)} WHERE id = ${f.userId}`
-  const registration = await request.post('/oauth/register', { data: { client_name: 'Fixture Codex', redirect_uris: [`${callbackOrigin}/callback`] } })
+  const registration = await registerClient(request, `${callbackOrigin}/callback`)
   expect(registration.status()).toBe(201)
   const clientId = (await registration.json()).client_id
   const verifier = randomBytes(32).toString('base64url')
   const params = new URLSearchParams({ client_id: clientId, redirect_uri: `${callbackOrigin}/callback`, response_type: 'code', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', resource: `${origin}/api/mcp`, state: 'fixture-state', scope: 'wallit:read' })
-  for (const invalid of [{ redirect_uri: 'https://attacker.example.test' }, { code_challenge_method: 'plain' }, { scope: 'wallit:superuser' }]) {
+  for (const invalid of [{ redirect_uri: 'https://attacker.example.test' }, { code_challenge_method: 'plain' }]) {
     const invalidParams = new URLSearchParams(params)
     Object.entries(invalid).forEach(([key, value]) => invalidParams.set(key, value))
     expect((await request.get(`/oauth/authorize?${invalidParams}`)).status()).toBe(400)
