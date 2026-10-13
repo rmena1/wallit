@@ -49,7 +49,7 @@ export function middleware(request: NextRequest) {
     return applySecurityHeaders(NextResponse.redirect(new URL('/login', request.url)))
   }
   
-  // The consent route emits a validated callback-specific form-action policy.
+  // The consent route emits a stricter policy for its script-free documents.
   // Two CSP headers would intersect and retain the global self-only restriction.
   return applySecurityHeaders(NextResponse.next(), pathname !== '/oauth/authorize')
 }

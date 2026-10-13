@@ -1,3 +1,5 @@
+// OAuth consent/callback transport lives in /oauth, intentionally outside this
+// domain-tool catalog; its behavior and browser fixtures are inventoried in docs/mcp.md.
 import { z } from 'zod'
 import * as account from '@/lib/actions/accounts'
 import * as category from '@/lib/actions/categories'
