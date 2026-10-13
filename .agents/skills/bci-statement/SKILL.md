@@ -28,7 +28,9 @@ Reemplaza las fechas de los siguientes comandos por fechas reales `YYYY-MM-DD`, 
 
 Personas y el modo conjunto usan navegador sin pantalla por defecto; admiten `--headed` para mostrarlo. Esa opción no les cambia la política frente a controles humanos. No uses `--bank all`: la CLI solo admite `personas` o `lider`; omitir la opción selecciona ambos. Fechas inválidas o credenciales requeridas ausentes fallan antes de abrir Chromium. Solo Líder también falla antes de abrirlo con `MISSING_DISPLAY` si falta `DISPLAY`.
 
-Para una rutina de un banco, pasa siempre su `--bank` explícito. No uses el modo conjunto como alternativa automática si falla un modo exclusivo.
+Para una rutina de un banco, pasa siempre su `--bank` explícito.
+
+**Rutina diaria de Personas (por defecto headed):** en la rutina «Wallit BCI daily reconcile», ejecuta Personas siempre con `--headed` y con `DISPLAY` apuntando a una pantalla accesible: `node scripts/bci-statement/live.mjs --from YYYY-MM-DD --to YYYY-MM-DD --bank personas --headed`. El 2026-10-13 la corrida sin pantalla falló por Cloudflare (`BANK_ACCESS_CHALLENGE`) y la misma consulta con `--headed` pasó (18:37 y 19:09 America/Santiago). El modo sin pantalla sigue disponible omitiendo la opción, pero no es el default de la rutina. `--headed` no cambia la política ante controles: si aparece uno, el lector termina con error y no se reintenta. No uses el modo conjunto como alternativa automática si falla un modo exclusivo.
 
 ## Ejecutar y atender controles
 
