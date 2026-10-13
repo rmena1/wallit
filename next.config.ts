@@ -38,7 +38,7 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Authorization emits its own policy for the validated OAuth callback.
+        // Authorization emits its own stricter policy for script-free documents.
         source: "/((?!oauth/authorize$).*)",
         headers: [
           {

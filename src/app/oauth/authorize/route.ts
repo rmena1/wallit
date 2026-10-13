@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
     const descriptions: Record<string, string> = { 'wallit:read': 'Leer tus datos financieros y reportes.', 'wallit:write': 'Crear, editar y eliminar datos. Los movimientos nuevos quedan por revisar.', 'wallit:review': 'Confirmar movimientos mediante una acción explícita posterior.', 'wallit:admin': 'Administrar Spaces y sus miembros, respetando tus permisos.' }
     const response = new NextResponse(consentPage(`<section><span class="eyebrow">Conexión MCP</span><h1>Conectar ${esc(input.client.name)}</h1><p>Cuenta: <strong>${esc(user.email)}</strong></p><ul>${input.scopes.map(scope => `<li>${descriptions[scope]}</li>`).join('')}</ul><small>Destino de retorno: ${esc(input.redirect)}</small><form method="post" action="/oauth/authorize"><input type="hidden" name="consent" value="${signed}"><input type="hidden" name="csrf" value="${csrf}"><fieldset><legend>Spaces autorizados</legend><label><input type="radio" name="spaceAccess" value="all" checked>Todos mis Spaces actuales y futuros</label><label><input type="radio" name="spaceAccess" value="selected">Solo los seleccionados abajo</label>${spaces.map(space => `<label><input type="checkbox" name="spaceId" value="${esc(space.id)}">${esc(space.emoji)} ${esc(space.name)}</label>`).join('')}</fieldset><p class="note">Al autorizar se guardará una conexión OAuth revocable por 90 días. El acceso vence en 15 minutos y se renueva mientras la conexión siga activa. Puedes revocarla en <a href="/oauth/connections">Conexiones</a>.</p><label><input type="checkbox" name="confirm" value="yes" required>Autorizo a esta aplicación y el almacenamiento de esta conexión.</label><div class="actions"><button class="secondary" name="decision" value="deny" formnovalidate>Cancelar</button><button name="decision" value="allow">Autorizar conexión</button></div></form></section>`), { headers: { ...noStore, 'Content-Type': 'text/html; charset=utf-8', 'Referrer-Policy': 'no-referrer' } })
     response.cookies.set(cookieName, tokenHash(signed), { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/oauth/authorize', maxAge: 600 })
-    response.headers.set('Content-Security-Policy', consentCsp(input.redirect))
+    response.headers.set('Content-Security-Policy', consentCsp())
     return response
   } catch { return oauthJson({ error: 'invalid_request' }, 400) }
 }
@@ -64,10 +64,13 @@ export async function POST(request: NextRequest) {
       })
       destination.searchParams.set('code', code)
     }
-    const response = NextResponse.redirect(destination, 303)
-    response.headers.set('Cache-Control', 'no-store')
+    // A 303 keeps the callback chain subject to the consent form's form-action
+    // policy in Chromium. Commit a document first, then navigate without another
+    // click. The destination comes only from the revalidated signed consent.
+    const target = esc(destination.href)
+    const response = new NextResponse(consentPage(`<meta http-equiv="refresh" content="0;url=${target}"><section><h1>Volviendo a la aplicación</h1><p><a href="${target}" rel="noreferrer">Continuar</a></p></section>`), { headers: { ...noStore, 'Content-Type': 'text/html; charset=utf-8' } })
     response.headers.set('Referrer-Policy', 'no-referrer')
-    response.headers.set('Content-Security-Policy', consentCsp(input.redirect))
+    response.headers.set('Content-Security-Policy', consentCsp())
     response.cookies.set(cookieName, '', { path: '/oauth/authorize', maxAge: 0, httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' })
     return response
   } catch { return oauthJson({ error: 'invalid_request' }, 400) }

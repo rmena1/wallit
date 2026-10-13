@@ -1,7 +1,12 @@
-import { test, expect, request as api, type APIRequestContext } from '@playwright/test'
+import { test, expect, request as api, chromium, type APIRequestContext } from '@playwright/test'
 import postgres from 'postgres'
 import { createHash, randomBytes } from 'node:crypto'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
+import { createServer as createTlsServer } from 'node:https'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { hash as hashPassword } from 'bcryptjs'
 
 const origin = 'http://127.0.0.1:3217'
@@ -67,8 +72,8 @@ async function grant(f: Fixture, scopes = 'wallit:read wallit:write wallit:revie
   const form = new URLSearchParams({ consent, csrf, confirm: 'yes', decision: 'allow', spaceAccess: selected ? 'selected' : 'all' })
   selected?.forEach(id => form.append('spaceId', id))
   const allow = await browser.post('/oauth/authorize', { headers: { Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded' }, data: form.toString(), maxRedirects: 0 })
-  expect(allow.status()).toBe(303)
-  const callback = new URL(allow.headers().location)
+  expect(allow.status()).toBe(200)
+  const callback = new URL((await allow.text()).match(/http-equiv="refresh" content="0;url=([^"]+)"/)![1].replaceAll('&amp;', '&'))
   expect(callback.searchParams.get('iss')).toBe(origin)
   expect(callback.searchParams.get('state')).toBe(compatibility ? compatibility.state : 'fixture-state')
   const code = callback.searchParams.get('code')!
@@ -416,8 +421,7 @@ test('browser login returns to OAuth; consent is explicit, CSRF-protected and re
   await page.getByRole('button', { name: /Iniciar sesión/ }).click()
   await expect(page.getByRole('heading', { name: 'Conectar Fixture Codex' })).toBeVisible()
   const consentPage = await page.reload()
-  expect(consentPage!.headers()['content-security-policy']).toContain(`form-action 'self' ${callbackOrigin};`)
-  expect(consentPage!.headers()['content-security-policy']).not.toContain("form-action 'self';")
+  expect(consentPage!.headers()['content-security-policy']).toContain("form-action 'self';")
   await expect(page.locator('input[name="confirm"]')).not.toBeChecked()
   const signed = await page.locator('input[name="consent"]').inputValue()
   const csrf = await page.locator('input[name="csrf"]').inputValue()
@@ -432,7 +436,7 @@ test('browser login returns to OAuth; consent is explicit, CSRF-protected and re
   await page.locator('input[name="confirm"]').check()
   const approvalResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/oauth/authorize' && response.request().method() === 'POST')
   await page.getByRole('button', { name: 'Autorizar conexión' }).click()
-  expect((await approvalResponse).status()).toBe(303)
+  expect((await approvalResponse).status()).toBe(200)
   await expect.poll(() => callbackReached).toBe(true)
   await expect(page).toHaveURL(url => url.origin === callbackOrigin)
   expect(Number((await sql`SELECT count(*) AS n FROM mcp_grants WHERE user_id = ${f.userId}`)[0].n)).toBe(1)
@@ -483,4 +487,95 @@ test('concurrent callers serialize retries without duplicate creation or lost pe
   const profile = definitions.find((tool: { name: string }) => tool.name === 'wallit_profile')
   expect(profile._meta['openai/profile']).toBe(true)
   expect(profile.outputSchema.required).toContain('id')
+})
+
+// Run with MCP_TEST_ORIGIN=https://wallit.libt.app to exercise the literal
+// production audience; every Wallit request is forwarded to the local fixture.
+test('Cursor OAuth completes login and a cross-origin 308 callback with one approval', async ({ request }) => {
+  const issuer = process.env.MCP_TEST_ORIGIN ?? origin
+  const redirectUri = 'https://www.cursor.com/agents/mcp/oauth/callback'
+  const state = '52618706_pOxdD8y5JgBvhl9sq-MjyossEgGguqucfaTvqiUchsw.tgd'
+  const scope = 'wallit:read wallit:write wallit:review wallit:admin'
+  const f = await fixture(), password = 'local-cursor-fixture-password'
+  await sql`UPDATE users SET password_hash = ${await hashPassword(password, 10)} WHERE id = ${f.userId}`
+  // Real TLS responses and Chromium DNS overrides keep the entire redirect chain
+  // local, including requests after a 308 (Playwright routes do not intercept those).
+  const directory = mkdtempSync(join(tmpdir(), 'wallit-oauth-tls-'))
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(directory, 'key.pem'), '-out', join(directory, 'cert.pem'), '-days', '1', '-subj', '/CN=wallit-oauth-fixture'], { stdio: 'ignore' })
+  const callbacks: URL[] = []
+  const server = createTlsServer({ key: readFileSync(join(directory, 'key.pem')), cert: readFileSync(join(directory, 'cert.pem')) }, (req, res) => {
+    const url = new URL(req.url!, `https://${req.headers.host}`)
+    if (url.hostname === 'www.cursor.com') {
+      callbacks.push(new URL(url))
+      url.hostname = 'cursor.com'
+      res.writeHead(308, { location: url.href }).end()
+    } else if (url.hostname === 'cursor.com') {
+      res.writeHead(200, { 'content-type': 'text/html' }).end('<h1>Cursor fixture callback</h1>')
+    } else if (url.hostname === 'wallit.libt.app') {
+      const upstream = httpRequest(`${origin}${url.pathname}${url.search}`, { method: req.method, headers: req.headers }, response => {
+        res.writeHead(response.statusCode!, response.headers)
+        response.pipe(res)
+      })
+      upstream.on('error', () => res.writeHead(502).end())
+      req.pipe(upstream)
+    } else res.writeHead(404).end()
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Missing TLS fixture address')
+  const browser = await chromium.launch({ args: [`--host-resolver-rules=${['wallit.libt.app', 'www.cursor.com', 'cursor.com'].map(host => `MAP ${host} 127.0.0.1:${address.port}`).join(',')},EXCLUDE 127.0.0.1,MAP * ~NOTFOUND`] })
+  const page = await browser.newPage({ ignoreHTTPSErrors: true })
+  try {
+    const violations: string[] = []
+    page.on('console', message => { if (/Content Security Policy|form-action/i.test(message.text())) violations.push(message.text()) })
+    const registration = await registerClient(request, redirectUri)
+    expect(registration.status()).toBe(201)
+    const clientId = (await registration.json()).client_id
+    const verifier = randomBytes(32).toString('base64url')
+    const params = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', resource: `${issuer}/api/mcp`, state, scope })
+    expect(params.toString()).toContain('scope=wallit%3Aread+wallit%3Awrite+wallit%3Areview+wallit%3Aadmin')
+    await page.goto(`${issuer}/oauth/authorize?${params}`)
+    await expect(page).toHaveURL(url => url.pathname === '/login')
+    expect(new URL(page.url()).searchParams.get('returnTo')).toBe(`/oauth/authorize?${params}`)
+    await page.getByLabel('Email').fill(f.userId + '@example.test')
+    await page.getByLabel('Contraseña').fill(password)
+    await page.getByRole('button', { name: /Iniciar sesión/ }).click()
+    await expect(page.getByRole('heading', { name: 'Conectar Fixture Codex' })).toBeVisible()
+    await expect(page.locator('input[name="confirm"]')).not.toBeChecked()
+    await page.locator('input[name="confirm"]').check()
+    let approvals = 0
+    page.on('request', req => { if (new URL(req.url()).pathname === '/oauth/authorize' && req.method() === 'POST') approvals++ })
+    await page.getByRole('button', { name: 'Autorizar conexión' }).click()
+    await expect(page.getByRole('heading', { name: 'Cursor fixture callback' })).toBeVisible()
+    expect(approvals).toBe(1)
+    expect(violations).toEqual([])
+    expect(callbacks).toHaveLength(1)
+    const callback = callbacks[0]
+    expect(callback.origin + callback.pathname).toBe(redirectUri)
+    expect(callback.searchParams.get('state')).toBe(state)
+    expect(callback.searchParams.get('iss')).toBe(issuer)
+    expect(new URL(page.url()).search).toBe(callback.search)
+    expect(new URL(page.url()).origin).toBe('https://cursor.com')
+    const code = callback.searchParams.get('code')!
+    expect(code).toBeTruthy()
+    const tokenForm = { grant_type: 'authorization_code', client_id: clientId, code, code_verifier: verifier, redirect_uri: redirectUri, resource: `${issuer}/api/mcp` }
+    // The callback's redirect does not change the exact URI required for exchange.
+    for (const invalid of [{ redirect_uri: 'https://cursor.com/agents/mcp/oauth/callback' }, { code_verifier: randomBytes(32).toString('base64url') }]) {
+      expect((await request.post('/oauth/token', { form: { ...tokenForm, ...invalid } })).status()).toBe(400)
+    }
+    const exchange = await request.post('/oauth/token', { form: tokenForm })
+    expect(exchange.status()).toBe(200)
+    const tokens = await exchange.json()
+    expect(tokens.access_token).toBeTruthy()
+    expect(tokens.scope).toBe(scope)
+    const grants = await sql`SELECT resource, scopes FROM mcp_grants WHERE client_id = ${clientId}`
+    expect(grants).toHaveLength(1)
+    expect(grants[0].resource).toBe(`${issuer}/api/mcp`)
+    expect(grants[0].scopes).toEqual(scope.split(' '))
+  } finally {
+    await browser.close()
+    server.closeAllConnections()
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
