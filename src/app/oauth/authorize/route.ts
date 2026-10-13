@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import { db, mcpClients, mcpCodes, mcpGrants } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { getAvailableSpaces } from '@/lib/spaces'
-import { parseScopes, resourceUri, publicOrigin, signConsent, verifyConsent, randomToken, tokenHash } from '@/lib/mcp/oauth-policy'
+import { parseScopes, resourceUri, validResource, publicOrigin, signConsent, verifyConsent, randomToken, tokenHash } from '@/lib/mcp/oauth-policy'
 import { boundedBody, consentCsp, noStore, oauthJson } from '@/lib/mcp/http'
 import { consentPage, escapeHtml as esc } from '@/lib/mcp/consent-view'
 
@@ -15,9 +15,9 @@ async function validate(params: URLSearchParams) {
   const [client] = await db.select().from(mcpClients).where(eq(mcpClients.id, clientId)).limit(1)
   const redirect = params.get('redirect_uri') ?? ''
   if (!client || !client.redirectUris.includes(redirect)) throw new Error('invalid_request')
-  if (params.get('response_type') !== 'code' || params.get('code_challenge_method') !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(params.get('code_challenge') ?? '') || params.get('resource') !== resourceUri()) throw new Error('invalid_request')
+  if (params.get('response_type') !== 'code' || params.get('code_challenge_method') !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(params.get('code_challenge') ?? '') || !validResource(params.get('resource'))) throw new Error('invalid_request')
   const state = params.get('state')
-  if (!state || state.length > 2000) throw new Error('invalid_request')
+  if (state !== null && state.length > 2000) throw new Error('invalid_request')
   const scopes = parseScopes(params.get('scope') ?? 'wallit:read')
   return { client, redirect, scopes, state, challenge: params.get('code_challenge')! }
 }
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     const input = await validate(new URLSearchParams(data.params))
     const destination = new URL(input.redirect)
     destination.searchParams.set('iss', publicOrigin())
-    destination.searchParams.set('state', input.state)
+    if (input.state !== null) destination.searchParams.set('state', input.state)
     if (form.get('decision') === 'deny') destination.searchParams.set('error', 'access_denied')
     else {
       if (form.get('decision') !== 'allow' || form.get('confirm') !== 'yes') return oauthJson({ error: 'invalid_request' }, 400)
