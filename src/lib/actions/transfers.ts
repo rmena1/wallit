@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { db, movements, accounts, spaces, transfers, spaceMemberships } from '@/lib/db'
+import { db, movements, accounts, categories, spaces, transfers, spaceMemberships } from '@/lib/db'
 import { eq, and, isNull, or } from 'drizzle-orm'
 import { getCurrentSpace } from '@/lib/spaces'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
@@ -109,12 +109,13 @@ export async function getTransferByMovementId(movementId: string) {
       accountLastFour: accounts.lastFourDigits,
       accountCurrency: accounts.currency,
       accountEmoji: accounts.emoji,
-      categoryId: movements.categoryId,
+      categoryId: categories.id,
       reportable: movements.reportable,
       receivable: movements.receivable,
     })
     .from(movements)
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, movements.spaceId)))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, movements.spaceId)))
     .where(or(eq(movements.id, transfer.sourceMovementId), eq(movements.id, transfer.destinationMovementId)))
 
   if (transferMovements.length !== 2) return null

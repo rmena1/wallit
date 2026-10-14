@@ -27,7 +27,7 @@ export async function getPendingReviewMovements() {
       amountUsd: movements.amountUsd,
       exchangeRate: movements.exchangeRate,
       accountId: movements.accountId,
-      categoryId: movements.categoryId,
+      categoryId: categories.id,
       reportable: movements.reportable,
       receivable: movements.receivable,
       received: movements.received,
@@ -58,7 +58,7 @@ export async function getPendingReviewMovements() {
       )`,
     })
     .from(movements)
-    .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess()))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess(space.id)))
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
     .where(and(eq(movements.spaceId, space.id), eq(movements.needsReview, true)))
     .orderBy(desc(movements.date), desc(movements.createdAt))
@@ -95,7 +95,7 @@ export async function getPendingReviewMovements() {
       amountUsd: movements.amountUsd,
       exchangeRate: movements.exchangeRate,
       accountId: movements.accountId,
-      categoryId: movements.categoryId,
+      categoryId: categories.id,
       reportable: movements.reportable,
       receivable: movements.receivable,
       needsReview: movements.needsReview,
@@ -105,6 +105,7 @@ export async function getPendingReviewMovements() {
     })
     .from(movements)
     .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, movements.spaceId)))
+    .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, movements.spaceId)))
     .where(inArray(movements.id, Array.from(relatedMovementIds)))
 
   const movementById = new Map(relatedMovements.map((movement) => [movement.id, movement]))

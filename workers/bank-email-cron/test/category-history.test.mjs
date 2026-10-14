@@ -14,13 +14,15 @@ const email = {
 test('history uses parameterized exact original name, owner and excludes the current email', async () => {
   const lookup = createCategoryHistoryLookup({ userId: 'rai', sql: async (strings, ...values) => {
     const query = strings.join('?');
-    assert.deepEqual(values, ['rai', ' UBER *TRIP ', 'bci', 'history-test']);
-    assert.doesNotMatch(query, /space_id|JOIN accounts/);
+    assert.deepEqual(values, ['destination-account', 'rai', ' UBER *TRIP ', 'bci', 'history-test']);
+    assert.match(query, /destination.space_id = account.space_id/);
+    assert.match(query, /destination.name = historical.name/);
+    assert.match(query, /historical.space_id = m.space_id/);
     assert.match(query, /created_by_user_id = \?/);
     assert.match(query, /original_name = \?/);
     assert.match(query, /category_id IS NOT NULL/);
     assert.match(query, /NOT \(m\.source_email_provider IS NOT DISTINCT FROM \?\s+AND m\.source_email_id IS NOT DISTINCT FROM \?\)/);
-    assert.match(query, /GROUP BY m\.category_id\s+ORDER BY COUNT\(\*\) DESC, m\.category_id\s+LIMIT 1/);
+    assert.match(query, /GROUP BY destination\.id\s+ORDER BY COUNT\(\*\) DESC, destination\.id\s+LIMIT 1/);
     return [{ category_id: 'winner' }];
   } });
   assert.equal(await lookup({ originalName: ' UBER *TRIP ', provider: 'bci', sourceEmailId: 'history-test', accountId: 'destination-account' }), 'winner');
@@ -62,17 +64,17 @@ test('missing historical category retains both existing classifier steps', async
   assert.deepEqual(calls, ['history', 'transaction', 'category', 'import']);
 });
 
-test('a winner from another Space is preserved and the cron advances', async () => {
+test('a destination-Space winner is preserved and the cron advances', async () => {
   const { createImportClient } = await import('../src/lib/import-client.mjs');
   const payloads = [];
   const importToWallit = createImportClient({ fetchImpl: async (_url, options) => {
     const payload = JSON.parse(options.body);
     payloads.push(payload);
-    assert.equal(payload.categoryId, 'other-space-category');
+    assert.equal(payload.categoryId, 'destination-space-category');
     return { ok: true, status: 200, json: async () => ({ success: true }) };
   } });
   const processEmail = createEmailProcessor({
-    findHistoricalCategory: async () => 'other-space-category',
+    findHistoricalCategory: async () => 'destination-space-category',
     isTransaction: async () => assert.fail('history skips classifier'),
     chooseCategory: async () => assert.fail('history skips classifier'),
     importToWallit, logProcessing: async () => {}, logger: { log() {}, error() {} },
@@ -100,7 +102,7 @@ test('transport retries preserve the winning category', async () => {
       throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
     },
   });
-  await assert.rejects(send({ kind: 'movement', type: 'expense', categoryId: 'foreign',
+  await assert.rejects(send({ kind: 'movement', type: 'expense', categoryId: 'local',
     sourceEmailId: 'same-identity' }), /Wallit import failed/);
-  assert.deepEqual(payloads.map(payload => payload.categoryId), ['foreign', 'foreign', 'foreign']);
+  assert.deepEqual(payloads.map(payload => payload.categoryId), ['local', 'local', 'local']);
 });

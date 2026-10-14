@@ -8,18 +8,21 @@ import { createCategoryHistoryLookup } from '../src/lib/category-history.mjs';
 test('PostgreSQL: majority, ties, exact raw names, owner and retries', {
   skip: !process.env.HISTORY_TEST_DATABASE_URL,
 }, async () => {
-  const sql = postgres(process.env.HISTORY_TEST_DATABASE_URL, { max: 1 });
+  const databaseUrl = new URL(process.env.HISTORY_TEST_DATABASE_URL);
+  assert.ok(['127.0.0.1', 'localhost'].includes(databaseUrl.hostname));
+  assert.match(databaseUrl.pathname, /^\/wallit_(?:e2e|mcp_test)(?:_[a-z0-9_]+)?$/);
+  const sql = postgres(databaseUrl.toString(), { max: 1 });
   try {
     await sql`CREATE TEMP TABLE movements (
       space_id text, created_by_user_id text, original_name text, name text, category_id text,
       source_email_provider text, source_email_id text
     )`;
     await sql`CREATE TEMP TABLE accounts (id text PRIMARY KEY, space_id text)`;
-    await sql`CREATE TEMP TABLE categories (id text PRIMARY KEY, space_id text)`;
+    await sql`CREATE TEMP TABLE categories (id text PRIMARY KEY, space_id text, name text)`;
     await sql`INSERT INTO accounts VALUES ('destination-account', 'personal')`;
-    await sql`INSERT INTO categories VALUES ('food', 'personal'), ('travel', 'personal'),
-      ('foreign-category', 'casa'), ('other-user', 'personal'), ('normalized-only', 'personal'),
-      ('wrong-case', 'personal'), ('trimmed', 'personal'), ('current-import', 'personal')`;
+    await sql`INSERT INTO categories VALUES ('food', 'personal', 'Food'), ('travel', 'personal', 'Travel'),
+      ('foreign-category', 'casa', 'Elsewhere'), ('other-user', 'personal', 'Other'), ('normalized-only', 'personal', 'Normalized'),
+      ('wrong-case', 'personal', 'Case'), ('trimmed', 'personal', 'Trimmed'), ('current-import', 'personal', 'Current')`;
     await sql.unsafe(await readFile(new URL('../../../drizzle/0020_category_history_index.sql', import.meta.url), 'utf8'));
     let lastQuery;
     let lastValues;
@@ -37,7 +40,13 @@ test('PostgreSQL: majority, ties, exact raw names, owner and retries', {
     await add(null);
     assert.equal(await find('RAW SHOP'), null);
     await add('foreign-category', { space_id: 'casa', original_name: 'ONLY ELSEWHERE' });
-    assert.equal(await find('ONLY ELSEWHERE'), 'foreign-category');
+    assert.equal(await find('ONLY ELSEWHERE'), null);
+    await sql`INSERT INTO categories VALUES ('local-match', 'personal', 'Elsewhere')`;
+    assert.equal(await find('ONLY ELSEWHERE'), 'local-match');
+    // A malformed historical reference must not provide a category signal.
+    await add('foreign-category', { original_name: 'MALFORMED' });
+    assert.equal(await find('MALFORMED'), null);
+    assert.equal(await lookup({ originalName: 'ONLY ELSEWHERE', accountId: 'missing', provider: 'bci', sourceEmailId: 'current' }), null);
     await add('food');
     await add('food');
     await add('travel');
@@ -51,7 +60,7 @@ test('PostgreSQL: majority, ties, exact raw names, owner and retries', {
     assert.equal(await find('RAW SHOP'), 'food');
     assert.equal(await find('Normalized shop'), null);
     assert.equal(await find('NEW SHOP'), null);
-    await add('travel', { space_id: 'casa' });
+    await add('travel');
     assert.ok(['food', 'travel'].includes(await find('RAW SHOP')));
     await add('travel', { source_email_provider: 'tenpo', source_email_id: 'current' });
     assert.equal(await find('RAW SHOP'), 'travel');

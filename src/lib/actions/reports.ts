@@ -143,22 +143,19 @@ export async function getReportData(
     }).from(movements).where(where),
 
     db.select({
-      categoryId: movements.categoryId,
+      categoryId: categories.id,
       categoryName: categories.name,
       categoryEmoji: categories.emoji,
       total: sql<number>`SUM(${reportAmount})`,
       count: sql<number>`COUNT(*)`,
     }).from(movements)
-      .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess()))
+      .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess(space.id)))
       .where(sql`${where} AND ${movements.type} = 'expense'`)
-      .groupBy(movements.categoryId, categories.name, categories.emoji)
+      .groupBy(categories.id, categories.name, categories.emoji)
       .orderBy(sql`SUM(${reportAmount}) DESC`),
 
     db.select({ id: categories.id, name: categories.name, emoji: categories.emoji })
-      .from(categories).where(and(categoryReadAccess(), sql`(${categories.spaceId} = ${space.id} OR EXISTS (
-        SELECT 1 FROM ${movements}
-        WHERE ${movements.spaceId} = ${space.id} AND ${movements.categoryId} = ${categories.id}
-      ))`)),
+      .from(categories).where(categoryReadAccess(space.id)),
   ])
 
   const t = totals[0] || { totalIncome: 0, totalExpense: 0, count: 0 }

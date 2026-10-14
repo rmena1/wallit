@@ -348,10 +348,28 @@ test('narrow grants hide historical labels, linked Space data and duplicate impo
   const duplicate = await call(request, auth.token, 'wallit_import_movement', duplicateArgs)
   expect(duplicate.createdMovementIds).toEqual([])
   const movement = await call(request, auth.token, 'wallit_movement_create', write(f, money(f)))
-  // Simulate a historical category link retained by Wallit's migration/domain rules.
+  // Simulate a malformed historical cross-Space category reference.
   await sql`UPDATE categories SET name = 'Private fixture category' WHERE id = ${second.categoryId}`
   await sql`UPDATE movements SET category_id = ${second.categoryId}, needs_review = false WHERE id = ${movement.createdMovementIds[0]}`
   const transfer = await call(request, auth.token, 'wallit_transfer_create', write(f, { fromAccountId: f.accountId, toAccountId: second.accountId, destinationSpaceId: second.spaceId, fromAmount: 10000, toAmount: 10000, fromCurrency: 'CLP', toCurrency: 'CLP', date: '2026-10-06' }))
+  const transferLegs = await sql`SELECT source_movement_id, destination_movement_id FROM transfers WHERE id = ${transfer.result.transferId}`
+  const { source_movement_id: sourceId, destination_movement_id: destinationId } = transferLegs[0]
+  for (const malformed of [true, false]) {
+    await sql`UPDATE movements SET category_id = ${malformed ? second.categoryId : f.categoryId} WHERE id = ${sourceId}`
+    await sql`UPDATE movements SET category_id = ${malformed ? f.categoryId : second.categoryId} WHERE id = ${destinationId}`
+    for (const selectedSpace of [f.spaceId, second.spaceId]) {
+      const transferDetail = await call(request, auth.token, 'wallit_transfer_get', { spaceId: selectedSpace, movementId: selectedSpace === f.spaceId ? sourceId : destinationId })
+      expect(transferDetail.fromMovement).toMatchObject({ spaceId: f.spaceId, categoryId: malformed ? null : f.categoryId })
+      expect(transferDetail.toMovement).toMatchObject({ spaceId: second.spaceId, categoryId: malformed ? null : second.categoryId })
+      const reviewQueue = await call(request, auth.token, 'wallit_review_list', { spaceId: selectedSpace })
+      const item = reviewQueue.items.find((item: { transferId?: string }) => item.transferId === transfer.result.transferId)
+      expect(item.transferSourceMovement).toMatchObject({ spaceId: f.spaceId, categoryId: malformed ? null : f.categoryId })
+      expect(item.transferDestinationMovement).toMatchObject({ spaceId: second.spaceId, categoryId: malformed ? null : second.categoryId })
+    }
+  }
+  // Keep the rest of this isolation fixture malformed.
+  await sql`UPDATE movements SET category_id = ${second.categoryId} WHERE id = ${sourceId}`
+  await sql`UPDATE movements SET category_id = ${f.categoryId} WHERE id = ${destinationId}`
   const narrow = await grant(f, 'wallit:read wallit:write wallit:review', [f.spaceId])
   await call(request, narrow.token, 'wallit_transfer_get', { spaceId: f.spaceId, movementId: transfer.createdMovementIds[0] }, true)
   await call(request, narrow.token, 'wallit_transfer_confirm', write(f, { transferId: transfer.result.transferId }), true)
@@ -363,9 +381,35 @@ test('narrow grants hide historical labels, linked Space data and duplicate impo
   for (const result of [reports, timeline, queue]) {
     expect(JSON.stringify(result)).not.toContain('Private fixture category')
   }
+  // Even consent to both Spaces must not expose foreign categories in this Space.
+  for (const [tool, args] of [
+    ['wallit_reports', { startDate: '2026-10-01', endDate: '2026-10-31' }],
+    ['wallit_movements_list', {}],
+    ['wallit_review_list', {}],
+    ['wallit_movement_get', { id: movement.createdMovementIds[0] }],
+  ] as const) {
+    const result = await call(request, auth.token, tool, { spaceId: f.spaceId, ...args })
+    expect(JSON.stringify(result)).not.toContain('Private fixture category')
+  }
+  const detail = await call(request, auth.token, 'wallit_movement_get', { spaceId: f.spaceId, id: movement.createdMovementIds[0] })
+  expect(detail).toMatchObject({ categoryId: null, categoryName: null, categoryEmoji: null })
+  await call(request, auth.token, 'wallit_movement_edit', write(f, { id: movement.createdMovementIds[0], ...money(f, { categoryId: second.categoryId }) }), true)
+  await sql`UPDATE movements SET needs_review = true WHERE id = ${movement.createdMovementIds[0]}`
+  await call(request, auth.token, 'wallit_review_confirm', write(f, { id: movement.createdMovementIds[0], ...money(f, { categoryId: second.categoryId }) }), true)
+  const pending = await call(request, auth.token, 'wallit_review_list', { spaceId: f.spaceId })
+  expect(JSON.stringify(pending)).not.toContain('Private fixture category')
+  expect(pending.items.find((item: { id: string }) => item.id === movement.createdMovementIds[0])).toMatchObject({ categoryId: null })
+  const splitSource = await call(request, auth.token, 'wallit_movement_create', write(f, money(f)))
+  await sql`UPDATE movements SET category_id = ${second.categoryId} WHERE id = ${splitSource.createdMovementIds[0]}`
+  const split = await call(request, auth.token, 'wallit_movement_split', write(f, { id: splitSource.createdMovementIds[0], splits: [{ name: 'First', amount: 4000 }, { name: 'Second', amount: 6000 }] }))
+  expect(split.createdMovementIds).toHaveLength(2)
+  for (const id of split.createdMovementIds) {
+    expect((await sql`SELECT category_id, needs_review FROM movements WHERE id = ${id}`)[0]).toEqual({ category_id: null, needs_review: true })
+  }
   // Own movement descriptions remain historical facts; joined private Space labels do not.
   expect(timeline.data.find((item: { transferId?: string }) => item.transferId === transfer.result.transferId).transferOtherSpaceName).toBeNull()
   expect(queue.items.find((item: { transferId?: string }) => item.transferId === transfer.result.transferId).transferDestinationMovement).toBeNull()
+  expect(queue.items.find((item: { transferId?: string }) => item.transferId === transfer.result.transferId).transferSourceMovement.categoryId).toBeNull()
   const secondOnly = await grant(f, 'wallit:read wallit:write', [second.spaceId])
   await call(request, secondOnly.token, 'wallit_category_delete', write(second, { id: second.categoryId }), true)
   expect((await sql`SELECT category_id FROM movements WHERE id = ${movement.createdMovementIds[0]}`)[0].category_id).toBe(second.categoryId)

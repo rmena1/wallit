@@ -275,9 +275,9 @@ async function getOwnedAccount(spaceId: string, accountId: string | null): Promi
   return account ?? null
 }
 
-async function ensureOwnedCategory(spaceId: string, categoryId: string | null): Promise<boolean> {
+async function ensureOwnedCategory(spaceId: string, categoryId: string | null, client: Pick<typeof db, 'select'> = db): Promise<boolean> {
   if (!categoryId) return true
-  const [category] = await db
+  const [category] = await client
     .select({ id: categories.id })
     .from(categories)
     .where(and(eq(categories.id, categoryId), eq(categories.spaceId, spaceId)))
@@ -728,7 +728,7 @@ async function deleteReceivableSettlementRecord(spaceId: string, actorUserId: st
             spaceId: lockedSettlement.consumedTransferSourceSpaceId!,
             createdByUserId: lockedSettlement.createdByUserId ?? actorUserId,
             accountId: lockedSettlement.consumedTransferSourceAccountId!,
-            categoryId: lockedSettlement.consumedTransferSourceCategoryId,
+            categoryId: await ensureOwnedCategory(lockedSettlement.consumedTransferSourceSpaceId!, lockedSettlement.consumedTransferSourceCategoryId, tx) ? lockedSettlement.consumedTransferSourceCategoryId : null,
             reportable: lockedSettlement.consumedTransferSourceReportable ?? false,
             name: lockedSettlement.consumedTransferSourceName!,
             date: lockedSettlement.consumedTransferDate!,
@@ -750,7 +750,7 @@ async function deleteReceivableSettlementRecord(spaceId: string, actorUserId: st
             spaceId: lockedSettlement.consumedTransferDestinationSpaceId!,
             createdByUserId: lockedSettlement.createdByUserId ?? actorUserId,
             accountId: lockedSettlement.consumedTransferDestinationAccountId!,
-            categoryId: lockedSettlement.consumedTransferDestinationCategoryId,
+            categoryId: await ensureOwnedCategory(lockedSettlement.consumedTransferDestinationSpaceId!, lockedSettlement.consumedTransferDestinationCategoryId, tx) ? lockedSettlement.consumedTransferDestinationCategoryId : null,
             reportable: lockedSettlement.consumedTransferDestinationReportable ?? false,
             name: lockedSettlement.consumedTransferDestinationName!,
             date: lockedSettlement.consumedTransferDate!,
@@ -1096,8 +1096,6 @@ export const movementLedger = {
     })
   },
 
-  // Imported categories may belong to another Space. Preserve an unchanged
-  // category on review/edit; replacements still require a local category.
   async confirmPendingAsReportable(spaceId: string, movementId: string, input: ReportableInput & { receivableText?: string }): Promise<LedgerResult> {
     const original = await getOwnedMovement(spaceId, movementId)
     if (!original) return fail('Movement not found')
@@ -1122,7 +1120,7 @@ export const movementLedger = {
       if (settlementLink.role !== 'outgoing') return fail('Receivable settlement operational movements cannot be reviewed here')
       if (!validatesSettlementOutgoingSafeFields(original, input)) return fail(settlementSafeClassificationError())
       if (!input.name.trim()) return fail('Name is required')
-      if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+      if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
       return db.transaction(async (tx) => {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:receivable-settlement:${settlementLink.settlement.id}`}, 0))`)
@@ -1151,7 +1149,7 @@ export const movementLedger = {
 
     const normalized = await normalizeMoney(spaceId, input)
     if ('error' in normalized) return fail(normalized.error)
-    if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+    if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
     await db.update(movements).set({
       name: markingReceivable ? input.receivableText!.trim() : input.name.trim(),
@@ -1205,7 +1203,7 @@ export const movementLedger = {
       if (settlementLink.role !== 'outgoing') return fail('Receivable settlement operational movements cannot be edited through reportable movement edits')
       if (!validatesSettlementOutgoingSafeFields(original, input)) return fail(settlementSafeClassificationError())
       if (!input.name.trim()) return fail('Name is required')
-      if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+      if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
       await db.update(movements).set({
         name: input.name.trim(),
@@ -1242,7 +1240,7 @@ export const movementLedger = {
 
     const normalized = await normalizeMoney(spaceId, input)
     if ('error' in normalized) return fail(normalized.error)
-    if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
+    if (!(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
     await db.update(movements).set({
       name: input.name.trim(),
@@ -1446,7 +1444,7 @@ export const movementLedger = {
     if (!movement.reportable) return fail('Solo movimientos reportables pueden marcarse como por cobrar')
     const effectiveCategoryId = categoryId === undefined ? movement.categoryId : categoryId
     if (!effectiveCategoryId) return fail('Un gasto por cobrar requiere categoría')
-    if (effectiveCategoryId !== movement.categoryId && !(await ensureOwnedCategory(spaceId, effectiveCategoryId))) return fail('Invalid category')
+    if (!(await ensureOwnedCategory(spaceId, effectiveCategoryId))) return fail('Invalid category')
     if (!reminderText.trim()) return fail('Reminder text is required')
 
     await db.update(movements).set({
@@ -1512,7 +1510,7 @@ export const movementLedger = {
           id: generateId(),
           spaceId: spaceId,
           createdByUserId: actorUserId,
-          categoryId: receivable.categoryId,
+          categoryId: await ensureOwnedCategory(spaceId, receivable.categoryId, tx) ? receivable.categoryId : null,
           accountId: paymentAccount.id,
           name: `Cobro: ${receivable.name}`,
           date: new Date().toISOString().slice(0, 10),
@@ -1711,7 +1709,7 @@ export const movementLedger = {
           spaceId,
           createdByUserId: actorUserId,
           accountId: lockedIncome.accountId,
-          categoryId: lockedIncome.categoryId,
+          categoryId: await ensureOwnedCategory(spaceId, lockedIncome.categoryId, tx) ? lockedIncome.categoryId : null,
           name: `Cobro: ${lockedReceivable.name}`,
           date: lockedIncome.date,
           time: lockedIncome.time,
@@ -1766,6 +1764,7 @@ export const movementLedger = {
     }
 
     await db.transaction(async (tx) => {
+      const categoryId = await ensureOwnedCategory(spaceId, original.categoryId, tx) ? original.categoryId : null
       await tx.delete(movements).where(and(eq(movements.id, originalId), eq(movements.spaceId, spaceId)))
       for (let i = 0; i < splits.length; i++) {
         const split = splits[i]
@@ -1773,7 +1772,7 @@ export const movementLedger = {
           id: generateId(),
           spaceId: spaceId,
           createdByUserId: actorUserId,
-          categoryId: original.categoryId,
+          categoryId,
           accountId: original.accountId,
           name: split.name.trim(),
           date: original.date,
