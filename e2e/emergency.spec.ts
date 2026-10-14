@@ -59,7 +59,7 @@ test.describe('Emergency Expenses', () => {
     await page.waitForLoadState('networkidle')
 
     // Screenshot: edit page before marking emergency
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-01-edit-before.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-01-edit-before.png` })
 
     // Should see emergency checkbox (only for expenses)
     await expect(page.getByText('Gasto de emergencia')).toBeVisible()
@@ -68,7 +68,7 @@ test.describe('Emergency Expenses', () => {
     await page.locator('input[type="checkbox"]').check()
 
     // Screenshot: with emergency checked
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-02-edit-checked.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-02-edit-checked.png` })
 
     // Save
     await page.getByRole('button', { name: /Guardar cambios/i }).click()
@@ -81,7 +81,7 @@ test.describe('Emergency Expenses', () => {
     await expect(badge).toContainText('🚨')
 
     // Screenshot: dashboard with badge
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-03-dashboard-badge.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-03-dashboard-badge.png` })
   })
 
   test('emergency list and detail page', async ({ page }) => {
@@ -103,7 +103,7 @@ test.describe('Emergency Expenses', () => {
     await expect(page.getByText('Emergencia médica')).toBeVisible()
 
     // Screenshot: emergency list
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-04-list.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-04-list.png` })
 
     // Click on it
     await page.getByText('Emergencia médica').click()
@@ -116,7 +116,7 @@ test.describe('Emergency Expenses', () => {
     await expect(page.getByText('Abonar')).toBeVisible()
 
     // Screenshot: emergency detail
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-05-detail.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-05-detail.png` })
   })
 
   test('make partial payment on emergency', async ({ page }) => {
@@ -143,7 +143,7 @@ test.describe('Emergency Expenses', () => {
     await expect(page.getByText('Abonar a emergencia')).toBeVisible()
 
     // Screenshot: payment modal
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-06-payment-modal.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-06-payment-modal.png` })
 
     // Change amount to partial payment
     const amountInput = page.locator('input[inputmode="decimal"]')
@@ -158,7 +158,7 @@ test.describe('Emergency Expenses', () => {
     await expect(page.getByText('Abonos (1)')).toBeVisible()
 
     // Screenshot: after payment
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-07-after-payment.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-07-after-payment.png` })
   })
 
   test('rejects emergency partial payment above remaining balance', async ({ page }) => {
@@ -191,7 +191,7 @@ test.describe('Emergency Expenses', () => {
     await expect(page.locator('main')).toContainText('$0')
     await expect(page.locator('main')).not.toContainText('-$')
     await expect(page.getByText('Abonos (0)')).toBeVisible()
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-overpay-rejected.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-overpay-rejected.png` })
   })
 
   test('blocks normal edit and delete of transfer linked to emergency partial payment', async ({ page }) => {
@@ -239,7 +239,7 @@ test.describe('Emergency Expenses', () => {
     await page.getByRole('button', { name: 'Eliminar', exact: true }).click()
     await expect(page.getByText(/vinculada a un abono de emergencia.*no se puede eliminar/i)).toBeVisible({ timeout: 5_000 })
     expect(await transferAndEmergencyPaymentStillLinked(transferInfo.transferId)).toBe(true)
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-linked-transfer-blocked.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-linked-transfer-blocked.png` })
   })
 
   test('USD emergency keeps total paid and remaining in USD after partial payment', async ({ page }) => {
@@ -271,7 +271,7 @@ test.describe('Emergency Expenses', () => {
     const emergencySummary = page.locator('main').locator('div').filter({ hasText: 'Total' }).filter({ hasText: 'Pagado' }).filter({ hasText: 'Restante' }).first()
     await expect(emergencySummary).toContainText('US$100,00')
     await expect(emergencySummary).toContainText('US$0,00')
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-usd-01-before-payment.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-usd-01-before-payment.png` })
 
     await page.getByRole('button', { name: /Abonar/i }).click()
     await expect(page.getByText('Abonar a emergencia')).toBeVisible()
@@ -284,7 +284,7 @@ test.describe('Emergency Expenses', () => {
     await expect(page.getByText('Abonos (1)')).toBeVisible({ timeout: 5000 })
     await expect(page.locator('main')).toContainText('US$40,00')
     await expect(page.locator('main')).toContainText('US$60,00')
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-usd-02-after-payment.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-usd-02-after-payment.png` })
   })
 
   test('emergency checkbox not visible for income type', async ({ page }) => {
@@ -302,6 +302,6 @@ test.describe('Emergency Expenses', () => {
     await expect(page.getByText('Gasto de emergencia')).not.toBeVisible()
 
     // Screenshot
-    await page.screenshot({ path: 'e2e-results/screenshots/emergency-08-income-no-checkbox.png' })
+    await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/emergency-08-income-no-checkbox.png` })
   })
 })

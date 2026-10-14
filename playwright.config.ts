@@ -17,7 +17,7 @@ if (existsSync(cachedLdPathFile)) {
 export default defineConfig({
   testDir: './e2e',
   testIgnore: '**/mcp.spec.ts',
-  outputDir: './e2e-results',
+  outputDir: process.env.E2E_OUTPUT_DIR ?? './e2e-results',
   fullyParallel: false,
   retries: 0,
   timeout: 90_000,
@@ -50,6 +50,6 @@ export default defineConfig({
   ],
   reporter: [
     ['list'],
-    ['html', { outputFolder: './e2e-report', open: 'never' }],
+    ['html', { outputFolder: process.env.E2E_REPORT_DIR ?? './e2e-report', open: 'never' }],
   ],
 })

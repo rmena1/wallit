@@ -40,7 +40,7 @@ export default async function Home() {
       .select({
         id: movements.id,
         spaceId: movements.spaceId,
-        categoryId: movements.categoryId,
+        categoryId: categories.id,
         accountId: movements.accountId,
         name: movements.name,
         date: movements.date,
@@ -93,7 +93,7 @@ export default async function Home() {
         )`,
       })
       .from(movements)
-      .leftJoin(categories, eq(movements.categoryId, categories.id))
+      .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
       .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
       .where(eq(movements.spaceId, space.id))
       .orderBy(desc(movements.date), desc(movements.createdAt))
@@ -137,7 +137,7 @@ export default async function Home() {
         sourceSpaceEmoji: sql<string | null>`NULL`,
       })
       .from(movements)
-      .leftJoin(categories, eq(movements.categoryId, categories.id))
+      .leftJoin(categories, and(eq(movements.categoryId, categories.id), eq(categories.spaceId, space.id)))
       .leftJoin(accounts, and(eq(movements.accountId, accounts.id), eq(accounts.spaceId, space.id)))
       .where(and(
         ...reportableMovementSqlFilters(space.id),

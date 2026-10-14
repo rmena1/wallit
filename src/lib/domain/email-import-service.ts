@@ -151,19 +151,7 @@ async function importMovement(input: EmailMovementImport): Promise<ImportResult>
   const account = await getImportAccount(identity.userId, String(input.accountId ?? ''))
   if (!account) return fail('Account is not accessible by user')
   if (!(await categoryBelongsToSpace(input.categoryId, account.spaceId))) {
-    // Email history is account-wide. A foreign category is valid only when
-    // this user's exact raw name already carries it (excluding this import).
-    const [historical] = input.type === 'expense' && input.originalName && input.categoryId
-      ? await db.select({ id: movements.id }).from(movements)
-        .where(and(
-          eq(movements.createdByUserId, identity.userId),
-          eq(movements.originalName, input.originalName),
-          eq(movements.categoryId, input.categoryId),
-          sql`NOT (${movements.sourceEmailProvider} IS NOT DISTINCT FROM ${identity.provider}
-            AND ${movements.sourceEmailId} IS NOT DISTINCT FROM ${identity.emailId})`,
-        )).limit(1)
-      : []
-    if (!historical) return fail('Category does not belong to account Space')
+    return fail('Category does not belong to account Space')
   }
 
   let money: ReturnType<typeof normalizeMoney>

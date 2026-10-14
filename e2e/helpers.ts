@@ -194,5 +194,5 @@ export async function createMovement(page: Page, opts: {
 }
 
 export function screenshot(page: Page, name: string) {
-  return page.screenshot({ path: `./e2e-results/screenshots/${name}.png`, fullPage: true })
+  return page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR ?? "./e2e-results/screenshots"}/${name}.png`, fullPage: true })
 }
