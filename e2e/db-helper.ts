@@ -845,3 +845,16 @@ export async function seedUsdToClpRate(rate: number = 95050): Promise<void> {
 export async function closePool() {
   await sql.end()
 }
+
+export async function getReviewReceivableState(movementId: string) {
+  const [row] = await sql`SELECT name, category_id, receivable, received, needs_review, emergency, loan,
+    amount, amount_usd, exchange_rate, currency, account_id, space_id, reportable
+    FROM movements WHERE id = ${movementId}`
+  return row
+}
+
+export async function seedPendingEmergencyExpense(userId: string, accountId: string | null) {
+  const id = await seedReviewMovement(userId, accountId, 'Pending emergency to collect', 2000000)
+  await sql`UPDATE movements SET emergency = true WHERE id = ${id}`
+  return id
+}

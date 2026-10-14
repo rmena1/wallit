@@ -14,7 +14,10 @@ test('reorders bank accounts in settings and uses that order on home', async ({ 
   await expect(rows.nth(0)).toContainText('BCI')
   await expect(rows.nth(1)).toContainText('Banco de Chile')
 
-  await rows.nth(0).dragTo(rows.nth(1))
+  await rows.nth(0).dragTo(rows.nth(1), {
+    sourcePosition: { x: 10, y: 10 },
+    targetPosition: { x: 10, y: 10 },
+  })
   await expect(rows.nth(0)).toContainText('Banco de Chile')
   await expect(rows.nth(1)).toContainText('BCI')
   await screenshot(page, 'account-reorder-settings')

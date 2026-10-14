@@ -134,6 +134,83 @@ for (const resource of [null, `${origin}/api/mcp`, `${origin}/api/mcp/`]) {
   })
 }
 
+test('receivable marking and Review validate the submitted category atomically', async ({ request }) => {
+  const f = await fixture()
+  const other = await fixture()
+  const auth = await grant(f)
+  for (const tool of ['wallit_receivable_mark', 'wallit_review_confirm']) {
+    const created = await call(request, auth.token, 'wallit_movement_create', write(f, money(f, { categoryId: null })))
+    const id = created.createdMovementIds[0]
+    const state = async () => (await sql`SELECT * FROM movements WHERE id = ${id}`)[0]
+    const before = await state()
+    const args = tool === 'wallit_receivable_mark'
+      ? { id, reminderText: 'Debtor' }
+      : { id, ...money(f, { categoryId: null, name: 'Unsaved edit' }), receivableText: 'Debtor' }
+    const rejected = await call(request, auth.token, tool, write(f, args), true)
+    expect(JSON.stringify(rejected)).toContain('requiere categoría')
+    expect(await state()).toEqual(before)
+    for (const categoryId of [null, other.categoryId, 'missing-category']) {
+      await call(request, auth.token, tool, write(f, { ...args, categoryId }), true)
+      expect(await state()).toEqual(before)
+    }
+    const accepted = write(f, { ...args, categoryId: f.categoryId })
+    await call(request, auth.token, tool, accepted)
+    const after = await state()
+    expect(after).toEqual({ ...before, name: 'Debtor', category_id: f.categoryId, receivable: true,
+      needs_review: tool === 'wallit_receivable_mark', updated_at: after.updated_at })
+    await call(request, auth.token, tool, accepted)
+    expect(await state()).toEqual(after)
+  }
+  const categorized = await call(request, auth.token, 'wallit_movement_create', write(f, money(f)))
+  const id = categorized.createdMovementIds[0]
+  await call(request, auth.token, 'wallit_receivable_mark', write(f, { id, reminderText: 'Existing category' }))
+  expect((await sql`SELECT category_id, receivable, needs_review FROM movements WHERE id = ${id}`)[0])
+    .toEqual({ category_id: f.categoryId, receivable: true, needs_review: true })
+})
+
+test('Review reclassifies pending workflow flags but protects actual payment dependencies', async ({ request }) => {
+  const f = await fixture()
+  const auth = await grant(f)
+  const make = async (kind: string) => {
+    const original = kind === 'loan' ? { type: 'income', loan: true } : kind === 'emergency' ? { emergency: true } : {}
+    const id = (await call(request, auth.token, 'wallit_movement_create', write(f, money(f, original)))).createdMovementIds[0]
+    if (kind === 'receivable') await call(request, auth.token, 'wallit_receivable_mark', write(f, { id, reminderText: 'Original debtor' }))
+    return id as string
+  }
+  const reviewArgs = (id: string) => ({ id, ...money(f), emergency: false, loan: false, receivableText: 'New debtor' })
+  for (const kind of ['emergency', 'loan', 'receivable']) {
+    const id = await make(kind)
+    const [before] = await sql`SELECT * FROM movements WHERE id = ${id}`
+    expect(before.needs_review).toBe(true)
+    for (const invalid of [{ categoryId: null }, { emergency: true }, { loan: true }]) {
+      await call(request, auth.token, 'wallit_review_confirm', write(f, { ...reviewArgs(id), ...invalid }), true)
+      expect((await sql`SELECT * FROM movements WHERE id = ${id}`)[0]).toEqual(before)
+    }
+    await call(request, auth.token, 'wallit_review_confirm', write(f, reviewArgs(id)))
+    const [after] = await sql`SELECT * FROM movements WHERE id = ${id}`
+    expect(after).toEqual({ ...before, type: 'expense', name: 'New debtor', emergency: false, loan: false,
+      receivable: true, needs_review: false, updated_at: after.updated_at })
+
+    const dependentId = await make(kind)
+    if (kind === 'emergency') {
+      await call(request, auth.token, 'wallit_emergency_pay', write(f, { id: dependentId,
+        fromAccountId: f.otherAccountId, toAccountId: f.accountId, amount: 4000, date: '2026-10-06' }))
+    } else if (kind === 'loan') {
+      const expenseId = (await call(request, auth.token, 'wallit_movement_create', write(f, money(f)))).createdMovementIds[0]
+      await call(request, auth.token, 'wallit_review_confirm', write(f, { id: expenseId, ...money(f) }))
+      await call(request, auth.token, 'wallit_loan_settle', write(f, { id: dependentId, expenseMovementId: expenseId, date: '2026-10-06' }))
+    } else {
+      await call(request, auth.token, 'wallit_receivable_settle_new', write(f, { id: dependentId, paymentAccountId: f.otherAccountId }))
+    }
+    const beforeMovements = await sql`SELECT * FROM movements WHERE space_id = ${f.spaceId} ORDER BY id`
+    const beforePayments = await sql`SELECT * FROM emergency_payments WHERE space_id = ${f.spaceId} ORDER BY id`
+    const rejected = await call(request, auth.token, 'wallit_review_confirm', write(f, reviewArgs(dependentId)), true)
+    expect(JSON.stringify(rejected)).toContain('dependent relationships')
+    expect(await sql`SELECT * FROM movements WHERE space_id = ${f.spaceId} ORDER BY id`).toEqual(beforeMovements)
+    expect(await sql`SELECT * FROM emergency_payments WHERE space_id = ${f.spaceId} ORDER BY id`).toEqual(beforePayments)
+  }
+})
+
 test('ignored scopes never grant data access or permit escalation during refresh', async ({ request }) => {
   const f = await fixture()
   const readOnly = await grant(f, 'openid wallit:read offline_access')

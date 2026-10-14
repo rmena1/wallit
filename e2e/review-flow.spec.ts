@@ -6,9 +6,11 @@ import {
   getFirstAccountId,
   getPendingTransferState,
   getUserId,
+  getReviewReceivableState,
   markMovementReviewed,
   seedPendingTransfer,
   seedReviewMovement,
+  seedPendingEmergencyExpense,
   seedReviewMovements,
   seedTypedReviewMovement,
 } from './db-helper'
@@ -181,6 +183,61 @@ test.describe('Review Flow — Complete', () => {
     await expect(page.getByText('La transferencia ya fue revisada parcialmente y no se puede eliminar desde revisión')).toBeVisible({ timeout: 5000 })
     const partialState = await getPendingTransferState(partialTransfer.transferId)
     expect(partialState).toEqual({ transferExists: true, movementCount: 2, pendingCount: 1 })
+  })
+
+  test('receivable review saves the submitted category atomically and rejects no category', async ({ page }) => {
+    const email = await registerUser(page)
+    await ensureAccount(page)
+    await ensureCategory(page, '🍔', 'Comida')
+    const userId = (await getUserId(email))!
+    const accountId = await getFirstAccountId(userId)
+    const id = await seedReviewMovement(userId, accountId, 'Uncategorized expense', 2000000)
+    const before = await getReviewReceivableState(id)
+    expect(before.category_id).toBeNull()
+    await page.goto('/review')
+    await page.locator('input').first().fill('Unsaved edit')
+    await page.getByRole('button', { name: /💰 Cobrar/i }).click()
+    await page.getByPlaceholder('Texto del recordatorio...').fill('Juan debe pagar')
+    const dialog = page.locator('div[style*="position: fixed"]')
+    await dialog.getByRole('button', { name: 'Confirmar', exact: true }).click()
+    await expect(page.getByText('Un gasto por cobrar requiere categoría')).toBeVisible()
+    expect(await getReviewReceivableState(id)).toEqual(before)
+    await dialog.getByRole('button', { name: 'Cancelar' }).click()
+    const category = page.locator('select').filter({ has: page.locator('option').filter({ hasText: 'Comida' }) })
+    await category.selectOption({ label: '🍔 Comida' })
+    const categoryId = await category.inputValue()
+    await page.getByRole('button', { name: /💰 Cobrar/i }).click()
+    await page.getByPlaceholder('Texto del recordatorio...').fill('Juan debe pagar')
+    await dialog.getByRole('button', { name: 'Confirmar', exact: true }).click()
+    await expect(page.getByText('¡Revisión completada!').or(page.getByText('No hay movimientos pendientes'))).toBeVisible()
+    expect(await getReviewReceivableState(id)).toEqual({
+      ...before, name: 'Juan debe pagar', category_id: categoryId, receivable: true, needs_review: false,
+    })
+    await page.reload()
+    await expect(page.getByText('No hay movimientos pendientes')).toBeVisible()
+    await page.goto('/')
+    await expect(page.getByText('Juan debe pagar')).toBeVisible()
+  })
+
+  test('Review can reclassify a pending emergency as receivable using the submitted form', async ({ page }) => {
+    const email = await registerUser(page)
+    await ensureAccount(page)
+    await ensureCategory(page, '🍔', 'Comida')
+    const userId = (await getUserId(email))!
+    const id = await seedPendingEmergencyExpense(userId, await getFirstAccountId(userId))
+    const before = await getReviewReceivableState(id)
+    expect(before).toMatchObject({ emergency: true, needs_review: true, category_id: null })
+    await page.goto('/review')
+    await page.getByLabel('Gasto de emergencia').uncheck()
+    const category = page.locator('select').filter({ has: page.locator('option').filter({ hasText: 'Comida' }) })
+    await category.selectOption({ label: '🍔 Comida' })
+    const categoryId = await category.inputValue()
+    await page.getByRole('button', { name: /💰 Cobrar/i }).click()
+    await page.getByPlaceholder('Texto del recordatorio...').fill('Emergency debtor')
+    await page.locator('div[style*="position: fixed"]').getByRole('button', { name: 'Confirmar', exact: true }).click()
+    await expect(page.getByText('¡Revisión completada!').or(page.getByText('No hay movimientos pendientes'))).toBeVisible()
+    expect(await getReviewReceivableState(id)).toEqual({ ...before, name: 'Emergency debtor',
+      category_id: categoryId, emergency: false, receivable: true, needs_review: false })
   })
 
   test('mark movement as receivable and edit fields before confirming', async ({ page }) => {
