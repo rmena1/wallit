@@ -987,6 +987,41 @@ async function consumeIncomingTransferForReceivableSettlement(
 }
 
 export const movementLedger = {
+  /** Repair only classification links in the selected, caller-authorized Space. */
+  async repairForeignCategories(spaceId: string, dryRun: boolean, sampleLimit: number) {
+    return db.transaction(async tx => {
+      type Sample = { movementId: string; spaceId: string; foreignCategoryName: string; destinationCategoryName: string | null }
+      // The materialized plan stays in PostgreSQL. Both counts and the bounded sample
+      // describe the same pre-update snapshot; apply performs one set-based UPDATE.
+      const [result] = await tx.execute<{ reassignable: number; toReview: number; sample: Sample[] }>(sql`
+        WITH affected AS MATERIALIZED (
+          SELECT m.id, m.space_id, foreign_category.name AS foreign_name,
+            (SELECT destination.id FROM categories destination
+              WHERE destination.space_id = m.space_id AND destination.name = foreign_category.name
+              ORDER BY destination.id LIMIT 1) AS destination_id
+          FROM movements m JOIN categories foreign_category ON foreign_category.id = m.category_id
+          WHERE m.space_id = ${spaceId} AND foreign_category.space_id <> m.space_id
+        )
+        ${dryRun ? sql`` : sql`, repaired AS (
+          UPDATE movements m SET category_id = affected.destination_id,
+            needs_review = CASE WHEN affected.destination_id IS NULL THEN true ELSE m.needs_review END
+          FROM affected WHERE m.id = affected.id AND m.space_id = ${spaceId}
+        )`}
+        SELECT
+          (COUNT(*) FILTER (WHERE destination_id IS NOT NULL))::integer AS reassignable,
+          (COUNT(*) FILTER (WHERE destination_id IS NULL))::integer AS "toReview",
+          (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+            'movementId', sample.id, 'spaceId', sample.space_id,
+            'foreignCategoryName', sample.foreign_name,
+            'destinationCategoryName', CASE WHEN sample.destination_id IS NULL THEN NULL ELSE sample.foreign_name END
+          ) ORDER BY sample.id), '[]'::jsonb)
+          FROM (SELECT * FROM affected ORDER BY id LIMIT ${sampleLimit}) sample) AS sample
+        FROM affected
+      `)
+      // Name comparison and duplicate-name tie-breaking match the bank-email cron exactly.
+      return { dryRun, spaces: [{ spaceId, reassignable: result.reassignable, toReview: result.toReview }], sample: result.sample }
+    })
+  },
   async editPendingMovement(spaceId: string, movementId: string, input: ReportableInput): Promise<LedgerResult> {
     const original = await getOwnedMovement(spaceId, movementId)
     if (!original?.needsReview) return fail('Movement is not pending review')
