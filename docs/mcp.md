@@ -20,7 +20,7 @@ The consent screen identifies the logged-in account, application and redirect, e
 | `wallit:read` | Authenticated profile, permitted Spaces, financial reads and reports |
 | `wallit:write` | Domain creation, edits, deletion and imports |
 | `wallit:review` | Separate explicit confirmation of existing movements |
-| `wallit:admin` | Space administration and membership, within existing Owner/Member rules |
+| `wallit:admin` | Space administration and membership, within existing Owner/Member rules; selected-Space category repair |
 
 Anonymous MCP GET/POST/DELETE/OPTIONS receive 401 with the resource-metadata challenge. A known tool with insufficient scope receives 403. Unsupported authenticated HTTP methods receive 405. No URL-only authentication, static bearer configuration, arbitrary SQL, raw field updates, password/session/token listings or administrator bypass is exposed.
 
@@ -36,14 +36,14 @@ Reads are bounded where timeline/audit/import lists offer pagination (default 50
 
 ## Parity inventory
 
-The following 64 tools map the existing UI and domain capabilities. `tools/list` is the executable input-schema source; strict schemas reject extra fields such as a review-policy override.
+The following 65 tools map the existing UI and domain capabilities. `tools/list` is the executable input-schema source; strict schemas reject extra fields such as a review-policy override.
 
 | Capability in Wallit | MCP parity |
 | --- | --- |
 | User identity | Own stable profile ID/email; no password/profile edit UI exists |
 | Active Space selection | Every financial call explicitly supplies `spaceId`; cookie switching is unnecessary |
 | Spaces and permissions | List/create/edit/archive/leave; members list/add/remove with Owner checks |
-| Categories | List/create/edit/delete, including existing dependency handling |
+| Categories | List/create/edit/delete, including existing dependency handling; admin repair of foreign movement category links |
 | Accounts/settings | Banks, types, last four, CLP/USD, initial balances, credit limits, investment flag, color/emoji and order |
 | Investments | Current value and snapshot history/performance/edit/delete |
 | Dashboard/account/timeline | Balances, total/net liquidity, paginated movements, details, receivables, review queue |
@@ -58,10 +58,21 @@ The following 64 tools map the existing UI and domain capabilities. `tools/list`
 | Bank browser automation, cron configuration, raw database/admin access | Operational infrastructure rather than an authenticated user's Wallit UI; not exposed |
 | Register/login/logout/password recovery | Browser authentication lifecycle; existing registration/login remains outside already-authenticated MCP |
 
+### Foreign category repair
+
+`wallit_admin_repair_foreign_categories` requires `wallit:admin` and current membership plus consent for `spaceId`. It repairs only that Space per call; repeat for other authorized Spaces. Only active Spaces are reachable: archived Spaces are excluded by current membership resolution, even for their Owner with all-Space consent. This tool does not unarchive Spaces or bypass that restriction. It does not grant global administrator access or require access to the foreign category's Space. For both preview and apply, every affected transfer leg and settlement movement (including the original receivable) must have all linked Spaces within current membership and consent. If any fails, the entire call returns `forbidden` with `Linked Space unavailable`, without a sample, repair, or audit write. No partial repairs or blocked-count output are returned. This narrow maintenance operation intentionally exposes the linked foreign category **name** only here; category IDs are never returned. Ordinary reads retain their existing foreign-category redaction.
+
+Input: `{ spaceId: string, idempotencyKey: string (16–120 chars), dryRun?: boolean = true, sampleLimit?: integer = 20 (0–100) }`. Unknown fields are rejected. Dry runs perform no writes, including no audit/idempotency rows, and return `{ dryRun: true, spaces: [{ spaceId, reassignable, toReview }], sample: [{ movementId, spaceId, foreignCategoryName, destinationCategoryName: string | null }] }`. Counts are aggregated in PostgreSQL over all affected movements; only the bounded, movement-ID-ordered sample is returned to the application. `sampleLimit: 0` returns no movement rows. Apply uses one set-based UPDATE, with its counts and sample derived from the same materialized pre-update plan.
+
+Matching uses exactly the bank-email cron's `category-history.mjs` SQL name equality: no trimming, case folding, or accent normalization. Duplicate local names select the lowest category ID, as in the cron tie-breaker. Apply (`dryRun: false`) reassigns matching links while preserving review status; missing matches clear the link and set `needsReview=true`. All other movement fields, accounts, Spaces, reportability and categories remain unchanged. Apply returns the same summary under `{ result, createdMovementIds: [], operationId }` and commits repair, audit and idempotency together in the existing serializable MCP transaction. Retry identical apply arguments with the same key to retrieve the original result; a fresh key after repair returns zero counts. Dry runs do not reserve their keys and always recompute.
+
+Fixtures cover default/bounded previews with complete before/after snapshots, apply and replay, injected-failure rollback (including audit), zero-change second apply, exact-name matching, preserved review status and all unrelated movement fields, untouched foreign-Space data and categories, missing admin scope, unauthorized Space rejection, linked transfer/settlement checks for narrow grants and lost membership, archived-Space rejection, and a 400-movement fixture with zero/bounded samples.
+
 ### Full catalog
 
 | Tool | Required scope | Existing operation / behavior |
 | --- | --- | --- |
+| `wallit_admin_repair_foreign_categories` | `wallit:admin` | Preview or repair foreign category links in one authorized Space through the Movement Ledger; no category IDs exposed. |
 | `wallit_profile` | `wallit:read` | Read the stable identity of your own authenticated Wallit account. |
 | `wallit_spaces_list` | `wallit:read` | List active Spaces you currently belong to and their roles. |
 | `wallit_space_create` | `wallit:admin` | Create a shared Space, copying your Personal categories. Requires admin consent. |

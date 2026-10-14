@@ -335,6 +335,165 @@ test('bulk failure rolls back all writes, errors omit database details, expired 
   expect((await rpc(request, auth.token, 'ping')).status()).toBe(401)
 })
 
+test('admin foreign-category repair previews without writes, applies atomically and stays Space scoped', async ({ request }) => {
+  const f = await fixture(), other = await fixture()
+  const auth = await grant(f, 'wallit:read wallit:write wallit:admin', [f.spaceId])
+  const tool = 'wallit_admin_repair_foreign_categories'
+  const ids: string[] = []
+  for (let i = 0; i < 4; i++) {
+    const result = await call(request, auth.token, 'wallit_movement_create', write(f, money(f)))
+    ids.push(result.createdMovementIds[0])
+  }
+  const unmatched = key(), caseMismatch = key()
+  for (const [id, name] of [[unmatched, 'No local category'], [caseMismatch, ' test ']]) {
+    await sql`INSERT INTO categories (id, space_id, created_by_user_id, name, emoji, created_at, updated_at) VALUES (${id}, ${other.spaceId}, ${other.userId}, ${name}, '🧪', now(), now())`
+  }
+  // Two exact matches (one already pending), one missing name and one case/space mismatch.
+  for (let i = 0; i < ids.length; i++) {
+    await sql`UPDATE movements SET category_id = ${[other.categoryId, other.categoryId, unmatched, caseMismatch][i]}, needs_review = ${i === 1} WHERE id = ${ids[i]}`
+  }
+  // An unrelated Space has the same defect and must remain byte-for-byte unchanged.
+  const outsider = key()
+  await sql`INSERT INTO movements (id, space_id, created_by_user_id, name, date, amount, type, currency, account_id, category_id, needs_review, created_at, updated_at)
+    VALUES (${outsider}, ${other.spaceId}, ${other.userId}, 'Unrelated', '2026-10-06', 10000, 'expense', 'CLP', ${other.accountId}, ${f.categoryId}, false, now(), now())`
+  const snapshot = async () => ({
+    movements: await sql`SELECT * FROM movements WHERE space_id IN (${f.spaceId}, ${other.spaceId}) ORDER BY id`,
+    categories: await sql`SELECT * FROM categories WHERE space_id IN (${f.spaceId}, ${other.spaceId}) ORDER BY id`,
+    audit: await sql`SELECT * FROM mcp_operations WHERE user_id = ${f.userId} ORDER BY id`,
+  })
+  const before = await snapshot()
+  const previewArgs = write(f, { sampleLimit: 100 })
+  const preview = await call(request, auth.token, tool, previewArgs)
+  expect(preview).toMatchObject({ dryRun: true, spaces: [{ spaceId: f.spaceId, reassignable: 2, toReview: 2 }] })
+  expect(preview.sample).toHaveLength(4)
+  expect(preview.sample).toContainEqual({ movementId: ids[0], spaceId: f.spaceId, foreignCategoryName: 'Test', destinationCategoryName: 'Test' })
+  expect(preview.sample).toContainEqual({ movementId: ids[2], spaceId: f.spaceId, foreignCategoryName: 'No local category', destinationCategoryName: null })
+  expect(JSON.stringify(preview)).not.toContain(other.categoryId)
+  expect(await snapshot()).toEqual(before)
+  const bounded = await call(request, auth.token, tool, write(f, { dryRun: true, sampleLimit: 1 }))
+  expect(bounded.sample).toHaveLength(1)
+  expect(bounded.spaces).toEqual(preview.spaces)
+  expect(await snapshot()).toEqual(before)
+  const noAdmin = await grant(f, 'wallit:read wallit:write', [f.spaceId])
+  for (const dryRun of [true, false]) {
+    expect((await rpc(request, noAdmin.token, 'tools/call', { name: tool, arguments: write(f, { dryRun }) })).status()).toBe(403)
+    expect((await call(request, auth.token, tool, write(other, { dryRun }), true)).code).toBe('forbidden')
+  }
+  expect(await snapshot()).toEqual(before)
+  const applyArgs = { ...previewArgs, dryRun: false }
+  // Inject a constraint failure to prove the set-based repair and its audit roll back.
+  const last = before.movements.filter(row => ids.includes(row.id)).at(-1)!
+  const literal = (value: string) => "'" + value.replaceAll("'", "''") + "'"
+  await sql.unsafe(`ALTER TABLE movements ADD CONSTRAINT fixture_repair_failure CHECK (id <> ${literal(last.id)} OR category_id IS NOT DISTINCT FROM ${literal(last.category_id)}) NOT VALID`)
+  try {
+    expect((await call(request, auth.token, tool, applyArgs, true)).code).toBe('operation_failed')
+    expect(await snapshot()).toEqual(before)
+  } finally {
+    await sql`ALTER TABLE movements DROP CONSTRAINT fixture_repair_failure`
+  }
+  const applied = await call(request, auth.token, tool, applyArgs)
+  expect(applied.result).toEqual({ ...preview, dryRun: false })
+  expect(applied.createdMovementIds).toEqual([])
+  const after = await snapshot()
+  expect(after.categories).toEqual(before.categories)
+  expect(after.audit).toHaveLength(before.audit.length + 1)
+  for (const original of before.movements) {
+    const index = ids.indexOf(original.id)
+    expect(after.movements.find(row => row.id === original.id)).toEqual(index < 0 ? original : {
+      ...original, category_id: index < 2 ? f.categoryId : null,
+      needs_review: index < 2 ? original.needs_review : true,
+    })
+  }
+  expect(await call(request, auth.token, tool, applyArgs)).toEqual(applied)
+  expect(await snapshot()).toEqual(after)
+  const again = await call(request, auth.token, tool, write(f, { dryRun: false }))
+  expect(again.result).toEqual({ dryRun: false, spaces: [{ spaceId: f.spaceId, reassignable: 0, toReview: 0 }], sample: [] })
+})
+
+test('admin repair enforces linked transfer and settlement Spaces for previews and apply', async ({ request }) => {
+  const f = await fixture(), auth = await grant(f)
+  const tool = 'wallit_admin_repair_foreign_categories'
+  const shared = (await call(request, auth.token, 'wallit_space_create', write(f, { name: 'Repair linked Space', emoji: '🏠' }))).result.id
+  const sharedCategory = (await call(request, auth.token, 'wallit_categories_list', { spaceId: shared }))[0].id
+  const account = (await call(request, auth.token, 'wallit_account_create', write(f, { spaceId: shared, bankName: 'Fixture', accountType: 'Corriente', lastFourDigits: '4444', currency: 'CLP' }))).result.account.id
+  const transfer = await call(request, auth.token, 'wallit_transfer_create', write(f, { fromAccountId: f.accountId, toAccountId: account, destinationSpaceId: shared, fromAmount: 10000, toAmount: 10000, fromCurrency: 'CLP', toCurrency: 'CLP', date: '2026-10-06' }))
+  const [root] = await sql`SELECT * FROM transfers WHERE id = ${transfer.result.transferId}`
+  const receivable = (await call(request, auth.token, 'wallit_movement_create', write(f, money(f)))).createdMovementIds[0]
+  await call(request, auth.token, 'wallit_receivable_mark', write(f, { id: receivable, reminderText: 'Repair fixture debtor' }))
+  await call(request, auth.token, 'wallit_receivable_settle_cross_space', write(f, { receivableId: receivable, payingSpaceId: shared, sourceAccountId: account, destinationAccountId: f.accountId, amount: 10000, date: '2026-10-06' }))
+  const [settlement] = await sql`SELECT * FROM receivable_settlements WHERE receivable_id = ${receivable}`
+  const narrow = await grant(f, 'wallit:admin', [f.spaceId])
+  const narrowShared = await grant(f, 'wallit:admin', [shared])
+  const snapshot = async () => ({
+    movements: await sql`SELECT * FROM movements WHERE space_id IN (${f.spaceId}, ${shared}) ORDER BY id`,
+    transfers: await sql`SELECT * FROM transfers WHERE id = ${root.id}`,
+    settlements: await sql`SELECT * FROM receivable_settlements WHERE id = ${settlement.id}`,
+    audit: await sql`SELECT * FROM mcp_operations WHERE user_id = ${f.userId} ORDER BY id`,
+  })
+  for (const item of [
+    { id: root.source_movement_id, spaceId: f.spaceId, local: f.categoryId, foreign: sharedCategory, token: narrow.token },
+    { id: settlement.receivable_id, spaceId: f.spaceId, local: f.categoryId, foreign: sharedCategory, token: narrow.token },
+    { id: settlement.incoming_movement_id, spaceId: f.spaceId, local: f.categoryId, foreign: sharedCategory, token: narrow.token },
+    { id: settlement.outgoing_movement_id, spaceId: shared, local: sharedCategory, foreign: f.categoryId, token: narrowShared.token },
+  ]) {
+    await sql`UPDATE movements SET category_id = ${item.foreign}, needs_review = false WHERE id = ${item.id}`
+    const before = await snapshot()
+    for (const dryRun of [true, false]) {
+      const denied = await call(request, item.token, tool, write(f, { spaceId: item.spaceId, dryRun }), true)
+      expect(denied).toEqual({ code: 'forbidden', message: 'Linked Space unavailable' })
+      expect(await snapshot()).toEqual(before)
+    }
+    const preview = await call(request, auth.token, tool, write(f, { spaceId: item.spaceId }))
+    expect(preview.spaces).toEqual([{ spaceId: item.spaceId, reassignable: 1, toReview: 0 }])
+    expect(await snapshot()).toEqual(before)
+    const result = await call(request, auth.token, tool, write(f, { spaceId: item.spaceId, dryRun: false }))
+    expect(result.result).toEqual({ ...preview, dryRun: false })
+    const after = await snapshot()
+    expect(after.movements).toEqual(before.movements.map(row => row.id === item.id ? { ...row, category_id: item.local } : row))
+    expect(after.transfers).toEqual(before.transfers)
+    expect(after.settlements).toEqual(before.settlements)
+  }
+  // All-Space consent does not override lost membership or archived status.
+  await sql`UPDATE movements SET category_id = ${sharedCategory} WHERE id = ${root.source_movement_id}`
+  const [membership] = await sql`DELETE FROM space_memberships WHERE space_id = ${shared} AND user_id = ${f.userId} RETURNING *`
+  const beforeLostMembership = await snapshot()
+  for (const dryRun of [true, false]) {
+    expect((await call(request, auth.token, tool, write(f, { dryRun }), true)).code).toBe('forbidden')
+  }
+  expect(await snapshot()).toEqual(beforeLostMembership)
+  await sql`INSERT INTO space_memberships ${sql(membership)}`
+  await sql`UPDATE spaces SET archived_at = now() WHERE id = ${shared}`
+  for (const dryRun of [true, false]) {
+    expect((await call(request, auth.token, tool, write(f, { spaceId: shared, dryRun }), true)).code).toBe('forbidden')
+    expect((await call(request, auth.token, tool, write(f, { dryRun }), true)).code).toBe('forbidden')
+  }
+  expect(await snapshot()).toEqual(beforeLostMembership)
+})
+
+test('admin repair aggregates a large fixture with bounded and zero samples', async ({ request }) => {
+  const f = await fixture(), other = await fixture(), auth = await grant(f, 'wallit:admin', [f.spaceId])
+  const prefix = key(), missing = key(), tool = 'wallit_admin_repair_foreign_categories'
+  await sql`INSERT INTO categories (id, space_id, created_by_user_id, name, emoji, created_at, updated_at)
+    VALUES (${missing}, ${other.spaceId}, ${other.userId}, 'No match', '🧪', now(), now())`
+  await sql`INSERT INTO movements (id, space_id, created_by_user_id, name, date, amount, type, currency, account_id, category_id, needs_review, created_at, updated_at)
+    SELECT ${prefix} || n::text, ${f.spaceId}, ${f.userId}, 'Repair load fixture', '2026-10-06', 10000, 'expense', 'CLP', ${f.accountId},
+      CASE WHEN n % 2 = 0 THEN ${other.categoryId} ELSE ${missing} END, false, now(), now() FROM generate_series(1, 400) n`
+  const before = await sql`SELECT * FROM movements WHERE space_id = ${f.spaceId} ORDER BY id`
+  for (const sampleLimit of [0, 3, 100]) {
+    const preview = await call(request, auth.token, tool, write(f, { sampleLimit }))
+    expect(preview.spaces).toEqual([{ spaceId: f.spaceId, reassignable: 200, toReview: 200 }])
+    expect(preview.sample).toHaveLength(sampleLimit)
+    expect(preview.sample.map((row: { movementId: string }) => row.movementId)).toEqual(before.slice(0, sampleLimit).map(row => row.id))
+    expect(await sql`SELECT * FROM movements WHERE space_id = ${f.spaceId} ORDER BY id`).toEqual(before)
+  }
+  const applied = await call(request, auth.token, tool, write(f, { dryRun: false, sampleLimit: 0 }))
+  expect(applied.result).toEqual({ dryRun: false, spaces: [{ spaceId: f.spaceId, reassignable: 200, toReview: 200 }], sample: [] })
+  expect(await sql`SELECT * FROM movements WHERE space_id = ${f.spaceId} ORDER BY id`).toEqual(before.map(row => ({
+    ...row, category_id: row.category_id === other.categoryId ? f.categoryId : null, needs_review: row.category_id === missing,
+  })))
+  expect((await call(request, auth.token, tool, write(f, { dryRun: false }))).result.spaces).toEqual([{ spaceId: f.spaceId, reassignable: 0, toReview: 0 }])
+})
+
 test('narrow grants hide historical labels, linked Space data and duplicate import identities', async ({ request }) => {
   const f = await fixture(), auth = await grant(f)
   const shared = await call(request, auth.token, 'wallit_space_create', write(f, { name: 'Private fixture Space', emoji: '🔒' }))

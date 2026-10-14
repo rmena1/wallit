@@ -33,6 +33,8 @@ async function executeAttempt(principal: McpPrincipal, name: string, raw: unknow
   const parsed = tool.schema.safeParse(raw)
   if (!parsed.success) throw new McpError('invalid_input', parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '))
   const args = parsed.data as Record<string, unknown>
+  // A repair preview must not persist audit/idempotency rows or movement postconditions.
+  const writes = tool.write && !(name === 'wallit_admin_repair_foreign_categories' && args.dryRun === true)
   const fingerprint = tokenHash(canonical({ name, args }))
   return getDb().transaction(async tx => {
     const [grant] = await tx.select().from(mcpGrants).where(and(eq(mcpGrants.id, principal.grant.id), eq(mcpGrants.userId, principal.user.id), isNull(mcpGrants.revokedAt), gt(mcpGrants.expiresAt, new Date()))).for('share')
@@ -61,7 +63,7 @@ async function executeAttempt(principal: McpPrincipal, name: string, raw: unknow
       if (args[field] && !allowedIds.has(String(args[field]))) throw new McpError('forbidden', 'Space unavailable')
     }
     // Serialize MCP writers sharing any Space. Serializable isolation also detects UI/cron races.
-    if (tool.write) for (const spaceId of [...new Set([...allowedIds, ...(pendingMemberDestinationId ? [pendingMemberDestinationId] : [])])].sort()) await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:mcp:space:${spaceId}`}, 0))`)
+    if (writes) for (const spaceId of [...new Set([...allowedIds, ...(pendingMemberDestinationId ? [pendingMemberDestinationId] : [])])].sort()) await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:mcp:space:${spaceId}`}, 0))`)
     // Validate all referenced accounts against membership AND the grant, including nested/bulk inputs.
     const referencedAccounts: string[] = []
     const collectAccounts = (value: unknown) => {
@@ -81,10 +83,27 @@ async function executeAttempt(principal: McpPrincipal, name: string, raw: unknow
     const linkedTransfers = movementIds.length || args.transferId
       ? await tx.select().from(transfers).where(or(eq(transfers.id, String(args.transferId ?? '')), inArray(transfers.sourceMovementId, movementIds.length ? movementIds : ['']), inArray(transfers.destinationMovementId, movementIds.length ? movementIds : [''])))
       : []
-    if ((tool.write || name === 'wallit_transfer_get') && linkedTransfers.some(link => !allowedIds.has(link.sourceSpaceId) || !allowedIds.has(link.destinationSpaceId))) throw new McpError('forbidden', 'Linked Space unavailable')
+    if ((writes || name === 'wallit_transfer_get') && linkedTransfers.some(link => !allowedIds.has(link.sourceSpaceId) || !allowedIds.has(link.destinationSpaceId))) throw new McpError('forbidden', 'Linked Space unavailable')
     const settlements = movementIds.length ? await tx.select().from(receivableSettlements).where(or(inArray(receivableSettlements.receivableId, movementIds), inArray(receivableSettlements.outgoingMovementId, movementIds), inArray(receivableSettlements.incomingMovementId, movementIds))) : []
-    if (tool.write && settlements.some(link => !allowedIds.has(link.fundedSpaceId) || !allowedIds.has(link.payingSpaceId))) throw new McpError('forbidden', 'Linked Space unavailable')
-    if (tool.write) {
+    if (writes && settlements.some(link => !allowedIds.has(link.fundedSpaceId) || !allowedIds.has(link.payingSpaceId))) throw new McpError('forbidden', 'Linked Space unavailable')
+    // Bulk repair has no movement IDs in its arguments. Check every affected
+    // movement's workflow in SQL, including previews, without materializing IDs.
+    if (name === 'wallit_admin_repair_foreign_categories') {
+      const authorizedSpaces = sql.join([...allowedIds].map(id => sql`${id}`), sql`, `)
+      const [blocked] = await tx.execute(sql`
+        SELECT 1 FROM movements m JOIN categories c ON c.id = m.category_id
+        WHERE m.space_id = ${selected.id} AND c.space_id <> m.space_id AND (
+          EXISTS (SELECT 1 FROM transfers t
+            WHERE (t.source_movement_id = m.id OR t.destination_movement_id = m.id)
+              AND (t.source_space_id NOT IN (${authorizedSpaces}) OR t.destination_space_id NOT IN (${authorizedSpaces})))
+          OR EXISTS (SELECT 1 FROM receivable_settlements s
+            WHERE (s.receivable_id = m.id OR s.outgoing_movement_id = m.id OR s.incoming_movement_id = m.id)
+              AND (s.funded_space_id NOT IN (${authorizedSpaces}) OR s.paying_space_id NOT IN (${authorizedSpaces})))
+        ) LIMIT 1
+      `)
+      if (blocked) throw new McpError('forbidden', 'Linked Space unavailable')
+    }
+    if (writes) {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wallit:mcp:key:${principal.user.id}:${args.idempotencyKey}`}, 0))`)
       const [prior] = await tx.select().from(mcpOperations).where(and(eq(mcpOperations.userId, principal.user.id), eq(mcpOperations.key, String(args.idempotencyKey))))
       if (prior) {
@@ -93,7 +112,9 @@ async function executeAttempt(principal: McpPrincipal, name: string, raw: unknow
         return prior.result
       }
     }
-    const pendingBefore = tool.write && !tool.review ? await tx.select({ id: movements.id }).from(movements).where(and(inArray(movements.spaceId, [...allowedIds]), eq(movements.needsReview, true))) : []
+    // Repair never inserts or clears needsReview; its SQL preserves pending status.
+    // Avoid loading the entire pending queue for this bounded-output maintenance call.
+    const pendingBefore = writes && !tool.review && name !== 'wallit_admin_repair_foreign_categories' ? await tx.select({ id: movements.id }).from(movements).where(and(inArray(movements.spaceId, [...allowedIds]), eq(movements.needsReview, true))) : []
     const execution = { ...initial, space: selected, spaces: allowed, pendingMemberDestinationId: pendingMemberDestinationId ?? undefined }
     const result = await domainExecution.run(execution, () => tool.run(args))
     if (result && typeof result === 'object' && 'success' in result && result.success === false) throw new McpError('domain_error', 'error' in result ? String(result.error) : 'Operation rejected')
@@ -109,8 +130,8 @@ async function executeAttempt(principal: McpPrincipal, name: string, raw: unknow
     // A workflow can update a new leg after insertion. Enforce the origin postcondition at commit too.
     if (pendingIds.length) await tx.update(movements).set({ needsReview: true }).where(and(inArray(movements.id, pendingIds), eq(movements.needsReview, false)))
     const visibleCreatedIds = created.filter(row => allowedIds.has(row.spaceId)).map(row => row.id)
-    const safeResult = JSON.parse(JSON.stringify(tool.write ? { result, createdMovementIds: visibleCreatedIds, operationId: randomToken() } : result))
-    if (tool.write) await tx.insert(mcpOperations).values({ id: safeResult.operationId, userId: principal.user.id, grantId: grant.id, key: String(args.idempotencyKey), fingerprint, tool: name, spaceId: selected.id, arguments: args, result: safeResult })
+    const safeResult = JSON.parse(JSON.stringify(writes ? { result, createdMovementIds: visibleCreatedIds, operationId: randomToken() } : result))
+    if (writes) await tx.insert(mcpOperations).values({ id: safeResult.operationId, userId: principal.user.id, grantId: grant.id, key: String(args.idempotencyKey), fingerprint, tool: name, spaceId: selected.id, arguments: args, result: safeResult })
     return safeResult
   }, { isolationLevel: 'serializable' })
 }
