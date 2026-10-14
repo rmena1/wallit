@@ -146,6 +146,7 @@ export async function confirmPendingAsReportable(id: string, data: {
   exchangeRate: number | null
   amountInputMode?: AmountInputMode
   time?: string | null
+  receivableText?: string
   emergency?: boolean
   loan?: boolean
 }) {
@@ -198,9 +199,9 @@ export async function deletePendingTransfer(transferId: string) {
   return result
 }
 
-export async function markAsReceivable(id: string, reminderText: string) {
+export async function markAsReceivable(id: string, reminderText: string, categoryId?: string | null) {
   const { space } = await getCurrentSpace()
-  const result = await movementLedger.markAsReceivable(space.id, id, reminderText)
+  const result = await movementLedger.markAsReceivable(space.id, id, reminderText, categoryId)
   if (result.success) {
     revalidatePath('/')
     revalidatePath('/review')

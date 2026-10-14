@@ -91,7 +91,7 @@ The following 64 tools map the existing UI and domain capabilities. `tools/list`
 | `wallit_movement_delete` | `wallit:write` | Delete a confirmed movement with dependency checks. |
 | `wallit_pending_delete` | `wallit:write` | Delete a pending movement with dependency checks. |
 | `wallit_review_list` | `wallit:read` | Read the review queue and pending count. |
-| `wallit_review_confirm` | `wallit:review` | Explicitly confirm an existing standalone pending movement. Never create a new movement. |
+| `wallit_review_confirm` | `wallit:review` | Explicitly confirm an existing standalone pending movement. Optional `receivableText` marks an expense por cobrar in the same write, validating the submitted category and workflow flags. Provisional emergency/loan/receivable flags can be replaced; actual linked payments or settlements must be resolved first. Never create a new movement. |
 | `wallit_review_confirm_operational` | `wallit:review` | Explicitly acknowledge existing pending operational payment, loan or emergency legs. |
 | `wallit_transfer_create` | `wallit:write` | Record a transfer between two accounts/Spaces you can access. Both new legs are pending review. |
 | `wallit_transfer_send_to_member` | `wallit:write` | Send from a shared Space to a current member: the recipient chooses their account during review. This grants no access to their private finances. Both new legs enter review. |
@@ -101,7 +101,7 @@ The following 64 tools map the existing UI and domain capabilities. `tools/list`
 | `wallit_transfer_confirm` | `wallit:review` | Explicitly confirm an existing pending transfer as one operation. |
 | `wallit_transfer_pending_delete` | `wallit:write` | Delete a whole pending transfer through its domain rules. |
 | `wallit_movement_to_transfer` | `wallit:write` | Transform a movement into a transfer. Any new leg remains pending until separate confirmation. |
-| `wallit_receivable_mark` | `wallit:write` | Mark an expense as receivable and set debtor/reminder text. |
+| `wallit_receivable_mark` | `wallit:write` | Atomically mark an expense as receivable with debtor/reminder text and optional `categoryId`. Omission preserves the existing category; null or no category errors without changes. |
 | `wallit_receivable_unmark` | `wallit:write` | Remove receivable tracking through dependency-aware rules. |
 | `wallit_movement_split` | `wallit:write` | Split a standalone movement into named amounts. All new slices enter review. |
 | `wallit_receivable_settle_new` | `wallit:write` | Settle a receivable with a new payment; any new movement enters review. |

@@ -1098,13 +1098,27 @@ export const movementLedger = {
 
   // Imported categories may belong to another Space. Preserve an unchanged
   // category on review/edit; replacements still require a local category.
-  async confirmPendingAsReportable(spaceId: string, movementId: string, input: ReportableInput): Promise<LedgerResult> {
+  async confirmPendingAsReportable(spaceId: string, movementId: string, input: ReportableInput & { receivableText?: string }): Promise<LedgerResult> {
     const original = await getOwnedMovement(spaceId, movementId)
     if (!original) return fail('Movement not found')
     if (!original.needsReview) return fail('Movement is not pending review')
     if (hasDependentWorkflow(original) || await movementIsTransfer(original.id)) return fail('Pending movement has dependent relationships')
+    const markingReceivable = input.receivableText !== undefined
+    if (markingReceivable) {
+      // Review replaces provisional flags with the submitted classification.
+      // Actual linked payments must be resolved through their workflow first.
+      if (input.emergency || input.loan) return fail('Movement is already part of another workflow')
+      if (await hasEmergencyPaymentRows(spaceId, movementId) || await hasLoanPaybackRows(spaceId, movementId) || await hasReceivablePayments(spaceId, movementId)) {
+        return fail('Pending movement has dependent relationships')
+      }
+      if (input.type !== 'expense') return fail('Only expenses can be marked as receivable')
+      if (!original.reportable) return fail('Solo movimientos reportables pueden marcarse como por cobrar')
+      if (!input.categoryId) return fail('Un gasto por cobrar requiere categoría')
+      if (!input.receivableText?.trim()) return fail('Reminder text is required')
+    }
     const settlementLink = await getReceivableSettlementMovementLink(original.id)
     if (settlementLink) {
+      if (markingReceivable) return fail('Movement is already part of another workflow')
       if (settlementLink.role !== 'outgoing') return fail('Receivable settlement operational movements cannot be reviewed here')
       if (!validatesSettlementOutgoingSafeFields(original, input)) return fail(settlementSafeClassificationError())
       if (!input.name.trim()) return fail('Name is required')
@@ -1140,7 +1154,7 @@ export const movementLedger = {
     if (input.categoryId !== original.categoryId && !(await ensureOwnedCategory(spaceId, input.categoryId))) return fail('Invalid category')
 
     await db.update(movements).set({
-      name: input.name.trim(),
+      name: markingReceivable ? input.receivableText!.trim() : input.name.trim(),
       date: input.date,
       amount: normalized.amount,
       type: input.type,
@@ -1151,6 +1165,7 @@ export const movementLedger = {
       exchangeRate: normalized.exchangeRate,
       time: input.time ?? null,
       ...reportableResetFields(),
+      receivable: markingReceivable,
       emergency: input.type === 'expense' ? Boolean(input.emergency) : false,
       loan: input.type === 'income' ? Boolean(input.loan) : false,
       updatedAt: new Date(),
@@ -1414,7 +1429,7 @@ export const movementLedger = {
     return ok()
   },
 
-  async markAsReceivable(spaceId: string, movementId: string, reminderText: string): Promise<LedgerResult> {
+  async markAsReceivable(spaceId: string, movementId: string, reminderText: string, categoryId?: string | null): Promise<LedgerResult> {
     const movement = await getOwnedMovement(spaceId, movementId)
     if (!movement) return fail('Movement not found')
     const transfer = await getTransferRootByMovementId(movement.id)
@@ -1429,11 +1444,14 @@ export const movementLedger = {
     if (hasDependentWorkflow(movement) || await movementIsReceivableSettlement(movement.id) || movement.receivable || movement.emergency || movement.loan) return fail('Movement is already part of another workflow')
     if (movement.type !== 'expense') return fail('Only expenses can be marked as receivable')
     if (!movement.reportable) return fail('Solo movimientos reportables pueden marcarse como por cobrar')
-    if (!movement.categoryId) return fail('Un gasto por cobrar requiere categoría')
+    const effectiveCategoryId = categoryId === undefined ? movement.categoryId : categoryId
+    if (!effectiveCategoryId) return fail('Un gasto por cobrar requiere categoría')
+    if (effectiveCategoryId !== movement.categoryId && !(await ensureOwnedCategory(spaceId, effectiveCategoryId))) return fail('Invalid category')
     if (!reminderText.trim()) return fail('Reminder text is required')
 
     await db.update(movements).set({
       name: reminderText.trim(),
+      categoryId: effectiveCategoryId,
       receivable: true,
       received: false,
       needsReview: false,

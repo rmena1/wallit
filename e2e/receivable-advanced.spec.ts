@@ -1,7 +1,7 @@
 import { test, expect, Page } from '@playwright/test'
 import { registerAndLogin, ensureAccount, createMovement, screenshot } from './helpers'
 import { movementLedger } from '../src/lib/domain/movement-ledger'
-import { db, movements, receivableSettlements } from '../src/lib/db'
+import { db, movements, receivableSettlements, transfers } from '../src/lib/db'
 import { eq } from 'drizzle-orm'
 import {
   countMovementsInSpace,
@@ -808,19 +808,20 @@ test.describe('Receivable Advanced — Create, Unmark, and Link', () => {
     })
     expect(createdTransfer.success).toBe(true)
 
-    const destinationMovementId = await getMovementIdByName(casaSpaceId, 'Restore clasificada')
-    if (!destinationMovementId) throw new Error('Destination movement not found')
+    const [originalTransfer] = await db.select().from(transfers).where(eq(transfers.id, createdTransfer.transferId!))
+    const destinationMovementId = originalTransfer.destinationMovementId
     const settled = await movementLedger.settleReceivableWithExistingMovement(casaSpaceId, userId, receivableId, destinationMovementId)
     expect(settled.success).toBe(true)
     expect(await getTransferMovementAmounts(createdTransfer.transferId!)).toBeNull()
 
-    const settlementOutgoingId = await getMovementIdByName(personalSpaceId, 'Cena restore completa')
-    if (!settlementOutgoingId) throw new Error('Settlement outgoing movement not found')
+    const [settlement] = await db.select().from(receivableSettlements).where(eq(receivableSettlements.receivableId, receivableId))
+    const settlementOutgoingId = settlement.outgoingMovementId
     const undone = await movementLedger.deletePendingMovement(personalSpaceId, userId, settlementOutgoingId)
     expect(undone.success).toBe(true)
 
-    const restoredSource = await getMovementWorkflowState(personalSpaceId, 'Restore clasificada')
-    const restoredDestination = await getMovementWorkflowState(casaSpaceId, 'Restore clasificada')
+    const [restoredTransfer] = await db.select().from(transfers).where(eq(transfers.id, createdTransfer.transferId!))
+    const [restoredSource] = await db.select().from(movements).where(eq(movements.id, restoredTransfer.sourceMovementId))
+    const [restoredDestination] = await db.select().from(movements).where(eq(movements.id, restoredTransfer.destinationMovementId))
     expect(restoredSource).toMatchObject({ reportable: true, categoryId: personalCategoryId, type: 'expense', needsReview: false })
     expect(restoredDestination).toMatchObject({ reportable: true, categoryId: casaCategoryId, type: 'income', needsReview: false })
   })

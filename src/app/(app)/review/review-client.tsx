@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { confirmSettlementAsTransfer, confirmPendingAsReportable, confirmPendingTransfer, deletePendingMovement, deletePendingTransfer, getPendingReviewMovements, markAsReceivable, splitMovement } from '@/lib/actions/review'
+import { confirmSettlementAsTransfer, confirmPendingAsReportable, confirmPendingTransfer, deletePendingMovement, deletePendingTransfer, getPendingReviewMovements, splitMovement } from '@/lib/actions/review'
 import { confirmPendingAsTransfer, getCurrentExchangeRate } from '@/lib/actions/transfers'
 import { formatMovementDisplayAmount, parseMoney } from '@/lib/utils'
 import { CreateCategoryDialog } from '@/components/create-category-dialog'
@@ -321,14 +321,15 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     if (next < total) loadMovement(next)
   }
 
-  async function persistNormalMovement(): Promise<boolean> {
+  async function persistNormalMovement(receivableText?: string): Promise<boolean> {
     if (!current) return false
     try {
       const amountCents = parseMoney(formAmount)
       if (amountCents <= 0) { setError('Monto inválido'); return false }
 
-      // Normal confirmation
+      // Save the form and optional receivable classification in one Ledger write.
       const result = await confirmPendingAsReportable(current.id, {
+        receivableText,
         name: formName.trim(),
         date: formDate,
         amount: amountCents,
@@ -526,12 +527,7 @@ export function ReviewClient({ movements, accounts, transferAccounts, transferSp
     setLoading(true)
     setError(null)
     try {
-      if (!await persistNormalMovement()) return
-      const result = await markAsReceivable(current.id, receivableText.trim())
-      if (!result.success) {
-        setError(result.error || 'Error al marcar como por cobrar')
-        return
-      }
+      if (!await persistNormalMovement(receivableText.trim())) return
       setShowReceivable(false)
       setReceivableText('')
       goNext(true)
