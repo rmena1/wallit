@@ -3,11 +3,12 @@ import { createHash } from 'node:crypto';
 import { parseBci } from '../parsers/bci.mjs';
 import { parseTenpo } from '../parsers/tenpo.mjs';
 import { parseMercadoPago } from '../parsers/mercadopago.mjs';
-import { getProviderFromEmail, resolveAccount, isInternalTransferCandidate } from './account-resolver.mjs';
+import { getProviderFromEmail, resolveAccount, resolveTransferDestination, isInternalTransferCandidate } from './account-resolver.mjs';
 import { buildImportPayload } from './import-client.mjs';
 import { isCategoryInAccountSpace } from '../data/space-mappings.mjs';
 import { validateParsed, looksLikeTransactionNotice } from './parser-validation.mjs';
 import { requireBudget } from './run-budget.mjs';
+import { senderAddress } from './sender-auth.mjs';
 import { config } from '../config/index.mjs';
 
 export function sourceIdentity(email) {
@@ -28,7 +29,9 @@ function safeError(error) {
 export function createEmailProcessor({ isTransaction, chooseCategory, importToWallit, logProcessing, logger = console, assertRunActive = async () => {}, findHistoricalCategory = async () => null }) {
   return async function processEmail(email, runtime = {}) {
     const provider = getProviderFromEmail(email.from);
-    const entry = { uid: email.uid, messageId: hash(email.messageId || `uid:${email.uidvalidity}:${email.uid}`),
+    const entry = { runId: runtime.runId, sender: provider ? senderAddress(email.from) : null,
+      emailDate: email.date && Number.isFinite(new Date(email.date).getTime()) ? new Date(email.date).toISOString() : null,
+      uid: email.uid, messageId: hash(typeof email.messageId === 'string' && email.messageId.trim() ? email.messageId.trim().replace(/^<|>$/g, '') : `uid:${email.uidvalidity}:${email.uid}`),
       from: provider || 'untrusted', subject: '', provider, decision: 'pending' };
     const skip = async reason => {
       entry.decision = reason; await logProcessing(entry);
@@ -48,9 +51,24 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
         if (looksLikeTransactionNotice(email)) throw new Error('parser_no_match_transaction');
         return await skip('parser_no_match');
       }
+      entry.parserSucceeded = true;
+      // Persist an actionable disposition before advancing. No AI or import is
+      // needed for an unmapped BCI notice; other failures retain retry semantics.
+      if (provider === 'bci' && !parsed.ownBankTransfer) {
+        try {
+          const accountId = resolveAccount(parsed);
+          if (parsed.ownCardPayment && !resolveTransferDestination({ ...parsed, accountId })) {
+            throw new Error('bci_account_unresolved');
+          }
+        } catch {
+          entry.decision = 'account_unresolved'; entry.errorMessage = 'bci_account_unresolved';
+          await logProcessing(entry);
+          logger.error(`UID ${email.uid}: ALERT bci_account_unresolved, advancing cursor`);
+          return { success: true, advance: true, reason: 'account_unresolved' };
+        }
+      }
       const identity = sourceIdentity(email);
       entry.messageId = hash(identity);
-      entry.parserSucceeded = true;
       let historyAccountId = null;
       if (parsed.type === 'expense' && !parsed.ownBankTransfer && !isInternalTransferCandidate(parsed)) {
         // Preserve the existing classifier/error flow if account resolution fails.

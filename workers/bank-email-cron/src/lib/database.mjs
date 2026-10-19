@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { config } from '../config/index.mjs';
 import { createSocketTracker, withDatabaseDeadline } from './database-deadline.mjs';
@@ -123,6 +124,18 @@ export async function createProcessingLog() {
 
 export async function logProcessing(entry) {
   await assertAdvisoryLock();
+  if (entry.runId) {
+    await optionalTelemetry(async () => {
+      const decision = entry.decision === 'account_unresolved' || entry.decision === 'transfer_pending_accounts' ? 'unresolved'
+        : entry.decision === 'duplicate_success' ? 'duplicate' : entry.decision === 'imported' ? 'imported'
+          : entry.decision === 'error' ? 'error' : 'skipped';
+      await sql`INSERT INTO bank_email_decisions
+        (run_id, uid, message_id_hash, email_date, sender, decision, reason, alert)
+        VALUES (${entry.runId}, ${entry.uid}, ${entry.messageId}, ${entry.emailDate}, ${entry.sender},
+          ${decision}, ${entry.decision}, ${decision === 'unresolved' || decision === 'error'})`;
+    });
+  }
+
   await sql`
     INSERT INTO bank_email_processing_log (
       uid, message_id, from_address, subject, decision, 
@@ -135,4 +148,27 @@ export async function logProcessing(entry) {
       ${entry.importDuplicate || false}, ${entry.errorMessage || null}
     )
   `;
+}
+
+export async function startRun() {
+  await assertAdvisoryLock();
+  const id = randomUUID();
+  const saved = await optionalTelemetry(() => sql`INSERT INTO bank_email_runs (id, user_id) VALUES (${id}, ${config.wallit.userId})`);
+  return saved ? id : null;
+}
+export async function finishRun(id, outcome) {
+  await assertAdvisoryLock();
+  await optionalTelemetry(() => sql`UPDATE bank_email_runs SET finished_at = now(), outcome = ${outcome.reason},
+    last_successful_uid = ${outcome.lastSuccessfulUid} WHERE id = ${id} AND user_id = ${config.wallit.userId}`);
+}
+
+// Telemetry is optional during staggered rollout. Never hide a lost lock/session:
+// the legacy processing log and cursor remain mandatory durability boundaries.
+async function optionalTelemetry(write) {
+  try { await write(); return true; }
+  catch {
+    await assertAdvisoryLock();
+    console.error('Worker telemetry unavailable; processing continues with legacy audit log');
+    return false;
+  }
 }

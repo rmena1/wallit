@@ -1,6 +1,7 @@
 // OAuth consent/callback transport lives in /oauth, intentionally outside this
 // domain-tool catalog; its behavior and browser fixtures are inventoried in docs/mcp.md.
 import { z } from 'zod'
+import { bankEmailStatus } from './bank-email-status'
 import * as account from '@/lib/actions/accounts'
 import * as category from '@/lib/actions/categories'
 import * as space from '@/lib/actions/spaces'
@@ -66,9 +67,9 @@ export type ToolDefinition = {
   name: string; description: string; scope: string; write: boolean; review: boolean;
   schema: z.ZodObject; run: (input: unknown) => Promise<unknown>
 }
-function define<S extends z.ZodRawShape>(name: string, description: string, scope: string, shape: S, run: (input: z.output<z.ZodObject<S>>) => Promise<unknown>): ToolDefinition {
+function define<S extends z.ZodRawShape>(name: string, description: string, scope: string, shape: S, run: (input: z.output<z.ZodObject<S>>) => Promise<unknown>, readOnly = false): ToolDefinition {
   const schema = z.strictObject(shape)
-  return { name, description, scope, write: scope !== 'wallit:read', review: scope === 'wallit:review', schema, run: input => run(schema.parse(input)) }
+  return { name, description, scope, write: !readOnly && scope !== 'wallit:read', review: scope === 'wallit:review', schema, run: input => run(schema.parse(input)) }
 }
 const read = { spaceId: id }
 const write = { ...read, idempotencyKey: z.string().min(16).max(120) }
@@ -77,6 +78,11 @@ const ledger = () => ({ spaceId: context().space.id, userId: context().user.id }
 // The catalog is also the parity inventory and the source of MCP input schemas.
 // All monetary values are integer cents, including CLP (100 cents = CLP 1).
 export const mcpTools: ToolDefinition[] = [
+  define('wallit_admin_bank_email_status', 'Read your recent worker runs and redacted email decisions. Requires all-Space consent. Date filters use email dates in UTC; coverage may be incomplete before migration or during telemetry outages.', 'wallit:admin', {
+    ...paging, messageId: z.string().trim().min(1).max(998).regex(/^[^\r\n]+$/).optional(),
+    sender: z.enum(['contacto@bci.cl', 'transferencias@bci.cl', 'no-reply@mail.machbank.cl', 'no-reply@tenpo.cl', 'info@mercadopago.com', 'info@mercadopago.cl']).optional(),
+    dateFrom: date.optional(), dateTo: date.optional(),
+  }, bankEmailStatus, true),
   define('wallit_profile', 'Read the stable identity of your own authenticated Wallit account.', 'wallit:read', {}, async () => ({ id: context().user.id, email: context().user.email })),
   define('wallit_spaces_list', 'List active Spaces you currently belong to and their roles.', 'wallit:read', {}, async () => (await getAvailableSpaces(context().user.id)).filter(s => context().spaces.some(allowed => allowed.id === s.id))),
   define('wallit_space_create', 'Create a shared Space, copying your Personal categories. Requires admin consent.', 'wallit:admin', { ...write, name: text, emoji: z.string().min(1).max(32) }, a => space.createSpace(a)),
@@ -145,7 +151,7 @@ export const mcpTools: ToolDefinition[] = [
   define('wallit_exchange_rate', 'Read the current cached/live USD→CLP rate × 100.', 'wallit:read', read, () => transfer.getCurrentExchangeRate()),
   define('wallit_import_movement', 'Import bank evidence through the existing retry-safe email importer, bound to your identity. Always pending review.', 'wallit:write', { ...write, sourceEmailProvider: z.enum(['bci', 'tenpo', 'mercadopago', 'mach']), sourceEmailId: z.string().min(1).max(500), ...money, originalName: text.optional() }, a => importEmailTransaction({ ...a, kind: 'movement', userId: ledger().userId, needsReview: true, amountUsd: a.amountUsd ?? undefined, exchangeRate: a.exchangeRate ?? undefined, time: a.time ?? undefined })),
   define('wallit_import_transfer', 'Import retry-safe CLP/USD transfer evidence into two accessible accounts; both new legs enter review.', 'wallit:write', { ...write, ...sourceIdentity, fromAccountId: id, toAccountId: id, currency, amount: cents, amountUsd: integerCents.optional(), exchangeRate: integerCents.optional(), toCurrency: currency.optional(), toAmount: cents.optional(), toAmountUsd: integerCents.optional(), toExchangeRate: integerCents.optional(), date, time: z.string().max(5).optional(), originalName: text.optional(), sourceName: text.optional(), destinationName: text.optional() }, a => importEmailTransaction({ ...a, kind: 'transfer', userId: ledger().userId })),
-  define('wallit_import_own_bank_transfer', 'Import own-bank evidence through the domain importer. Missing mapped accounts produce evidence only; mapped legs enter review.', 'wallit:write', { ...write, ...sourceIdentity, amount: cents, date, from: bankEndpoint, to: bankEndpoint, operationTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/).nullable(), reference: z.string().regex(/^\d{1,64}$/).nullable(), originalName: text.optional() }, a => importEmailTransaction({ ...a, currency: 'CLP', kind: 'own-bank-transfer', userId: ledger().userId })),
+  define('wallit_import_own_bank_transfer', 'Import own-bank evidence through the domain importer. Missing mapped accounts produce evidence only; new mapped legs enter review. Manual pairs in authorized accounts match regardless of creator, but cannot absorb distinct evidence twice.', 'wallit:write', { ...write, ...sourceIdentity, amount: cents, date, from: bankEndpoint, to: bankEndpoint, operationTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/).nullable(), reference: z.string().regex(/^\d{1,64}$/).nullable(), originalName: text.optional() }, a => importEmailTransaction({ ...a, currency: 'CLP', kind: 'own-bank-transfer', userId: ledger().userId })),
   define('wallit_bank_imports_list', 'Read your bank-transfer evidence and receipt identities within the authorized Spaces.', 'wallit:read', { ...read, ...paging }, async a => {
     const accessibleAccounts = await db.select({ id: accounts.id }).from(accounts).where(inArray(accounts.spaceId, context().spaces.map(s => s.id)))
     const accessibleIds = accessibleAccounts.map(a => a.id)

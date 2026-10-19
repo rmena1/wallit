@@ -219,7 +219,7 @@ describe('Account Resolver', () => {
       currency: 'CLP',
       last4: '9999',
     };
-    assert.throws(() => resolveAccount(parsed), /unresolved account/);
+    assert.throws(() => resolveAccount(parsed), /bci_account_unresolved/);
   });
 });
 

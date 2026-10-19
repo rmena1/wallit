@@ -1,3 +1,4 @@
+import { alias } from 'drizzle-orm/pg-core'
 import { insertLedgerMovements } from '@/lib/domain/ledger-insert'
 import { normalizeBankEndpoint, bankOperationKey, type BankEndpoint } from './own-bank-transfer'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
@@ -305,10 +306,12 @@ async function importOwnBankTransfer(input: OwnBankTransferImport): Promise<Impo
   const to = normalizeBankEndpoint(input.to)
   if (from.bank === to.bank && from.number && from.number === to.number) return fail('Transfer accounts must be different')
   if (input.reference !== null && (typeof input.reference !== 'string' || !/^\d{1,64}$/.test(input.reference))) return fail('Invalid transfer reference')
+  const accountSpaces = new Map<string, string>()
   for (const endpoint of [from, to]) {
     if (!endpoint.accountId) continue
     const account = await getImportAccount(identity.userId, endpoint.accountId)
     if (!account) return fail('Transfer account is not accessible by user')
+    accountSpaces.set(account.id, account.spaceId)
     const bank = normalizeBankEndpoint({ ...endpoint, bank: account.bankName }).bank
     if (bank !== endpoint.bank || account.currency !== 'CLP' || account.lastFourDigits !== endpoint.number?.slice(-4)) {
       return fail('Mapped bank account does not match email evidence')
@@ -320,6 +323,10 @@ async function importOwnBankTransfer(input: OwnBankTransferImport): Promise<Impo
     // Serialize imports for one user, including retries with different email IDs.
     // The ledger pair and evidence are committed together or rolled back together.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${identity.userId}, 19019))`)
+    // Shared accounts can be imported by different members; serialize evidence claims too.
+    for (const accountId of [...accountSpaces.keys()].sort()) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${accountId}, 19020))`)
+    }
     const [receipt] = await tx.select({ record: ownBankTransferImports }).from(ownBankTransferReceipts)
       .innerJoin(ownBankTransferImports, eq(ownBankTransferImports.id, ownBankTransferReceipts.importId))
       .where(and(eq(ownBankTransferReceipts.createdByUserId, identity.userId),
@@ -327,7 +334,7 @@ async function importOwnBankTransfer(input: OwnBankTransferImport): Promise<Impo
     const [operation] = await tx.select().from(ownBankTransferImports).where(and(
       eq(ownBankTransferImports.createdByUserId, identity.userId), eq(ownBankTransferImports.operationKey, operationKey))).limit(1)
     let record = receipt?.record ?? operation
-    const duplicate = Boolean(record)
+    let duplicate = Boolean(record)
     if (receipt && receipt.record.operationKey !== operationKey) throw new Error('Conflicting bank transfer retry')
     if (record && !receipt) {
       const [sameProvider] = await tx.select().from(ownBankTransferReceipts).where(and(
@@ -364,6 +371,38 @@ async function importOwnBankTransfer(input: OwnBankTransferImport): Promise<Impo
       }
       let transferId: string | null = null
       if (from.accountId && to.accountId) {
+        // A unique existing manual pair is stronger evidence than email identity.
+        // Never create another balance effect for a possible manual movement.
+        const incoming = alias(movements, 'manual_incoming')
+        const manual = await tx.select({ id: transfers.id }).from(transfers)
+          .innerJoin(movements, eq(movements.id, transfers.sourceMovementId))
+          .innerJoin(incoming, eq(incoming.id, transfers.destinationMovementId))
+          .where(and(eq(movements.spaceId, accountSpaces.get(from.accountId)!),
+            eq(incoming.spaceId, accountSpaces.get(to.accountId)!),
+            eq(transfers.sourceSpaceId, accountSpaces.get(from.accountId)!),
+            eq(transfers.destinationSpaceId, accountSpaces.get(to.accountId)!),
+            eq(movements.accountId, from.accountId), eq(incoming.accountId, to.accountId),
+            eq(movements.type, 'expense'), eq(incoming.type, 'income'),
+            eq(movements.date, date), eq(incoming.date, date),
+            eq(movements.amount, money.amount), eq(incoming.amount, money.amount),
+            eq(movements.currency, 'CLP'), eq(incoming.currency, 'CLP'),
+            isNull(movements.sourceEmailId), isNull(incoming.sourceEmailId))).limit(2)
+        if (manual.length > 1) throw new Error('Ambiguous manual bank transfer; reconciliation required')
+        if (manual.length === 1) {
+          const [evidence] = await tx.select({ id: ownBankTransferImports.id }).from(ownBankTransferImports)
+            .where(eq(ownBankTransferImports.transferId, manual[0].id)).limit(1)
+          if (evidence) throw new Error('Manual bank transfer already has evidence; reconciliation required')
+          transferId = manual[0].id; duplicate = true
+        }
+        const [unlinkedManual] = await tx.select({ id: movements.id }).from(movements)
+          .leftJoin(transfers, or(eq(transfers.sourceMovementId, movements.id), eq(transfers.destinationMovementId, movements.id)))
+          .where(and(eq(movements.date, date),
+            eq(movements.amount, money.amount), eq(movements.currency, 'CLP'), isNull(movements.sourceEmailId), isNull(transfers.id),
+            or(and(eq(movements.accountId, from.accountId), eq(movements.spaceId, accountSpaces.get(from.accountId)!), eq(movements.type, 'expense')),
+              and(eq(movements.accountId, to.accountId), eq(movements.spaceId, accountSpaces.get(to.accountId)!), eq(movements.type, 'income'))))).limit(1)
+        if (unlinkedManual) throw new Error('Possible manual bank movement; reconciliation required')
+      }
+      if (!transferId && from.accountId && to.accountId) {
         const linked = await importTransfer({ ...input, kind: 'transfer', fromAccountId: from.accountId,
           toAccountId: to.accountId }, tx)
         if (!linked.success || !linked.transferId) throw new Error(linked.error || 'Bank transfer import failed')

@@ -36,8 +36,8 @@ This service monitors a Gmail mailbox via IMAP for transaction notifications fro
    - Call Jev category choice (with confidence threshold)
    - Build import payload (`kind: movement` or confidently resolved `kind: transfer`)
    - POST to Wallit `/api/import/email`
-   - Advance cursor on success/duplicate/intentional skip
-   - Stop on network/5xx/validation errors, transaction-shaped unknown templates or ambiguous routing (retry next scheduled cron)
+   - Persist a redacted decision; advance cursor on success/duplicate/intentional skip or unresolved BCI account
+   - Stop on network/5xx/validation errors, transaction-shaped unknown templates or other ambiguous routing (retry next scheduled cron)
 5. Release lock
 
 ## Installation
@@ -173,7 +173,7 @@ Tests cover:
 
 - `contacto@bci.cl` → BCI
 - `no-reply@tenpo.cl` → Tenpo
-- `info@mercadopago.com` → Mercado Pago
+- `info@mercadopago.com` and `info@mercadopago.cl` → Mercado Pago (exact sender and aligned Gmail DMARC)
 
 Emails from other senders are skipped.
 
@@ -185,6 +185,8 @@ Default mappings (configurable via environment):
 |----------|--------|---------|
 | BCI | Card 1164, CLP | Personal CLP |
 | BCI | Card 1164, USD | Personal USD |
+| BCI | Card 9015, CLP | Casa CLP (`h2xgdiuw0tra0ern89y1f`) |
+| BCI | Card 9015, USD | Casa USD (`ufnvw57od9onrnnswx463`) |
 | Tenpo | Credit card activity | Tenpo Credit |
 | Tenpo | Transfer/incoming payment | Tenpo Vista (Casa) |
 | Mercado Pago | Account 6991 | Personal CLP |
@@ -225,6 +227,7 @@ For USD movements, replace `amount` with `amountUsd` + `exchangeRate`.
   - Successful import (200 + `success: true`)
   - Duplicate response (200 + `duplicate: true`)
   - Intentional skip (not_transaction, allowlist, unparseable)
+  - Persisted unresolved BCI account disposition (with alert; no import)
 - Network errors, 5xx, 429, validation failures → stop without advancing
 - UIDVALIDITY or configured-folder change → stop with nonzero status and preserve cursor. No automatic reset/replay/backfill
 
@@ -233,7 +236,7 @@ For USD movements, replace `amount` with `amountUsd` + `exchangeRate`.
 - **Lock contention**: Another cron running, exit 0
 - **UIDVALIDITY changed**: Preserve cursor, log fixed reason, exit 1; operator decision required
 - **Network/API error mid-batch**: Stop at failed UID, retry next cron
-- **Unresolved account**: Log redacted reason, exit 1 without advancing; retry on a later scheduled cron
+- **Unresolved BCI account**: Persist `unresolved / account_unresolved`, emit a fixed alert, advance and continue. No guessed account and no automatic replay. Other unresolved providers retain retry behavior.
 - **Jev/Luna unavailable**: Fail closed, retry next cron
 
 ## Logs
@@ -257,7 +260,7 @@ Structured logs include:
 **No messages fetched**: Check IMAP credentials, folder name, firewall/TLS
 **Import 401**: Verify `WALLIT_IMPORT_TOKEN` and private network access
 **Account unresolved**: Check account IDs match Wallit, review parser card detection
-**UIDVALIDITY reset**: Mailbox reorganized, cursor reset is safe
+**UIDVALIDITY changed**: Preserve cursor and investigate; no automatic reset or replay is safe
 **Lock held**: Previous cron still running or crashed; check Railway logs
 
 ## Support
@@ -355,3 +358,64 @@ See `AUDIT_2026-10-03.md` for evidence counts, remaining limits and rollout chec
 ## Transferencias entre bancos propios
 
 Ver [detección, cuentas pendientes, deduplicación y pruebas con correos reales](OWN_BANK_TRANSFERS.md).
+
+## Mercado Pago Chile, unresolved BCI and diagnostics (2026-10-19)
+
+Both `Tu transferencia fue enviada` and `¡Enviamos tu transferencia!` use the
+labeled beneficiary bank/account **and** the configured owner identity. Last four
+digits alone never prove ownership. `BANK_ACCOUNT_OWNER_NAMES` is an optional
+nonempty JSON array of exact owner names (case/whitespace normalized); its default
+preserves the existing owner identities. Anonymized fixture tests explicitly use
+`["Titular Prueba"]` without weakening production ownership checks. Wallet ending 6991 to Banco BCI/MACH
+ending 8080 creates one Transfer (two linked Movements) plus receipt evidence.
+The eight-digit destination account is supported. Sender `.cl` must pass the same
+Gmail DMARC verification as `.com`, aligned to its own domain.
+
+Card 9015 routes to the Casa IDs above, with optional `ACCOUNT_BCI_LIDER_CLP_ID`
+and `ACCOUNT_BCI_LIDER_USD_ID` overrides. `TRANSFER_ACCOUNT_MAP` can override these
+mappings. An unmapped BCI source/card or repayment destination is recorded before advancing; log persistence
+failure still blocks the cursor. The unresolved item requires operator follow-up:
+changing a mapping does not replay it. No bodies are retained in telemetry.
+
+Apply additive Wallit migration `0022_bank_email_observability` to the database
+used by both app and worker, preferably before the worker rollout. It adds
+`bank_email_runs` and `bank_email_decisions`, leaving the cursor and historical
+logs untouched. Telemetry writes are best-effort: a worker deployed first continues
+processing and advancing its cursor using the mandatory legacy processing log,
+while emitting a fixed telemetry-unavailable warning. Missing decision tables or
+failed finish writes also do not block processing. Lost locks/sessions and failures
+of the legacy processing log or cursor still stop the worker. No failed telemetry
+is backfilled; MCP coverage can therefore have gaps even after migration.
+With telemetry available, each lock-acquired run records start/end, fixed outcome and last
+successful UID; each email records a SHA-256 Message-ID, date, approved sender,
+disposition/reason and alert. A crash can leave an unfinished run. Lock contention
+is still an exit-0 no-op. No cadence, restart setting or initial UID is changed.
+
+Read-only MCP `wallit_admin_bank_email_status` (`wallit:admin`, all-Space consent)
+queries only the worker identity's telemetry. Optional `messageId`, `sender`,
+`dateFrom`, `dateTo`, `limit` (1–200, default 50) and `offset` filter/page decisions;
+dates are inclusive UTC email dates. It returns `{ runs, emails, limit, offset }`.
+See `docs/mcp.md` for exact fields. Historical raw logs are intentionally excluded;
+absence before rollout does not mean the cron never saw the email.
+
+No old mail is reprocessed. As an additional safeguard, import matches a unique
+manual Transfer in the authorized accounts/Spaces with date, CLP currency and
+both amounts identical, regardless of which member created it. A pair that already
+has evidence cannot absorb another distinct receipt based only on date/amount;
+that case requires reconciliation. Exact identity/operation retries retain their
+existing idempotency. Shared-account evidence claims are serialized across users.
+For an unevidenced unique pair, the importer attaches receipt evidence and returns duplicate without altering either Movement.
+Multiple manual pairs or a standalone manual movement with matching account,
+direction, date and amount stop for reconciliation. This prevents extra balance
+effects for the 17/10 and 19/10 transfers if their receipts are encountered again.
+
+Anonymized HTML fixtures are in `test/fixtures/*.anonymized.html`; the BCI 9015
+fixture is a template variant, not a claim that an actual 9015 email was received.
+`npm test` runs them behind the transport-denial guard. Integration fixtures use
+disposable local databases; never start the production worker to validate changes.
+
+Optional SQL integration (after applying migrations to a disposable local
+`wallit_worker_test` database):
+`WORKER_TEST_DATABASE_URL=postgresql://127.0.0.1:5432/wallit_worker_test node --test test/observability.integration.mjs`
+from this worker directory. It uses real local SQL and injected mail/import
+functions, verifies persisted alerts and cursor advancement, and never opens IMAP.
