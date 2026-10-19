@@ -1,3 +1,4 @@
+import { isOwnerName } from './owner-identity.mjs';
 import { config } from '../config/index.mjs';
 
 export { PROVIDER_FROM_ALLOWLIST, getProviderFromEmail } from './sender-auth.mjs';
@@ -23,7 +24,9 @@ export function resolveAccount(parsedResult) {
       }
       return config.accounts.bciClp;
     }
-    throw new Error(`BCI: unresolved account for card ${last4}, currency ${currency}`);
+    const mapped = resolveTransferAccount('bci', currency, last4);
+    if (mapped) return mapped;
+    throw new Error('bci_account_unresolved');
   }
 
   if (provider === 'tenpo') {
@@ -90,6 +93,8 @@ export function resolveTransferAccount(bank, currency, account, marker) {
   const map = {
     'bci:CLP:1164': config.accounts.bciClp,
     'bci:USD:1164': config.accounts.bciUsd,
+    'bci:CLP:9015': config.accounts.bciLiderClp,
+    'bci:USD:9015': config.accounts.bciLiderUsd,
     'bci:CLP:8080': config.accounts.bciChecking,
     'tenpo:CLP:7648': config.accounts.tenpoCredit,
     'tenpo:CLP:credit': config.accounts.tenpoCredit,
@@ -102,7 +107,7 @@ export function resolveTransferAccount(bank, currency, account, marker) {
 
 export function isInternalTransferCandidate(parsed) {
   return parsed.type === 'expense' && (parsed.ownCardPayment === true
-    || /^raimundo\s+mena(?:\s+[a-záéíóúñ]+)*$/i.test(String(parsed.beneficiary || '').trim()));
+    || isOwnerName(parsed.beneficiary || ''));
 }
 
 export function resolveTransferDestination(parsed) {

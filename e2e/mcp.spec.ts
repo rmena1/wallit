@@ -110,12 +110,119 @@ async function call(ctx: APIRequestContext, token: string, name: string, args: R
 const money = (f: Fixture, extra = {}) => ({ name: 'Fixture expense', date: '2026-10-06', amount: 10000, type: 'expense', currency: 'CLP', accountId: f.accountId, categoryId: f.categoryId, ...extra })
 const write = (f: Fixture, extra = {}) => ({ spaceId: f.spaceId, idempotencyKey: key(), ...extra })
 test.afterAll(async () => {
+  await sql`DELETE FROM bank_email_decisions WHERE run_id IN (SELECT id FROM bank_email_runs WHERE user_id LIKE 'mcp-fixture-%')`
+  await sql`DELETE FROM bank_email_runs WHERE user_id LIKE 'mcp-fixture-%'`
   // Delete financial records before users: imported movements require creator identity.
   await sql`DELETE FROM spaces WHERE created_by_user_id IN (SELECT id FROM users WHERE id LIKE 'mcp-fixture-%')`
   await sql`DELETE FROM users WHERE id LIKE 'mcp-fixture-%'`
   await sql`DELETE FROM mcp_clients WHERE name = 'Fixture Codex'`
   await sql`DELETE FROM exchange_rates WHERE source = 'fixture'`
   await sql.end()
+})
+
+test('worker status is read-only, scoped to identity, redacted and searchable', async ({ request }) => {
+  const f = await fixture(), other = await fixture()
+  const auth = await grant(f), readOnly = await grant(f, 'wallit:read'), restricted = await grant(f, 'wallit:admin', [f.spaceId])
+  const name = 'wallit_admin_bank_email_status'
+  const runId = key(), otherRun = key(), messageId = 'notice-fixture@example.test'
+  for (const [id, user] of [[runId, f.userId], [otherRun, other.userId]]) {
+    await sql`INSERT INTO bank_email_runs (id, user_id, outcome, finished_at, last_successful_uid) VALUES (${id}, ${user}, 'completed', now(), 5)`
+    for (const [index, decision, reason] of [[1, 'imported', 'imported'], [2, 'skipped', 'authentication_failed'], [3, 'unresolved', 'account_unresolved'], [4, 'duplicate', 'duplicate_success']]) {
+      await sql`INSERT INTO bank_email_decisions (run_id, uid, message_id_hash, email_date, sender, decision, reason, alert)
+        VALUES (${id}, ${index}, ${hash(messageId)}, '2026-10-19T14:28:21Z', 'info@mercadopago.cl', ${decision}, ${reason}, ${decision === 'unresolved'})`
+    }
+  }
+  // Deliberately poisoned telemetry must not expose arbitrary text.
+  await sql`INSERT INTO bank_email_decisions (run_id, uid, message_id_hash, sender, decision, reason)
+    VALUES (${runId}, 5, 'sensitive-canary', 'sensitive-canary', 'sensitive-canary', 'sensitive-canary')`
+  expect((await rpc(request, readOnly.token, 'tools/call', { name, arguments: {} })).status()).toBe(403)
+  await call(request, restricted.token, name, {}, true)
+  const before = await sql`SELECT count(*)::int AS n FROM mcp_operations WHERE user_id = ${f.userId}`
+  const status = await call(request, auth.token, name, {})
+  expect(status.runs).toHaveLength(1)
+  expect(status.runs[0].id).toBe(runId)
+  expect(status.emails).toHaveLength(5)
+  expect(JSON.stringify(status)).not.toContain('sensitive-canary')
+  expect(JSON.stringify(status)).not.toContain(messageId)
+  expect(Object.keys(status.emails[0]).sort()).toEqual(['runId', 'uid', 'messageIdHash', 'emailDate', 'sender', 'decision', 'reason', 'alert', 'recordedAt'].sort())
+  expect(Object.keys(status.runs[0]).sort()).toEqual(['id', 'startedAt', 'finishedAt', 'outcome', 'lastSuccessfulUid'].sort())
+  const filtered = await call(request, auth.token, name, { messageId: `<${messageId}>`, sender: 'info@mercadopago.cl', dateFrom: '2026-10-19', dateTo: '2026-10-19' })
+  expect(filtered.emails).toHaveLength(4)
+  expect(filtered.emails.find((e: { decision: string }) => e.decision === 'unresolved').alert).toBe(true)
+  expect((await call(request, auth.token, name, { dateTo: '2026-10-18' })).emails).toEqual([])
+  expect((await call(request, auth.token, name, { messageId: 'unseen@example.test' })).emails).toEqual([])
+  expect((await call(request, auth.token, name, { limit: 1, offset: 1 })).emails).toHaveLength(1)
+  expect(await sql`SELECT count(*)::int AS n FROM mcp_operations WHERE user_id = ${f.userId}`).toEqual(before)
+  const catalog = await (await rpc(request, auth.token, 'tools/list')).json()
+  expect(catalog.result.tools.find((t: { name: string }) => t.name === name).annotations.readOnlyHint).toBe(true)
+})
+
+test('own-bank import matches another shared-Space member manual pair once, preserving retries and rejecting distinct evidence', async ({ request }) => {
+  const f = await fixture(), creator = await fixture(), auth = await grant(f)
+  await sql`UPDATE spaces SET is_personal = false, name = 'Shared bank fixture', normalized_name = 'shared bank fixture' WHERE id = ${f.spaceId}`
+  await sql`INSERT INTO space_memberships (id, space_id, user_id, role, created_at) VALUES (${key()}, ${f.spaceId}, ${creator.userId}, 'member', now())`
+  await sql`UPDATE accounts SET bank_name = 'mercadopago', last_four_digits = '6991' WHERE id = ${f.otherAccountId}`
+  for (const [date, amount] of [['2026-10-17', 50000000], ['2026-10-19', 36000000]] as const) {
+    const source = key(), destination = key(), transfer = key()
+    for (const [id, account, type] of [[source, f.otherAccountId, 'expense'], [destination, f.accountId, 'income']]) {
+      await sql`INSERT INTO movements (id, space_id, created_by_user_id, account_id, name, date, amount, type, currency, needs_review, reportable, created_at, updated_at)
+        VALUES (${id}, ${f.spaceId}, ${creator.userId}, ${account}, 'Manual fixture', ${date}, ${amount}, ${type}, 'CLP', false, false, now(), now())`
+    }
+    await sql`INSERT INTO transfers (id, source_space_id, destination_space_id, source_movement_id, destination_movement_id, created_by_user_id)
+      VALUES (${transfer}, ${f.spaceId}, ${f.spaceId}, ${source}, ${destination}, ${creator.userId})`
+    const before = await sql`SELECT * FROM movements WHERE id IN (${source}, ${destination}) ORDER BY id`
+    const input = write(f, { amount, date, from: { bank: 'mercadopago', number: '6991', product: 'wallet', accountId: f.otherAccountId },
+      to: { bank: 'Banco BCI/MACH', number: '99998080', product: null, accountId: f.accountId }, operationTime: null, reference: null,
+      sourceEmailProvider: 'mercadopago', sourceEmailId: key() + '@example.test' })
+    for (let retry = 0; retry < 2; retry++) {
+      const result = await call(request, auth.token, 'wallit_import_own_bank_transfer', { ...input, idempotencyKey: key() })
+      expect(result.result).toMatchObject({ duplicate: true, transferId: transfer })
+      expect(result.createdMovementIds).toEqual([])
+    }
+    // A second distinct email cannot consume the same manual pair just because its facts coincide.
+    await call(request, auth.token, 'wallit_import_own_bank_transfer', {
+      ...input, idempotencyKey: key(), sourceEmailId: key() + '@example.test',
+    }, true)
+    expect((await sql`SELECT count(*)::int AS n FROM own_bank_transfer_imports WHERE transfer_id = ${transfer}`)[0].n).toBe(1)
+    expect(await sql`SELECT * FROM movements WHERE id IN (${source}, ${destination}) ORDER BY id`).toEqual(before)
+    expect((await sql`SELECT count(*)::int AS n FROM own_bank_transfer_receipts WHERE email_id = ${input.sourceEmailId}`)[0].n).toBe(1)
+  }
+  expect((await sql`SELECT count(*)::int AS n FROM movements WHERE space_id = ${f.spaceId}`)[0].n).toBe(4)
+  const fresh = await call(request, auth.token, 'wallit_import_own_bank_transfer', write(f, {
+    amount: 100000, date: '2026-10-20', from: { bank: 'mercadopago', number: '6991', product: 'wallet', accountId: f.otherAccountId },
+    to: { bank: 'Banco BCI/MACH', number: '99998080', product: null, accountId: f.accountId }, operationTime: null, reference: null,
+    sourceEmailProvider: 'mercadopago', sourceEmailId: key() + '@example.test',
+  }))
+  expect(fresh.result).toMatchObject({ duplicate: false, pendingAccounts: false })
+  expect(fresh.createdMovementIds).toHaveLength(2)
+  expect(await sql`SELECT needs_review FROM movements WHERE id IN (${fresh.createdMovementIds[0]}, ${fresh.createdMovementIds[1]})`).toEqual([{ needs_review: true }, { needs_review: true }])
+})
+
+test('ambiguous manual pairs and standalone manual movements block duplicate balance effects', async ({ request }) => {
+  const f = await fixture(), creator = await fixture(), auth = await grant(f)
+  await sql`UPDATE spaces SET is_personal = false, name = 'Shared bank fixture', normalized_name = 'shared bank fixture' WHERE id = ${f.spaceId}`
+  await sql`INSERT INTO space_memberships (id, space_id, user_id, role, created_at) VALUES (${key()}, ${f.spaceId}, ${creator.userId}, 'member', now())`
+  await sql`UPDATE accounts SET bank_name = 'mercadopago', last_four_digits = '6991' WHERE id = ${f.otherAccountId}`
+  for (const standalone of [true, false]) {
+    const date = standalone ? '2026-10-17' : '2026-10-19'
+    for (let pair = 0; pair < (standalone ? 1 : 2); pair++) {
+      const source = key(), destination = key()
+      for (const [id, account, type] of [[source, f.otherAccountId, 'expense'], ...(standalone ? [] : [[destination, f.accountId, 'income']])]) {
+        await sql`INSERT INTO movements (id, space_id, created_by_user_id, account_id, name, date, amount, type, currency, needs_review, reportable, created_at, updated_at)
+          VALUES (${id}, ${f.spaceId}, ${creator.userId}, ${account}, 'Manual fixture', ${date}, 36000000, ${type}, 'CLP', false, false, now(), now())`
+      }
+      if (!standalone) await sql`INSERT INTO transfers (id, source_space_id, destination_space_id, source_movement_id, destination_movement_id, created_by_user_id)
+        VALUES (${key()}, ${f.spaceId}, ${f.spaceId}, ${source}, ${destination}, ${creator.userId})`
+    }
+    const before = await sql`SELECT * FROM movements WHERE space_id = ${f.spaceId} ORDER BY id`
+    await call(request, auth.token, 'wallit_import_own_bank_transfer', write(f, {
+      amount: 36000000, date, from: { bank: 'mercadopago', number: '6991', product: 'wallet', accountId: f.otherAccountId },
+      to: { bank: 'Banco BCI/MACH', number: '99998080', product: null, accountId: f.accountId }, operationTime: null, reference: null,
+      sourceEmailProvider: 'mercadopago', sourceEmailId: key() + '@example.test',
+    }), true)
+    expect(await sql`SELECT * FROM movements WHERE space_id = ${f.spaceId} ORDER BY id`).toEqual(before)
+    expect((await sql`SELECT count(*)::int AS n FROM own_bank_transfer_imports WHERE created_by_user_id = ${f.userId}`)[0].n).toBe(0)
+  }
 })
 
 for (const resource of [null, `${origin}/api/mcp`, `${origin}/api/mcp/`]) {

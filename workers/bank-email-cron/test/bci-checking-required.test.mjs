@@ -31,7 +31,7 @@ test('BCI checking map override takes precedence over required default', () => {
   }
 });
 
-test('unresolved own-card source logs bank, currency and only account last4', async (t) => {
+test('unresolved BCI source records a fixed alert and advances without importing', async (t) => {
   let logged;
   const stderr = t.mock.method(console, 'error', () => {});
   const run = createEmailProcessor({
@@ -44,9 +44,9 @@ test('unresolved own-card source logs bank, currency and only account last4', as
     subject: 'Comprobante pago tarjeta de crédito',
     textBody: 'Monto pagado: $280.000\nFecha: 26/09/26\nCuenta de origen: 32609999\nNúmero tarjeta crédito: ****1164',
   });
-  const expected = 'Credit card payment: unresolved source account (bank=bci currency=CLP last4=9999)';
-  assert.equal(result.advance, false);
-  assert.equal(result.error, expected);
+  const expected = 'bci_account_unresolved';
+  assert.equal(result.advance, true);
+  assert.equal(result.reason, 'account_unresolved');
   assert.equal(logged.decision, 'account_unresolved');
   assert.equal(logged.errorMessage, expected);
   assert.ok(stderr.mock.calls.some(({ arguments: args }) => args.some(value => String(value).includes('account_unresolved'))));

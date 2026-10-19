@@ -5,7 +5,7 @@ import { parseEmailDate } from '../lib/date-utils.mjs';
 
 // Only explicit bank-transfer templates may enter this path. A person's name
 // in a purchase, repayment, salary or peer-payment notice is not sufficient.
-const owner = name => /^(?:raimundomena|raimundomenaaguirre)$/.test(String(name).toLowerCase().replace(/\s+/g, ''));
+import { isOwnerName as owner } from '../lib/owner-identity.mjs';
 const endpoint = (bank, number, product) => ({ bank, number: number || null, product: product || null,
   accountId: number ? resolveTransferAccount(bank, 'CLP', number) : null });
 const amount = value => Number(value.replace(/\./g, '')) * 100;
@@ -14,7 +14,7 @@ const date = match => match && `${match[3]}-${match[2]}-${match[1]}`;
 export function parseOwnBankTransfer(email) {
   const provider = getProviderFromEmail(email.from);
   const subjects = { tenpo: /^Comprobante de transferencia(?: exitoso)? - Tenpo$/i,
-    bci: /^Aviso de Transferencia de Fondos\.$/i, mercadopago: /^Tu transferencia fue enviada$/i,
+    bci: /^Aviso de Transferencia de Fondos\.$/i, mercadopago: /^(?:Tu transferencia fue enviada|¡Enviamos tu transferencia!)$/i,
     mach: /^Realizaste una transferencia a /i };
   if (!subjects[provider]?.test(email.subject || '')) return null;
   const text = String(email.textBody || '').replace(/NÂº/g, 'Nº');
@@ -33,8 +33,8 @@ export function parseOwnBankTransfer(email) {
   } else if (provider === 'mercadopago' && /Ya enviamos tu transferencia de/i.test(text)) {
     parsed = parseMercadoPago(email);
     if (!parsed || !owner(parsed.beneficiary) || !parsed.beneficiaryAccount) return null;
-    // The receipt omits the origin number; Rai confirmed this wallet is 1058236991.
-    from = endpoint('mercadopago', '1058236991', 'wallet');
+    // The receipt omits the origin number; use the configured wallet ending only.
+    from = endpoint('mercadopago', '6991', 'wallet');
     to = endpoint(parsed.entity, parsed.beneficiaryAccount);
   } else if (provider === 'bci' && /Realizaste una transferencia de fondos desde tu cuenta N[°º]/i.test(text)) {
     const name = text.match(/Nombre del destinatario\s*(.+?)\s+Banco de destino/i)?.[1];

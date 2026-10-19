@@ -3,6 +3,7 @@ export const PROVIDER_FROM_ALLOWLIST = Object.freeze({
   'transferencias@bci.cl': 'bci',
   'no-reply@mail.machbank.cl': 'mach',
   'no-reply@tenpo.cl': 'tenpo',
+  'info@mercadopago.cl': 'mercadopago',
   'info@mercadopago.com': 'mercadopago',
 });
 // Use the parsed mailbox from MIME in production. This conservative fallback

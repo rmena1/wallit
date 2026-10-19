@@ -8,6 +8,7 @@ export async function runWorker(deps, { logger = console, now = Date.now, budget
     locked = await deps.acquireAdvisoryLock();
     if (!locked) return outcome = { ...outcome, reason: 'lock_busy' };
     await deps.createProcessingLog();
+    runtime.runId = await deps.startRun?.();
     const cursor = await deps.getCursor();
     if (!Number.isSafeInteger(cursor.lastUid) || cursor.lastUid < 0 || cursor.lastUid > 0xffffffff
       || (cursor.uidvalidity !== null && (!Number.isSafeInteger(cursor.uidvalidity) || cursor.uidvalidity <= 0 || cursor.uidvalidity > 0xffffffff))) throw new Error('invalid_cursor');
@@ -39,6 +40,9 @@ export async function runWorker(deps, { logger = console, now = Date.now, budget
     logger.error('Worker failed; cursor preserved at last confirmed disposition');
     return outcome = { ...outcome, exitCode: 1, reason: 'worker_error' };
   } finally {
+    if (runtime.runId) {
+      try { await deps.finishRun(runtime.runId, outcome); } catch { outcome.exitCode = 1; logger.error('Worker telemetry finalization failed'); }
+    }
     if (locked) {
       try { await deps.releaseAdvisoryLock(); } catch { outcome.exitCode = 1; logger.error('Worker lock cleanup failed'); }
     }

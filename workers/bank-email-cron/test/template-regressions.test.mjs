@@ -60,7 +60,7 @@ test('known card suffix alone never proves issuer or product; own repayment ambi
   assert.equal(brandOnly.result.advance, false); assert.equal(brandOnly.payload, undefined);
   for (const card of ['****9999', '****1164oops', '']) {
     const repayment = await run('contacto@bci.cl', `Monto pagado: $1.234\nFecha: 01/01/2026\nCuenta de origen: 8080\nNúmero tarjeta crédito: ${card}`, 'Comprobante pago tarjeta de crédito');
-    assert.equal(repayment.result.advance, false); assert.equal(repayment.payload, undefined);
+    assert.equal(repayment.result.advance, true); assert.equal(repayment.result.reason, 'account_unresolved'); assert.equal(repayment.payload, undefined);
   }
 });
 test('incomplete successful incoming transfer retains UID rather than silently skipping it', async () => {

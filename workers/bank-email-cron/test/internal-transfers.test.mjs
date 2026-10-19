@@ -67,9 +67,9 @@ test('BCI and Tenpo own card payment notices resolve labeled source and destinat
     assert.equal(payload.toAccountId, provider === 'bci' ? config.accounts.bciClp : config.accounts.tenpoCredit);
     assert.equal(result.advance, true);
     email.textBody = email.textBody.replace(/\*{4}(1164|7648)/, '****9999');
-    assert.equal((await process(email)).result.advance, false);
+    assert.equal((await process(email)).result.advance, provider === 'bci');
     email.textBody = email.textBody.replace('Cuenta de origen: ****0146', '');
-    assert.equal((await process(email)).result.advance, false);
+    assert.equal((await process(email)).result.advance, provider === 'bci');
   }
 });
 test('Mercado Pago destination account and explicit env mapping', async () => {

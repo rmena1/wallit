@@ -1,4 +1,4 @@
-import { pgTable, text, integer, bigint, boolean, timestamp, index, uniqueIndex, check, jsonb } from 'drizzle-orm/pg-core'
+import { pgTable, text, integer, bigint, bigserial, boolean, timestamp, index, uniqueIndex, check, jsonb } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 
 // ============================================================================
@@ -399,3 +399,22 @@ export const ownBankTransferReceipts = pgTable('own_bank_transfer_receipts', {
   emailId: text('email_id').notNull(),
   reference: text('reference'),
 }, table => [uniqueIndex('idx_own_bank_transfer_receipt').on(table.createdByUserId, table.provider, table.emailId)])
+
+// Redacted worker telemetry; never read the legacy processing log through MCP.
+export const bankEmailRuns = pgTable('bank_email_runs', {
+  id: text('id').primaryKey(), userId: text('user_id').notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  outcome: text('outcome').notNull().default('running'),
+  lastSuccessfulUid: bigint('last_successful_uid', { mode: 'number' }),
+}, t => [index('bank_email_runs_user_started').on(t.userId, t.startedAt)])
+export const bankEmailDecisions = pgTable('bank_email_decisions', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  runId: text('run_id').notNull().references(() => bankEmailRuns.id),
+  uid: bigint('uid', { mode: 'number' }).notNull(),
+  messageIdHash: text('message_id_hash').notNull(),
+  emailDate: timestamp('email_date', { withTimezone: true }), sender: text('sender'),
+  decision: text('decision').notNull(), reason: text('reason').notNull(),
+  alert: boolean('alert').notNull().default(false),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [index('bank_email_decisions_run').on(t.runId, t.id), index('bank_email_decisions_message').on(t.messageIdHash)])

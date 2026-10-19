@@ -13,6 +13,14 @@ function requireEnv(key) {
   return value;
 }
 
+function parseOwnerNames(value) {
+  const names = JSON.parse(value);
+  if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string' || !name.trim())) {
+    throw new Error('BANK_ACCOUNT_OWNER_NAMES must be a nonempty JSON array of names');
+  }
+  return names;
+}
+
 function parsePositiveInt(value, label) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
@@ -92,10 +100,13 @@ export const config = {
   // Explicit bank:currency:last4 (or bank:currency:credit) -> Wallit account ID.
   transferAccountMap: parseTransferAccountMap(getEnv('TRANSFER_ACCOUNT_MAP', '{}')),
 
+  ownerNames: parseOwnerNames(getEnv('BANK_ACCOUNT_OWNER_NAMES', '["Raimundo Mena","Raimundo Mena Aguirre"]')),
   accounts: {
     bciChecking: requireEnv('ACCOUNT_BCI_CHECKING_ID'),
     bciClp: requireEnv('ACCOUNT_BCI_CLP_ID'),
     bciUsd: requireEnv('ACCOUNT_BCI_USD_ID'),
+    bciLiderClp: getEnv('ACCOUNT_BCI_LIDER_CLP_ID', 'h2xgdiuw0tra0ern89y1f'),
+    bciLiderUsd: getEnv('ACCOUNT_BCI_LIDER_USD_ID', 'ufnvw57od9onrnnswx463'),
     tenpoCredit: requireEnv('ACCOUNT_TENPO_CREDIT_ID'),
     tenpoVista: requireEnv('ACCOUNT_TENPO_VISTA_ID'),
     mercadopago: requireEnv('ACCOUNT_MERCADOPAGO_ID'),

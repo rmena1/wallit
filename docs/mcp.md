@@ -20,7 +20,7 @@ The consent screen identifies the logged-in account, application and redirect, e
 | `wallit:read` | Authenticated profile, permitted Spaces, financial reads and reports |
 | `wallit:write` | Domain creation, edits, deletion and imports |
 | `wallit:review` | Separate explicit confirmation of existing movements |
-| `wallit:admin` | Space administration and membership, within existing Owner/Member rules; selected-Space category repair |
+| `wallit:admin` | Space administration and membership, within existing Owner/Member rules; selected-Space category repair; read-only worker diagnostics for the authenticated user |
 
 Anonymous MCP GET/POST/DELETE/OPTIONS receive 401 with the resource-metadata challenge. A known tool with insufficient scope receives 403. Unsupported authenticated HTTP methods receive 405. No URL-only authentication, static bearer configuration, arbitrary SQL, raw field updates, password/session/token listings or administrator bypass is exposed.
 
@@ -73,6 +73,7 @@ Fixtures cover default/bounded previews with complete before/after snapshots, ap
 | Tool | Required scope | Existing operation / behavior |
 | --- | --- | --- |
 | `wallit_admin_repair_foreign_categories` | `wallit:admin` | Preview or repair foreign category links in one authorized Space through the Movement Ledger; no category IDs exposed. |
+| `wallit_admin_bank_email_status` | `wallit:admin` | Read recent worker runs and redacted email decisions for the authenticated user, with all-Space consent; no writes. |
 | `wallit_profile` | `wallit:read` | Read the stable identity of your own authenticated Wallit account. |
 | `wallit_spaces_list` | `wallit:read` | List active Spaces you currently belong to and their roles. |
 | `wallit_space_create` | `wallit:admin` | Create a shared Space, copying your Personal categories. Requires admin consent. |
@@ -166,3 +167,44 @@ Deployment and installed-plugin verification evidence is recorded in the final t
 Category reads, reports and movement labels are restricted to the selected Space even when a grant covers multiple Spaces. Email imports reject foreign categories regardless of historical matches; history matching may map an exact category name to a destination-Space category, otherwise it supplies no category. Copies made by splits and settlements discard malformed foreign category references while preserving money and reporting fields.
 
 Nested transfer legs in `wallit_review_list` and `wallit_transfer_get` return a category ID only when it belongs to that leg's own Space; malformed references become null even under a grant covering both Spaces. Existing membership and grant checks still govern leg visibility.
+
+### Bank email worker diagnostics
+
+`wallit_admin_bank_email_status` is **read-only** despite requiring `wallit:admin`.
+It requires consent for all Spaces because unrouted mailbox events have no Space.
+Queries are bound to the authenticated user (`bank_email_runs.user_id`), with the
+usual live grant, expiry, revocation and membership checks. No idempotency key,
+financial writes or MCP operation row is produced.
+
+Input (all optional): `{ messageId?: string, sender?: string, dateFrom?: "YYYY-MM-DD",
+ dateTo?: "YYYY-MM-DD", limit?: number, offset?: number }`. Limit defaults to 50
+(maximum 200); offset defaults to 0. Sender must be an exact allowed bank address,
+including `info@mercadopago.cl`. Message-ID is normalized (trim and angle brackets)
+and hashed before lookup. Inclusive date bounds apply to the email's date in UTC.
+
+Output: `{ runs: [{ id, startedAt, finishedAt, outcome, lastSuccessfulUid }],
+ emails: [{ runId, uid, messageIdHash, emailDate, sender, decision, reason, alert,
+ recordedAt }], limit, offset }`. Runs are recent-first; emails are recorded-first,
+with independent pagination. Email filters do not filter the recent-runs list.
+Decisions: `imported`, `skipped`, `unresolved`, `duplicate`, `error` (unknown stored
+values are redacted to `unknown`). `alert` is true for unresolved/error events.
+Only approved sender addresses, fixed reasons and SHA-256 identifiers are exposed;
+no bodies, subjects, names, account numbers, credentials or historical raw logs.
+A running row without a finish timestamp may indicate an interrupted worker.
+
+Coverage begins after migration `0022_bank_email_observability` and worker rollout;
+an empty result cannot prove an email was never seen. Worker telemetry is best-effort during staggered rollout or telemetry outages; the mandatory processing log and cursor remain authoritative, and missing telemetry is not backfilled. No historical replay
+or backfill is performed. Worker and app must use the same telemetry database.
+
+Parity fixtures in `e2e/mcp.spec.ts` cover scope rejection, restricted-Space consent,
+identity isolation, poisoned-field redaction, Message-ID/date/sender lookup,
+pagination and read-only annotations/persistence. The same fixtures verify that
+`wallit_import_own_bank_transfer` attaches evidence to a unique matching manual
+Transfer in authorized accounts regardless of its creator, without creating
+movements or changing review status. A manual pair with existing evidence cannot
+absorb another distinct email based only on matching date/amount. Same-identity
+retries still return the original result. Fixtures cover another shared-Space
+member's manual pairs and standalone movements. Ambiguous matches
+and standalone manual movements require reconciliation and cannot create duplicates.
+Worker scheduling, mailbox access and cursor mutation are intentionally excluded
+from MCP; diagnostics cannot trigger a worker run or reprocess mail.
