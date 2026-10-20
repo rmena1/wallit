@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authorizeImportRequest } from '@/lib/import-auth'
-import { importEmailTransaction, type EmailImportInput } from '@/lib/domain/email-import-service'
+import { importWorkerEmailTransaction, type EmailImportInput } from '@/lib/domain/email-import-service'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ success: false, error: 'Invalid JSON' }, { status: 400 })
   }
-  const result = await importEmailTransaction(input)
+  const result = await importWorkerEmailTransaction(input)
   return NextResponse.json(result, {
     status: result.success ? 200 : 400,
     headers: { 'Cache-Control': 'no-store' },

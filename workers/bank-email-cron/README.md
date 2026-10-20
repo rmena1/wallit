@@ -36,7 +36,7 @@ This service monitors a Gmail mailbox via IMAP for transaction notifications fro
    - Call Jev category choice (with confidence threshold)
    - Build import payload (`kind: movement` or confidently resolved `kind: transfer`)
    - POST to Wallit `/api/import/email`
-   - Persist a redacted decision; advance cursor on success/duplicate/intentional skip or unresolved BCI account
+   - Persist a redacted decision; advance cursor on success/duplicate/intentional skip or durably retained unresolved incoming evidence/BCI account
    - Stop on network/5xx/validation errors, transaction-shaped unknown templates or other ambiguous routing (retry next scheduled cron)
 5. Release lock
 
@@ -236,7 +236,7 @@ For USD movements, replace `amount` with `amountUsd` + `exchangeRate`.
 - **Lock contention**: Another cron running, exit 0
 - **UIDVALIDITY changed**: Preserve cursor, log fixed reason, exit 1; operator decision required
 - **Network/API error mid-batch**: Stop at failed UID, retry next cron
-- **Unresolved BCI account**: Persist `unresolved / account_unresolved`, emit a fixed alert, advance and continue. No guessed account and no automatic replay. Other unresolved providers retain retry behavior.
+- **Unresolved BCI account**: Persist `unresolved / account_unresolved`, emit a fixed alert, advance and continue. No guessed account and no automatic replay. Other provider account-resolution failures retain retry behavior; durably stored incoming manual ambiguity advances as described below.
 - **Jev/Luna unavailable**: Fail closed, retry next cron
 
 ## Logs
@@ -419,3 +419,92 @@ Optional SQL integration (after applying migrations to a disposable local
 `WORKER_TEST_DATABASE_URL=postgresql://127.0.0.1:5432/wallit_worker_test node --test test/observability.integration.mjs`
 from this worker directory. It uses real local SQL and injected mail/import
 functions, verifies persisted alerts and cursor advancement, and never opens IMAP.
+
+
+### Incoming transfers into Mercado Pago 6991
+
+The accepted senders now include `mensajeria@santander.cl`,
+`serviciodetransferencias@bancochile.cl`, and `reply@info.bice.cl`. Each requires
+Gmail's topmost trusted authentication result with aligned DMARC pass, exactly as
+other bank senders (no new DKIM fallback). `transferencias@bci.cl` also supports
+“Has recibido ... hacia tu cuenta del Mercado Pago”. Deterministic parsers inspect
+destination fields: Mercado Pago plus a configured owner name and/or account ending
+6991. Explicit conflicting names/accounts skip with `incoming_destination_not_owner`.
+The Santander “Prepago” name suffix is normalized. Payer identities never establish
+ownership. These notices bypass AI classification and create unclassified CLP income
+pending review in `ACCOUNT_MERCADOPAGO_ID` through the existing import service.
+
+The new HTTP import kind `incoming-bank-transfer` fails closed on older app versions;
+it never silently falls back to ordinary movement insertion. Apply additive migration
+`0023_incoming_bank_email` and `0024_incoming_bank_unresolved`, then deploy the app to enable it. Missing evidence tables
+block this financial import and retain the cursor for retry. This is deliberately
+stricter than telemetry: missing count columns are best-effort and do not prevent old
+run finalization, mandatory audit, or cursor progress for supported imports.
+
+Manual income matching is scoped to the accessible destination account/Space, date,
+currency and amount, independent of creator. Only a unique exact **operation** time
+can resolve multiple candidates; notification/header time is never used. BICE's body
+date and time and Banco de Chile's body time are Chile-local wall-clock values.
+Santander and BCI retain their explicit body dates and omit time when none is supplied.
+A shifted or next-day email header cannot change those movement facts. The worker
+payload supplies `operationTime: "HH:mm" | null`; legacy `time` alone cannot break ties.
+Ambiguous candidates are flagged, not guessed.
+Separate unique evidence claims preserve manual movements unchanged and prevent a
+second distinct notice consuming the same manual movement. With no manual candidates,
+distinct source identities create distinct pending income, even for equal amounts.
+Retries with the same source identity return the prior result. No old emails are
+reprocessed, and no cursor, cadence or initial UID setting changes.
+
+Each completed search records `searchMatchCount` (distinct new UIDs before batch
+limit) and `fetchedCount`; zero is an observed empty search, null is unknown/not run.
+Each fetched message gets a redacted decision, including parser skips and deferred
+messages after a preceding block/budget limit. Deferred messages do not advance the
+cursor and are retried normally. Transaction-like parser failures remain blocking
+alerts with `parser_no_match`; harmless unmatched messages skip with the same reason.
+See `docs/mcp.md` for the complete status response and filters.
+
+The `incoming-*.anonymized.html` fixtures preserve the payer-bank templates while
+replacing identities and links. Tests cover each template, non-owner/other-account
+skips, aligned authentication, forward-only cursor progress, zero-match searches,
+and visible parser decisions. Disposable SQL fixtures cover manual income matching,
+same-amount ambiguity, distinct evidence, cross-member authorship and pending review.
+MCP fixtures verify that callers cannot claim trusted manual evidence or preempt
+worker imports with caller-chosen source identities.
+
+End-to-end parser/SQL integration (same disposable database, after migration):
+`WORKER_TEST_DATABASE_URL=postgresql://127.0.0.1:5432/wallit_worker_test node --test test/incoming-mp.integration.mjs`.
+This bundles the actual import service locally, feeds the five anonymized MIME
+fixtures, verifies manual income preservation, concurrent retries, separate
+same-amount notices, pending review, and fail-closed behavior without evidence tables.
+
+
+### Trust boundary and unresolved incoming evidence
+
+MCP cannot invoke `incoming-bank-transfer`: the catalog rejects the removed
+`incomingBankTransfer` flag and the generic domain importer rejects this kind.
+Only `/api/import/email`, after its existing bearer authentication, calls the dedicated
+server-only worker entrypoint. OAuth context is explicitly rejected there. Trusted
+incoming movements use `bank-email:<provider>` source identities, separate from
+user-supplied MCP assertions; exact email-ID guesses cannot reserve worker claims.
+
+For incoming manual ambiguity (including an already claimed manual candidate), the
+import service commits parsed evidence to `incoming_bank_unresolved` before returning
+`{ success: true, unresolved: true, reason: "incoming_manual_ambiguous" }`.
+The worker records `unresolved / incoming_manual_ambiguous` with `alert: true`, advances
+that UID and continues. No movement or receipt claim is created for the unresolved item.
+The retained payload contains the operation facts and source identity, not a raw email.
+This storage is mandatory; unlike telemetry, its failure cannot be ignored.
+
+An operator can locate the retained row for the worker user by matching the SHA-256
+of its normalized `email_id` to the status tool's `messageIdHash`, resolve the conflicting
+candidate data, then explicitly resubmit the retained payload to the authenticated worker import endpoint. Normal membership,
+account, evidence uniqueness and review rules still apply; successful reconciliation
+sets `resolved_at` and preserves the original retained payload. This is not automatic
+mail replay: no cursor reset, old-UID search or cron change is performed. These retained
+payloads and reconciliation writes are deliberately not exposed to MCP callers.
+
+Endpoint outages, an old app rejecting the kind, missing migrations, or failed SQL
+writes return failure and retain the cursor for the next scheduled run. An error string
+claiming ambiguity is insufficient to advance: only a successful durable unresolved
+response is accepted. All later fetched messages remain visibly deferred after such
+an infrastructure failure. Existing unrelated parser/routing failure policies are unchanged.

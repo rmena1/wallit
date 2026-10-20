@@ -175,15 +175,25 @@ export class ImapClient {
     const sinceDate = lastUid === 0 && lookbackDays > 0
       ? new Date(Date.now() - lookbackDays * 86400_000) : null;
     const matched = await this.searchBySenderSince(Object.keys(PROVIDER_FROM_ALLOWLIST), sinceDate, minUid);
-    const uids = [...new Set(matched)].filter(uid => Number.isSafeInteger(uid) && uid >= minUid)
-      .sort((a, b) => a - b).slice(0, config.gmail.batchSize);
+    const eligible = [...new Set(matched)].filter(uid => Number.isSafeInteger(uid) && uid >= minUid).sort((a, b) => a - b);
+    this.searchMatchCount = eligible.length;
+    const uids = eligible.slice(0, config.gmail.batchSize);
     this.logger.log(`[IMAP] Fetching bounded batch of ${uids.length} new UIDs`);
     return this.fetchMessagesByUid(uids);
   }
 
   async parseMessages(rawMessages, uidvalidity) {
     const parsed = [];
-    for (const raw of rawMessages) { requireBudget(this.runtime); parsed.push(await parseRawMessage(raw, uidvalidity)); }
+    for (const raw of rawMessages) {
+      try { requireBudget(this.runtime); }
+      catch {
+        // Hand already-fetched UIDs to the runner for deferred audit without
+        // spending the remaining budget decoding bodies or advancing them.
+        parsed.push({ uid: raw.uid, uidvalidity });
+        continue;
+      }
+      parsed.push(await parseRawMessage(raw, uidvalidity));
+    }
     return parsed;
   }
 
@@ -204,10 +214,6 @@ export async function fetchNewEmails(lastUid, expectedUidvalidity = null, runtim
     if (expectedUidvalidity !== null && Number(box.uidvalidity) !== expectedUidvalidity) {
       return { uidvalidity: Number(box.uidvalidity), messages: [] };
     }
-    if (!box || box.messages.total === 0) {
-      console.log('[IMAP] No messages in folder');
-      return { uidvalidity: box?.uidvalidity || null, messages: [] };
-    }
 
     const rawMessages = await client.fetchMessagesSince(
       lastUid,
@@ -223,7 +229,7 @@ export async function fetchNewEmails(lastUid, expectedUidvalidity = null, runtim
     
     return {
       uidvalidity: Number(box.uidvalidity),
-      messages: filtered,
+      messages: filtered, searchMatchCount: client.searchMatchCount, fetchedCount: rawMessages.length,
     };
   } finally {
     console.log('[IMAP] Disconnecting');

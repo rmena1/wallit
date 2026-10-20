@@ -3,8 +3,8 @@ import { and, desc, eq, gte, lte } from 'drizzle-orm'
 import { bankEmailRuns as runs, bankEmailDecisions as decisions, db } from '@/lib/db'
 import { domainExecution } from '@/lib/domain/execution-context'
 
-const senders = new Set(['contacto@bci.cl', 'transferencias@bci.cl', 'no-reply@mail.machbank.cl', 'no-reply@tenpo.cl', 'info@mercadopago.com', 'info@mercadopago.cl'])
-const reasons = new Set(['account_unresolved', 'transfer_pending_accounts', 'duplicate_success', 'imported', 'error', 'from_not_in_allowlist', 'authentication_failed', 'parser_no_match', 'not_transaction'])
+const senders = new Set(['contacto@bci.cl', 'transferencias@bci.cl', 'no-reply@mail.machbank.cl', 'no-reply@tenpo.cl', 'info@mercadopago.com', 'info@mercadopago.cl', 'mensajeria@santander.cl', 'serviciodetransferencias@bancochile.cl', 'reply@info.bice.cl'])
+const reasons = new Set(['account_unresolved', 'transfer_pending_accounts', 'duplicate_success', 'imported', 'error', 'from_not_in_allowlist', 'authentication_failed', 'parser_no_match', 'not_transaction', 'incoming_destination_not_owner', 'incoming_manual_ambiguous', 'processing_deferred'])
 const outcomes = new Set(['running', 'completed', 'uidvalidity_changed', 'budget_reached', 'message_blocked', 'worker_error'])
 const dispositions = new Set(['imported', 'skipped', 'unresolved', 'duplicate', 'error'])
 export async function bankEmailStatus(input: { limit: number; offset: number; messageId?: string; sender?: string; dateFrom?: string; dateTo?: string }) {
@@ -14,7 +14,7 @@ export async function bankEmailStatus(input: { limit: number; offset: number; me
   if (!context.allSpaces) throw new Error('Worker diagnostics require consent for all Spaces')
   const messageIdHash = input.messageId ? createHash('sha256').update(input.messageId.trim().replace(/^<|>$/g, '')).digest('hex') : undefined
   const recentRuns = await db.select({ id: runs.id, startedAt: runs.startedAt, finishedAt: runs.finishedAt,
-    outcome: runs.outcome, lastSuccessfulUid: runs.lastSuccessfulUid }).from(runs)
+    outcome: runs.outcome, searchMatchCount: runs.searchMatchCount, fetchedCount: runs.fetchedCount, lastSuccessfulUid: runs.lastSuccessfulUid }).from(runs)
     .where(eq(runs.userId, context.user.id)).orderBy(desc(runs.startedAt), desc(runs.id)).limit(input.limit).offset(input.offset)
   const emails = await db.select({ runId: decisions.runId, uid: decisions.uid, messageIdHash: decisions.messageIdHash,
     emailDate: decisions.emailDate, sender: decisions.sender, decision: decisions.decision,

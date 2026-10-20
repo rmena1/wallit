@@ -1,3 +1,4 @@
+import { parseIncomingMercadoPago } from '../parsers/incoming-mercadopago.mjs';
 import { parseOwnBankTransfer } from '../parsers/own-bank-transfer.mjs';
 import { createHash } from 'node:crypto';
 import { parseBci } from '../parsers/bci.mjs';
@@ -33,12 +34,13 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
       emailDate: email.date && Number.isFinite(new Date(email.date).getTime()) ? new Date(email.date).toISOString() : null,
       uid: email.uid, messageId: hash(typeof email.messageId === 'string' && email.messageId.trim() ? email.messageId.trim().replace(/^<|>$/g, '') : `uid:${email.uidvalidity}:${email.uid}`),
       from: provider || 'untrusted', subject: '', provider, decision: 'pending' };
-    const skip = async reason => {
+    const skip = async (reason, advance = true) => {
       entry.decision = reason; await logProcessing(entry);
-      logger.log(`UID ${email.uid}: ${reason}, advancing cursor`);
-      return { success: true, skip: true, advance: true, reason };
+      logger.log(`UID ${email.uid}: ${reason}, ${advance ? 'advancing cursor' : 'cursor retained'}`);
+      return { success: true, skip: true, advance, reason };
     };
     try {
+      if (runtime.deferred) return await skip('processing_deferred', false);
       requireBudget(runtime);
       if (email.decodeError) throw new Error(email.decodeError);
       if (!provider) return await skip('from_not_in_allowlist');
@@ -46,7 +48,9 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
         if (email.authentication?.reason === 'authentication_failed') return await skip('authentication_failed');
         throw new Error('authentication_missing');
       }
-      const parsed = validateParsed(parseOwnBankTransfer(email) ?? { bci: parseBci, tenpo: parseTenpo, mercadopago: parseMercadoPago }[provider]?.(email));
+      const incoming = parseIncomingMercadoPago(email);
+      if (incoming?.skipReason) return await skip(incoming.skipReason);
+      const parsed = validateParsed(incoming ?? parseOwnBankTransfer(email) ?? { bci: parseBci, tenpo: parseTenpo, mercadopago: parseMercadoPago }[provider]?.(email));
       if (!parsed) {
         if (looksLikeTransactionNotice(email)) throw new Error('parser_no_match_transaction');
         return await skip('parser_no_match');
@@ -78,7 +82,7 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
         ? await findHistoricalCategory({ originalName: parsed.originalName, provider: parsed.provider,
           sourceEmailId: identity, accountId: historyAccountId })
         : null;
-      const txDecision = parsed.ownBankTransfer || historicalCategory ? true : await isTransaction(email, runtime);
+      const txDecision = parsed.incomingBankTransfer || parsed.ownBankTransfer || historicalCategory ? true : await isTransaction(email, runtime);
       if (typeof txDecision !== 'boolean') throw new Error('classifier_invalid_decision');
       if (!txDecision) return await skip('not_transaction');
       try { parsed.accountId = parsed.ownBankTransfer ? null : resolveAccount(parsed); }
@@ -88,7 +92,7 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
         return { success: false, advance: false, error: entry.errorMessage };
       }
       entry.accountId = parsed.accountId;
-      const category = parsed.ownBankTransfer || isInternalTransferCandidate(parsed) ? null
+      const category = parsed.incomingBankTransfer || parsed.ownBankTransfer || isInternalTransferCandidate(parsed) ? null
         : historicalCategory ?? await chooseCategory(email, parsed.originalName, parsed.accountId, runtime);
       // History can contain categories created after the static classifier mappings.
       // Historical votes apply across Spaces; the API verifies their provenance.
@@ -98,6 +102,13 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
       await assertRunActive();
       requireBudget(runtime);
       const result = await importToWallit(buildImportPayload(parsed, categoryId, identity), { ...runtime, assertRunActive });
+      if (result?.success === true && result.unresolved === true) {
+        if (result.reason !== 'incoming_manual_ambiguous') throw new Error('import_not_confirmed');
+        entry.decision = 'incoming_manual_ambiguous';
+        await logProcessing(entry);
+        logger.error(`UID ${email.uid}: unresolved incoming evidence retained, advancing cursor`);
+        return { success: true, advance: true, reason: entry.decision };
+      }
       if (result?.success !== true) throw new Error('import_not_confirmed');
       entry.importSuccess = true; entry.importDuplicate = result.duplicate === true;
       entry.decision = entry.importDuplicate ? 'duplicate_success' : result.pendingAccounts ? 'transfer_pending_accounts' : 'imported';
@@ -106,6 +117,7 @@ export function createEmailProcessor({ isTransaction, chooseCategory, importToWa
       return { success: true, skip: false, advance: true, reason: entry.decision };
     } catch (error) {
       entry.decision = 'error'; entry.errorMessage = safeError(error);
+      if (error?.message === 'incoming_manual_ambiguous') entry.errorMessage = 'incoming_manual_ambiguous';
       await logProcessing(entry);
       logger.error(`UID ${email.uid}: ${entry.errorMessage}, stopping`);
       return { success: false, error: entry.errorMessage, advance: false };

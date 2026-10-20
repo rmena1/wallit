@@ -407,6 +407,7 @@ export const bankEmailRuns = pgTable('bank_email_runs', {
   finishedAt: timestamp('finished_at', { withTimezone: true }),
   outcome: text('outcome').notNull().default('running'),
   lastSuccessfulUid: bigint('last_successful_uid', { mode: 'number' }),
+  searchMatchCount: integer('search_match_count'), fetchedCount: integer('fetched_count'),
 }, t => [index('bank_email_runs_user_started').on(t.userId, t.startedAt)])
 export const bankEmailDecisions = pgTable('bank_email_decisions', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
@@ -418,3 +419,23 @@ export const bankEmailDecisions = pgTable('bank_email_decisions', {
   alert: boolean('alert').notNull().default(false),
   recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [index('bank_email_decisions_run').on(t.runId, t.id), index('bank_email_decisions_message').on(t.messageIdHash)])
+
+// Evidence claims preserve manual movements and prevent reuse by distinct notices.
+export const incomingBankReceipts = pgTable('incoming_bank_receipts', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(), emailId: text('email_id').notNull(),
+  movementId: text('movement_id').notNull().references(() => movements.id, { onDelete: 'cascade' }),
+}, t => [uniqueIndex('incoming_bank_receipts_identity').on(t.userId, t.provider, t.emailId),
+  uniqueIndex('incoming_bank_receipts_movement').on(t.movementId)])
+
+// Trusted parsed evidence retained for explicit later reconciliation; never exposed as MCP claims.
+export const incomingBankUnresolved = pgTable('incoming_bank_unresolved', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(), emailId: text('email_id').notNull(),
+  payload: jsonb('payload').notNull(), reason: text('reason').notNull(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+}, t => [uniqueIndex('incoming_bank_unresolved_identity').on(t.userId, t.provider, t.emailId)])
