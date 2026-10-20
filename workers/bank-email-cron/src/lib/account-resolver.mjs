@@ -5,6 +5,7 @@ export { PROVIDER_FROM_ALLOWLIST, getProviderFromEmail } from './sender-auth.mjs
 
 export function resolveAccount(parsedResult) {
   const { provider, currency, last4, cardHint, type } = parsedResult;
+  if (parsedResult.incomingBankTransfer) return config.accounts.mercadopago;
   if (parsedResult.ownCardPayment) {
     const source = parsedResult.sourceAccount === undefined && parsedResult.sourceProduct === 'tenpo_vista' && currency === 'CLP'
       ? config.accounts.tenpoVista

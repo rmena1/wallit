@@ -1,8 +1,9 @@
+import { domainExecution } from '@/lib/domain/execution-context'
 import { alias } from 'drizzle-orm/pg-core'
 import { insertLedgerMovements } from '@/lib/domain/ledger-insert'
 import { normalizeBankEndpoint, bankOperationKey, type BankEndpoint } from './own-bank-transfer'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
-import { accounts, categories, db, movements, spaces, spaceMemberships, transfers, ownBankTransferImports, ownBankTransferReceipts } from '@/lib/db'
+import { accounts, categories, db, movements, spaces, spaceMemberships, transfers, ownBankTransferImports, ownBankTransferReceipts, incomingBankReceipts, incomingBankUnresolved } from '@/lib/db'
 import { expectedClpCents } from '@/lib/domain/money'
 import { generateId } from '@/lib/utils'
 
@@ -23,7 +24,8 @@ type SourceIdentity = {
 }
 
 export type EmailMovementImport = SourceIdentity & MoneyFacts & {
-  kind: 'movement'
+  kind: 'movement' | 'incoming-bank-transfer'
+  operationTime?: string | null
   needsReview?: boolean
   accountId: string
   categoryId?: string | null
@@ -68,6 +70,8 @@ type ImportResult = {
   error?: string
   duplicate?: boolean
   movementId?: string
+  unresolved?: boolean
+  reason?: string
   pendingAccounts?: boolean
   bankTransferImportId?: string
   transferId?: string
@@ -76,7 +80,7 @@ type ImportResult = {
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
-const PROVIDERS = new Set(['bci', 'tenpo', 'mercadopago', 'mach'])
+const PROVIDERS = new Set(['bci', 'tenpo', 'mercadopago', 'mach', 'santander', 'bancochile', 'bice'])
 const PG_INTEGER_MAX = 2_147_483_647
 
 function fail(error: string): ImportResult {
@@ -142,14 +146,15 @@ async function categoryBelongsToSpace(categoryId: string | null | undefined, spa
   return Boolean(category)
 }
 
-async function importMovement(input: EmailMovementImport): Promise<ImportResult> {
+async function importMovement(input: EmailMovementImport, executor: Pick<typeof db, 'transaction' | 'select'> = db, trustedIncoming = false): Promise<ImportResult> {
   const identity = normalizeIdentity(input)
+  if (trustedIncoming) identity.provider = `bank-email:${identity.provider}`
   const date = normalizeDate(input.date)
   const name = String(input.name ?? '').trim()
   if (!name) return fail('name is required')
   if (!['income', 'expense'].includes(input.type)) return fail('type must be income or expense')
   if (input.needsReview !== undefined && typeof input.needsReview !== 'boolean') return fail('needsReview must be a boolean')
-  const account = await getImportAccount(identity.userId, String(input.accountId ?? ''))
+  const account = await getImportAccount(identity.userId, String(input.accountId ?? ''), executor)
   if (!account) return fail('Account is not accessible by user')
   if (!(await categoryBelongsToSpace(input.categoryId, account.spaceId))) {
     return fail('Category does not belong to account Space')
@@ -158,7 +163,7 @@ async function importMovement(input: EmailMovementImport): Promise<ImportResult>
   let money: ReturnType<typeof normalizeMoney>
   try { money = normalizeMoney(input) } catch (error) { return fail(error instanceof Error ? error.message : 'Invalid money') }
 
-  return db.transaction(async (tx) => {
+  return executor.transaction(async (tx) => {
     const [inserted] = await insertLedgerMovements(tx).values({
       id: generateId(),
       spaceId: account.spaceId,
@@ -194,6 +199,69 @@ async function importMovement(input: EmailMovementImport): Promise<ImportResult>
       .where(eq(transfers.sourceMovementId, existing.id)).limit(1)
     if (transfer) return fail('Email was already imported as a transfer')
     return { success: true, duplicate: true, movementId: existing.id }
+  })
+}
+
+// Dedicated kind fails closed on older apps, avoiding unsafe fallback during rollout.
+async function importIncomingBankTransfer(input: EmailMovementImport): Promise<ImportResult> {
+  const identity = normalizeIdentity(input)
+  const date = normalizeDate(input.date)
+  const money = normalizeMoney(input)
+  if (input.operationTime != null && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.operationTime)) return fail('operationTime must be HH:mm')
+  if (input.type !== 'income' || money.currency !== 'CLP') return fail('Incoming transfer must be CLP income')
+  return db.transaction(async tx => {
+    const account = await getImportAccount(identity.userId, input.accountId, tx)
+    if (!account || !/^mercado\s*pago$/i.test(account.bankName) || account.lastFourDigits !== '6991' || account.currency !== 'CLP') {
+      return fail('Incoming transfer account is not accessible Mercado Pago 6991')
+    }
+    // Serialize claims even across different members importing into the same account.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${account.id}, 0))`)
+    const [receipt] = await tx.select().from(incomingBankReceipts).where(and(
+      eq(incomingBankReceipts.userId, identity.userId), eq(incomingBankReceipts.provider, identity.provider),
+      eq(incomingBankReceipts.emailId, identity.emailId))).limit(1)
+    if (receipt) {
+      const [existing] = await tx.select().from(movements).where(and(eq(movements.id, receipt.movementId), eq(movements.accountId, account.id))).limit(1)
+      if (!existing) return fail('Import identity conflict')
+      return { success: true, duplicate: true, movementId: existing.id }
+    }
+    const unresolved = async (): Promise<ImportResult> => {
+      // Required durable evidence, not best-effort telemetry: no cursor advance
+      // unless this transaction commits. An operator can resubmit this payload
+      // through the authenticated worker endpoint after resolving candidates.
+      await tx.insert(incomingBankUnresolved).values({ id: generateId(), userId: identity.userId,
+        accountId: account.id, provider: identity.provider, emailId: identity.emailId,
+        payload: { ...input, needsReview: true }, reason: 'incoming_manual_ambiguous' })
+        .onConflictDoNothing()
+      return { success: true, unresolved: true, reason: 'incoming_manual_ambiguous' }
+    }
+    const resolved = async () => {
+      await tx.update(incomingBankUnresolved).set({ resolvedAt: new Date() }).where(and(
+        eq(incomingBankUnresolved.userId, identity.userId), eq(incomingBankUnresolved.provider, identity.provider),
+        eq(incomingBankUnresolved.emailId, identity.emailId)))
+    }
+    // No creator filter: membership/account authorization, not authorship, owns finances.
+    const candidates = await tx.select().from(movements).where(and(eq(movements.accountId, account.id),
+      eq(movements.spaceId, account.spaceId), eq(movements.date, date), eq(movements.amount, money.amount),
+      eq(movements.currency, 'CLP'), eq(movements.type, 'income'), isNull(movements.sourceEmailId))).for('update')
+    const exactTime = input.operationTime ? candidates.filter(m => m.time === input.operationTime) : []
+    const matching = exactTime.length ? exactTime : candidates
+    if (matching.length > 1) return unresolved()
+    if (matching.length === 1) {
+      const manual = matching[0]
+      const [claimed] = await tx.select({ id: incomingBankReceipts.id }).from(incomingBankReceipts)
+        .where(eq(incomingBankReceipts.movementId, manual.id)).limit(1)
+      // A distinct notice cannot consume an already claimed manual balance effect.
+      if (claimed) return unresolved()
+      await tx.insert(incomingBankReceipts).values({ id: generateId(), userId: identity.userId,
+        provider: identity.provider, emailId: identity.emailId, movementId: manual.id })
+      await resolved()
+      return { success: true, duplicate: true, movementId: manual.id }
+    }
+    const result = await importMovement({ ...input, kind: 'movement', time: input.operationTime ?? null, needsReview: true, categoryId: null }, tx, true)
+    if (result.success && result.movementId) await tx.insert(incomingBankReceipts).values({ id: generateId(),
+      userId: identity.userId, provider: identity.provider, emailId: identity.emailId, movementId: result.movementId })
+    if (result.success) await resolved()
+    return result
   })
 }
 
@@ -424,8 +492,21 @@ async function importOwnBankTransfer(input: OwnBankTransferImport): Promise<Impo
 }
 
 export async function importEmailTransaction(input: EmailImportInput): Promise<ImportResult> {
+  return executeEmailImport(input, false)
+}
+
+// Server-only entrypoint. The HTTP route calls this only after bearer authentication;
+// neither JSON fields nor OAuth/MCP context can confer worker provenance.
+export async function importWorkerEmailTransaction(input: EmailImportInput): Promise<ImportResult> {
+  if (domainExecution.getStore()) return fail('Worker evidence is unavailable through MCP')
+  return executeEmailImport(input, true)
+}
+
+async function executeEmailImport(input: EmailImportInput, trustedWorker: boolean): Promise<ImportResult> {
   try {
     if (input?.kind === 'own-bank-transfer') return await importOwnBankTransfer(input)
+    if (input?.kind === 'incoming-bank-transfer') return trustedWorker
+      ? await importIncomingBankTransfer(input) : fail('Authenticated worker evidence required')
     if (input?.kind === 'movement') return await importMovement(input)
     if (input?.kind === 'transfer') return await importTransfer(input)
     return fail('Unsupported import kind')

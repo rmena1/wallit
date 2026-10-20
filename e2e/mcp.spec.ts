@@ -141,11 +141,14 @@ test('worker status is read-only, scoped to identity, redacted and searchable', 
   const status = await call(request, auth.token, name, {})
   expect(status.runs).toHaveLength(1)
   expect(status.runs[0].id).toBe(runId)
+  expect(status.runs[0]).toMatchObject({ searchMatchCount: null, fetchedCount: null })
+  await sql`UPDATE bank_email_runs SET search_match_count = 0, fetched_count = 0 WHERE id = ${runId}`
+  expect((await call(request, auth.token, name, {})).runs[0]).toMatchObject({ searchMatchCount: 0, fetchedCount: 0 })
   expect(status.emails).toHaveLength(5)
   expect(JSON.stringify(status)).not.toContain('sensitive-canary')
   expect(JSON.stringify(status)).not.toContain(messageId)
   expect(Object.keys(status.emails[0]).sort()).toEqual(['runId', 'uid', 'messageIdHash', 'emailDate', 'sender', 'decision', 'reason', 'alert', 'recordedAt'].sort())
-  expect(Object.keys(status.runs[0]).sort()).toEqual(['id', 'startedAt', 'finishedAt', 'outcome', 'lastSuccessfulUid'].sort())
+  expect(Object.keys(status.runs[0]).sort()).toEqual(['id', 'startedAt', 'finishedAt', 'outcome', 'lastSuccessfulUid', 'searchMatchCount', 'fetchedCount'].sort())
   const filtered = await call(request, auth.token, name, { messageId: `<${messageId}>`, sender: 'info@mercadopago.cl', dateFrom: '2026-10-19', dateTo: '2026-10-19' })
   expect(filtered.emails).toHaveLength(4)
   expect(filtered.emails.find((e: { decision: string }) => e.decision === 'unresolved').alert).toBe(true)
@@ -153,8 +156,54 @@ test('worker status is read-only, scoped to identity, redacted and searchable', 
   expect((await call(request, auth.token, name, { messageId: 'unseen@example.test' })).emails).toEqual([])
   expect((await call(request, auth.token, name, { limit: 1, offset: 1 })).emails).toHaveLength(1)
   expect(await sql`SELECT count(*)::int AS n FROM mcp_operations WHERE user_id = ${f.userId}`).toEqual(before)
+  for (const sender of ['mensajeria@santander.cl', 'serviciodetransferencias@bancochile.cl', 'reply@info.bice.cl']) {
+    await sql`INSERT INTO bank_email_decisions (run_id, uid, message_id_hash, sender, decision, reason) VALUES (${runId}, 6, ${hash(sender)}, ${sender}, 'skipped', 'parser_no_match')`
+    const found = await call(request, auth.token, name, { sender })
+    expect(found.emails).toHaveLength(1)
+    expect(found.emails[0]).toMatchObject({ sender, decision: 'skipped', reason: 'parser_no_match' })
+  }
   const catalog = await (await rpc(request, auth.token, 'tools/list')).json()
   expect(catalog.result.tools.find((t: { name: string }) => t.name === name).annotations.readOnlyHint).toBe(true)
+})
+
+test('MCP cannot claim manual income or reserve trusted worker identities; authenticated worker can reconcile', async ({ request }) => {
+  const f = await fixture(), creator = await fixture(), auth = await grant(f)
+  await sql`UPDATE accounts SET bank_name = 'mercadopago', last_four_digits = '6991' WHERE id = ${f.otherAccountId}`
+  await sql`UPDATE spaces SET is_personal = false WHERE id = ${f.spaceId}`
+  await sql`INSERT INTO space_memberships (id, space_id, user_id, role, created_at) VALUES (${key()}, ${f.spaceId}, ${creator.userId}, 'member', now())`
+  const manualId = key(), emailId = key() + '@fixture.test'
+  await sql`INSERT INTO movements (id, space_id, created_by_user_id, account_id, name, date, amount, type, currency, needs_review, reportable, created_at, updated_at)
+    VALUES (${manualId}, ${f.spaceId}, ${creator.userId}, ${f.otherAccountId}, 'Manual income', '2026-10-19', 1498000, 'income', 'CLP', false, true, now(), now())`
+  const facts = { ...money(f, { type: 'income', accountId: f.otherAccountId, categoryId: null, date: '2026-10-19', amount: 1498000 }), sourceEmailProvider: 'santander', sourceEmailId: emailId }
+  const before = await sql`SELECT * FROM movements WHERE id = ${manualId}`
+  for (const forged of [{ incomingBankTransfer: true }, { kind: 'incoming-bank-transfer' }, { trustedWorker: true }]) {
+    await call(request, auth.token, 'wallit_import_movement', write(f, { ...facts, ...forged }), true)
+  }
+  expect((await sql`SELECT count(*)::int AS n FROM incoming_bank_receipts WHERE user_id = ${f.userId}`)[0].n).toBe(0)
+  expect(await sql`SELECT * FROM movements WHERE id = ${manualId}`).toEqual(before)
+  const catalog = await (await rpc(request, auth.token, 'tools/list')).json()
+  expect(catalog.result.tools.find((t: { name: string }) => t.name === 'wallit_import_movement').inputSchema.properties).not.toHaveProperty('incomingBankTransfer')
+  const data = { ...facts, kind: 'incoming-bank-transfer', userId: f.userId }
+  expect((await request.post('/api/import/email', { data })).status()).toBe(401)
+  expect((await request.post('/api/import/email', { headers: { Authorization: `Bearer ${auth.token}` }, data })).status()).toBe(401)
+  const worker = async (extra = {}) => {
+    const response = await request.post('/api/import/email', { headers: { Authorization: 'Bearer mcp-import-fixture-only' }, data: { ...data, ...extra } })
+    expect(response.status()).toBe(200)
+    return response.json()
+  }
+  // MCP assertions of the exact same sender/email identity cannot preempt worker evidence.
+  await call(request, auth.token, 'wallit_import_movement', write(f, facts))
+  expect(await worker()).toMatchObject({ success: true, duplicate: true, movementId: manualId })
+  expect(await worker()).toMatchObject({ success: true, duplicate: true, movementId: manualId })
+  expect(await sql`SELECT * FROM movements WHERE id = ${manualId}`).toEqual(before)
+  expect(await worker({ sourceEmailId: key() + '@fixture.test' })).toMatchObject({ success: true, unresolved: true, reason: 'incoming_manual_ambiguous' })
+  // A caller-selected source identity also cannot capture a fresh worker insertion.
+  const freshId = key() + '@fixture.test'
+  const assertion = await call(request, auth.token, 'wallit_import_movement', write(f, { ...facts, amount: 33300, sourceEmailId: freshId }))
+  const fresh = await worker({ amount: 33300, sourceEmailId: freshId })
+  expect(fresh.success).toBe(true)
+  expect(fresh.movementId).not.toBe(assertion.result.movementId)
+  expect((await sql`SELECT needs_review FROM movements WHERE id = ${fresh.movementId}`)[0].needs_review).toBe(true)
 })
 
 test('own-bank import matches another shared-Space member manual pair once, preserving retries and rejecting distinct evidence', async ({ request }) => {

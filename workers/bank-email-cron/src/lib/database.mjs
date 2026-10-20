@@ -126,13 +126,13 @@ export async function logProcessing(entry) {
   await assertAdvisoryLock();
   if (entry.runId) {
     await optionalTelemetry(async () => {
-      const decision = entry.decision === 'account_unresolved' || entry.decision === 'transfer_pending_accounts' ? 'unresolved'
+      const decision = entry.decision === 'incoming_manual_ambiguous' || entry.decision === 'account_unresolved' || entry.decision === 'transfer_pending_accounts' ? 'unresolved'
         : entry.decision === 'duplicate_success' ? 'duplicate' : entry.decision === 'imported' ? 'imported'
           : entry.decision === 'error' ? 'error' : 'skipped';
       await sql`INSERT INTO bank_email_decisions
         (run_id, uid, message_id_hash, email_date, sender, decision, reason, alert)
         VALUES (${entry.runId}, ${entry.uid}, ${entry.messageId}, ${entry.emailDate}, ${entry.sender},
-          ${decision}, ${entry.decision}, ${decision === 'unresolved' || decision === 'error'})`;
+          ${decision}, ${entry.errorMessage === 'parser_no_match_transaction' ? 'parser_no_match' : entry.errorMessage === 'incoming_manual_ambiguous' ? 'incoming_manual_ambiguous' : entry.decision}, ${decision === 'unresolved' || decision === 'error'})`;
     });
   }
 
@@ -160,6 +160,9 @@ export async function finishRun(id, outcome) {
   await assertAdvisoryLock();
   await optionalTelemetry(() => sql`UPDATE bank_email_runs SET finished_at = now(), outcome = ${outcome.reason},
     last_successful_uid = ${outcome.lastSuccessfulUid} WHERE id = ${id} AND user_id = ${config.wallit.userId}`);
+  // Separate write keeps old run finalization working before the additive migration.
+  await optionalTelemetry(() => sql`UPDATE bank_email_runs SET search_match_count = ${outcome.searchMatchCount ?? null},
+    fetched_count = ${outcome.fetchedCount ?? null} WHERE id = ${id} AND user_id = ${config.wallit.userId}`);
 }
 
 // Telemetry is optional during staggered rollout. Never hide a lost lock/session:

@@ -73,7 +73,7 @@ Fixtures cover default/bounded previews with complete before/after snapshots, ap
 | Tool | Required scope | Existing operation / behavior |
 | --- | --- | --- |
 | `wallit_admin_repair_foreign_categories` | `wallit:admin` | Preview or repair foreign category links in one authorized Space through the Movement Ledger; no category IDs exposed. |
-| `wallit_admin_bank_email_status` | `wallit:admin` | Read recent worker runs and redacted email decisions for the authenticated user, with all-Space consent; no writes. |
+| `wallit_admin_bank_email_status` | `wallit:admin` | Read recent worker runs, nullable search/fetch counts and redacted decisions (including skips) for the authenticated user, with all-Space consent; no writes. |
 | `wallit_profile` | `wallit:read` | Read the stable identity of your own authenticated Wallit account. |
 | `wallit_spaces_list` | `wallit:read` | List active Spaces you currently belong to and their roles. |
 | `wallit_space_create` | `wallit:admin` | Create a shared Space, copying your Personal categories. Requires admin consent. |
@@ -133,7 +133,7 @@ Fixtures cover default/bounded previews with complete before/after snapshots, ap
 | `wallit_reports` | `wallit:read` | Read category reports, daily cashflow and balances for an inclusive date range. |
 | `wallit_report_category_movements` | `wallit:read` | Read reportable expenses for a category/date range. |
 | `wallit_exchange_rate` | `wallit:read` | Read the current cached/live USD→CLP rate × 100. |
-| `wallit_import_movement` | `wallit:write` | Import bank evidence through the existing retry-safe email importer, bound to your identity. Always pending review. |
+| `wallit_import_movement` | `wallit:write` | Import user-supplied bank evidence. Cannot claim worker evidence or reconcile manual incoming movements. New movements always pending review. |
 | `wallit_import_transfer` | `wallit:write` | Import retry-safe CLP/USD transfer evidence into two accessible accounts; both new legs enter review. |
 | `wallit_import_own_bank_transfer` | `wallit:write` | Import own-bank evidence through the domain importer. Missing mapped accounts produce evidence only; mapped legs enter review. |
 | `wallit_bank_imports_list` | `wallit:read` | Read your bank-transfer evidence and receipt identities within the authorized Spaces. |
@@ -182,7 +182,7 @@ Input (all optional): `{ messageId?: string, sender?: string, dateFrom?: "YYYY-M
 including `info@mercadopago.cl`. Message-ID is normalized (trim and angle brackets)
 and hashed before lookup. Inclusive date bounds apply to the email's date in UTC.
 
-Output: `{ runs: [{ id, startedAt, finishedAt, outcome, lastSuccessfulUid }],
+Output: `{ runs: [{ id, startedAt, finishedAt, outcome, lastSuccessfulUid, searchMatchCount, fetchedCount }],
  emails: [{ runId, uid, messageIdHash, emailDate, sender, decision, reason, alert,
  recordedAt }], limit, offset }`. Runs are recent-first; emails are recorded-first,
 with independent pagination. Email filters do not filter the recent-runs list.
@@ -208,3 +208,48 @@ member's manual pairs and standalone movements. Ambiguous matches
 and standalone manual movements require reconciliation and cannot create duplicates.
 Worker scheduling, mailbox access and cursor mutation are intentionally excluded
 from MCP; diagnostics cannot trigger a worker run or reprocess mail.
+
+### Incoming payer-bank notices and search visibility
+
+`wallit_admin_bank_email_status` keeps its existing inputs and adds sender filter values
+`mensajeria@santander.cl`, `serviciodetransferencias@bancochile.cl`, and `reply@info.bice.cl`.
+Each `runs[]` item additionally returns `searchMatchCount: number | null` and
+`fetchedCount: number | null`. A successful empty search returns `0, 0`; `null`
+means unavailable/not performed, including historical runs. Matches count distinct
+UIDs strictly after the retained cursor, before the batch limit; fetched count is
+the batch size actually fetched, not the number imported. Email fields remain
+unchanged. New fixed reasons are `incoming_destination_not_owner`,
+`incoming_manual_ambiguous` (unresolved/alert, cursor advances after durable evidence storage), and `processing_deferred`
+(fetched but not attempted after a preceding failure/budget limit, cursor not advanced).
+`parser_no_match` is visible both for harmless skips and transaction-like parse
+failures (the latter remain errors/alerts and block the cursor).
+
+`wallit_import_movement` accepts provider values `santander`, `bancochile`, `bice`,
+but **does not accept `incomingBankTransfer`**, `kind`, or caller-supplied provenance.
+The dedicated `incoming-bank-transfer` operation is intentionally excluded from MCP:
+only the bearer-authenticated worker HTTP route can invoke its server-only entrypoint.
+The generic domain importer also rejects that kind. Worker-created incoming movements
+use a reserved `bank-email:<provider>` source namespace, unavailable to MCP imports;
+caller-chosen email IDs cannot reserve trusted receipt identities or block worker claims.
+Existing user-supplied MCP imports retain their review, scope and idempotency behavior.
+The provider values also appear in the other import tools' shared identity schema;
+they do not expand the set of supported own-bank endpoint banks.
+
+The worker matches manual income within accessible accounts/Spaces regardless of
+creator. Only explicit operation time (Chile local `HH:mm`) can disambiguate equal
+amounts. Notification/header time is never authoritative. BICE and Banco de Chile
+supply operation times; Santander and BCI fixtures supply only operation dates.
+New income remains pending review; duplicate matches preserve manual movements.
+
+Additive migration `0024_incoming_bank_unresolved` retains parsed evidence and a
+resolution timestamp for ambiguous incoming notices, in addition to `0023` counts
+and receipt claims. The HTTP worker result is
+`{ success: true, unresolved: true, reason: "incoming_manual_ambiguous" }` only after
+that evidence is durably committed. The status tool shows an unresolved alert and
+the worker continues with later UIDs. Missing migrations, an old app, failed writes
+or an unavailable import endpoint do not advance the cursor. Telemetry remains
+best-effort; financial evidence retention is mandatory. Reconciliation is an explicit
+operator workflow using the saved parsed payload through the authenticated worker
+endpoint after correcting candidate data; it neither resets the cursor nor rereads mail.
+Neither raw evidence payloads nor worker credentials are exposed through MCP.
+Independent security/spec review remains required before merging MCP changes.

@@ -23,7 +23,9 @@ export function createImportClient({ fetchImpl = (...args) => fetch(...args),
         status = response.status;
         if (!response.ok) throw Object.assign(new Error('http_failure'), { retryable: retryStatus(status) });
         const result = await response.json();
-        if (!result || result.success !== true || (result.duplicate !== undefined && typeof result.duplicate !== 'boolean')) {
+        if (!result || result.success !== true || (result.duplicate !== undefined && typeof result.duplicate !== 'boolean')
+          || (result.unresolved !== undefined && (typeof result.unresolved !== 'boolean'
+            || (result.unresolved && (result.reason !== 'incoming_manual_ambiguous' || payload.kind !== 'incoming-bank-transfer'))))) {
           throw new Error('invalid_import_response');
         }
         return result;
@@ -52,7 +54,7 @@ export function buildImportPayload(parsedResult, categoryId, sourceEmailId) {
     ...parsedResult.ownBankTransfer,
   };
   const payload = {
-    kind: 'movement',
+    kind: parsedResult.incomingBankTransfer ? 'incoming-bank-transfer' : 'movement',
     userId: config.wallit.userId,
     accountId: parsedResult.accountId,
     categoryId: categoryId || null,
@@ -65,6 +67,8 @@ export function buildImportPayload(parsedResult, categoryId, sourceEmailId) {
     sourceEmailProvider: parsedResult.provider,
     sourceEmailId: sourceEmailId,
   };
+
+  if (parsedResult.incomingBankTransfer) payload.operationTime = parsedResult.time ?? null;
 
   if (parsedResult.currency === 'USD') {
     payload.amountUsd = parsedResult.amountUsd;

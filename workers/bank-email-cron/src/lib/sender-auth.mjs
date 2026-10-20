@@ -1,4 +1,7 @@
 export const PROVIDER_FROM_ALLOWLIST = Object.freeze({
+  'mensajeria@santander.cl': 'santander',
+  'serviciodetransferencias@bancochile.cl': 'bancochile',
+  'reply@info.bice.cl': 'bice',
   'contacto@bci.cl': 'bci',
   'transferencias@bci.cl': 'bci',
   'no-reply@mail.machbank.cl': 'mach',

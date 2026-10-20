@@ -3,6 +3,8 @@ export async function runWorker(deps, { logger = console, now = Date.now, budget
   const started = now();
   const runtime = { deadlineMs: started + budgetMs, now };
   let locked = false;
+  let fetched = [];
+  const attempted = new Set();
   let outcome = { exitCode: 0, reason: 'completed', lastSuccessfulUid: null };
   try {
     locked = await deps.acquireAdvisoryLock();
@@ -13,7 +15,8 @@ export async function runWorker(deps, { logger = console, now = Date.now, budget
     if (!Number.isSafeInteger(cursor.lastUid) || cursor.lastUid < 0 || cursor.lastUid > 0xffffffff
       || (cursor.uidvalidity !== null && (!Number.isSafeInteger(cursor.uidvalidity) || cursor.uidvalidity <= 0 || cursor.uidvalidity > 0xffffffff))) throw new Error('invalid_cursor');
     outcome.lastSuccessfulUid = cursor.lastUid;
-    const { uidvalidity, messages } = await deps.fetchNewEmails(cursor.lastUid, cursor.uidvalidity, runtime);
+    const { uidvalidity, messages, searchMatchCount = null, fetchedCount = null } = await deps.fetchNewEmails(cursor.lastUid, cursor.uidvalidity, runtime);
+    outcome.searchMatchCount = searchMatchCount; outcome.fetchedCount = fetchedCount;
     if (!Number.isSafeInteger(uidvalidity) || uidvalidity <= 0 || uidvalidity > 0xffffffff) throw new Error('invalid_uidvalidity');
     // Never reset/backfill automatically: imported movements may have been
     // intentionally deleted. A new mailbox epoch requires an operator decision.
@@ -21,11 +24,13 @@ export async function runWorker(deps, { logger = console, now = Date.now, budget
       logger.error('Worker blocked: uidvalidity_changed; cursor preserved');
       return outcome = { ...outcome, exitCode: 1, reason: 'uidvalidity_changed' };
     }
+    fetched = messages;
     if (cursor.uidvalidity === null) await deps.updateCursor(uidvalidity, cursor.lastUid);
     for (const email of [...messages].sort((a, b) => a.uid - b.uid)) {
       if (!Number.isSafeInteger(email.uid) || email.uid <= 0 || email.uid > 0xffffffff) throw new Error('invalid_uid');
       if (email.uid <= outcome.lastSuccessfulUid) continue;
       if (now() - started >= budgetMs) return outcome = { ...outcome, reason: 'budget_reached' };
+      attempted.add(email.uid);
       const result = await deps.processEmail(email, runtime);
       if (result.error === 'run_budget_exhausted') return outcome = { ...outcome, reason: 'budget_reached' };
       if (!result.success || !result.advance) {
@@ -40,6 +45,10 @@ export async function runWorker(deps, { logger = console, now = Date.now, budget
     logger.error('Worker failed; cursor preserved at last confirmed disposition');
     return outcome = { ...outcome, exitCode: 1, reason: 'worker_error' };
   } finally {
+    for (const email of fetched.filter(email => email.uid > outcome.lastSuccessfulUid && !attempted.has(email.uid))) {
+      try { await deps.processEmail(email, { ...runtime, deferred: true }); }
+      catch { outcome.exitCode = 1; logger.error('Deferred email audit failed'); }
+    }
     if (runtime.runId) {
       try { await deps.finishRun(runtime.runId, outcome); } catch { outcome.exitCode = 1; logger.error('Worker telemetry finalization failed'); }
     }
