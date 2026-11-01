@@ -5,6 +5,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm'
 import { categoryReadAccess } from '@/lib/domain/read-access'
 import { getCurrentSpace } from '@/lib/spaces'
 import { getUsdToClpRate } from '@/lib/exchange-rate'
+import { netReportCategories } from '@/lib/domain/report-netting'
 import { reportableMovementSqlFilters } from '@/lib/domain/reporting'
 
 export interface DailyData {
@@ -18,10 +19,13 @@ export interface ReportData {
   balanceDailyData: DailyData[]
   openingBalance: number
   balanceCurrency: 'CLP' | 'USD'
+  reportCurrency: 'CLP'
   totalIncome: number
   totalExpense: number
+  grossIncome: number
+  grossExpense: number
   movementCount: number
-  categorySpending: { id: string | null; name: string; emoji: string; total: number; count: number }[]
+  categorySpending: { id: string | null; name: string; emoji: string; total: number; net: number; type: 'income' | 'expense'; grossIncome: number; grossExpense: number; count: number }[]
   categories: { id: string; name: string; emoji: string }[]
   accounts: { id: string; bankName: string; lastFour: string; emoji: string | null }[]
 }
@@ -70,7 +74,7 @@ export async function getReportData(
   categoryIds?: string[],
   accountId?: string,
 ): Promise<ReportData> {
-  const { user: session, space } = await getCurrentSpace()
+  const { space } = await getCurrentSpace()
 
   const userAccounts = await db.select({
     id: accounts.id,
@@ -112,18 +116,22 @@ export async function getReportData(
   const balanceAmount = selectedAccount?.currency === 'USD'
     ? sql<number>`COALESCE(${movements.amountUsd}, 0)`
     : sql<number>`${movements.amount}`
-  const reportAmount = selectedAccount?.currency === 'USD'
-    ? sql<number>`COALESCE(${movements.amountUsd}, 0)`
-    : sql<number>`${movements.amount}`
+  const reportAmount = sql<number>`${movements.amount}`
   const needsUsdRate = !selectedAccount && userAccounts.some(account => account.currency === 'USD')
   const usdClpRate = needsUsdRate ? await getUsdToClpRate().catch(() => null as number | null) : null
 
-  const [dailyData, balanceDailyData, balanceTotals, totals, catSpending, userCategories] = await Promise.all([
+  const [reportRows, balanceDailyData, balanceTotals, userCategories] = await Promise.all([
     db.select({
       date: movements.date,
+      categoryId: categories.id,
+      count: sql<number>`COUNT(*)`,
+      incomeCount: sql<number>`COUNT(*) FILTER (WHERE ${movements.type} = 'income')`,
+      expenseCount: sql<number>`COUNT(*) FILTER (WHERE ${movements.type} = 'expense')`,
       income: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN ${reportAmount} ELSE 0 END), 0)`,
       expense: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN ${reportAmount} ELSE 0 END), 0)`,
-    }).from(movements).where(where).groupBy(movements.date).orderBy(movements.date),
+    }).from(movements)
+      .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess(space.id)))
+      .where(where).groupBy(movements.date, categories.id).orderBy(movements.date),
 
     db.select({
       date: movements.date,
@@ -136,29 +144,11 @@ export async function getReportData(
       totalExpense: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN ${balanceAmount} ELSE 0 END), 0)`,
     }).from(movements).where(balanceBeforeWhere),
 
-    db.select({
-      totalIncome: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN ${reportAmount} ELSE 0 END), 0)`,
-      totalExpense: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN ${reportAmount} ELSE 0 END), 0)`,
-      count: sql<number>`COUNT(*)`,
-    }).from(movements).where(where),
-
-    db.select({
-      categoryId: categories.id,
-      categoryName: categories.name,
-      categoryEmoji: categories.emoji,
-      total: sql<number>`SUM(${reportAmount})`,
-      count: sql<number>`COUNT(*)`,
-    }).from(movements)
-      .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess(space.id)))
-      .where(sql`${where} AND ${movements.type} = 'expense'`)
-      .groupBy(categories.id, categories.name, categories.emoji)
-      .orderBy(sql`SUM(${reportAmount}) DESC`),
-
     db.select({ id: categories.id, name: categories.name, emoji: categories.emoji })
       .from(categories).where(categoryReadAccess(space.id)),
   ])
 
-  const t = totals[0] || { totalIncome: 0, totalExpense: 0, count: 0 }
+  const t = netReportCategories(reportRows)
   const openingBalanceBase = selectedAccount
     ? selectedAccount.initialBalance
     : userAccounts.reduce((sum, account) => {
@@ -170,20 +160,20 @@ export async function getReportData(
   const balanceTotalsBeforeRange = balanceTotals[0] || { totalIncome: 0, totalExpense: 0 }
 
   return {
-    dailyData: dailyData.map(d => ({ ...d, income: Number(d.income), expense: Number(d.expense) })),
+    dailyData: t.dailyData,
     balanceDailyData: balanceDailyData.map(d => ({ ...d, income: Number(d.income), expense: Number(d.expense) })),
     openingBalance: openingBalanceBase + Number(balanceTotalsBeforeRange.totalIncome) - Number(balanceTotalsBeforeRange.totalExpense),
     balanceCurrency,
+    reportCurrency: 'CLP',
     totalIncome: Number(t.totalIncome),
     totalExpense: Number(t.totalExpense),
     movementCount: Number(t.count),
-    categorySpending: catSpending.map(c => ({
-      id: c.categoryId,
-      name: c.categoryName || 'Sin categoría',
-      emoji: c.categoryEmoji || '📦',
-      total: Number(c.total),
-      count: Number(c.count),
-    })),
+    grossIncome: t.grossIncome,
+    grossExpense: t.grossExpense,
+    categorySpending: t.breakdown.map(c => {
+      const category = userCategories.find(category => category.id === c.categoryId)
+      return { ...c, id: c.categoryId, name: category?.name ?? 'Sin categoría', emoji: category?.emoji ?? '📦' }
+    }),
     categories: userCategories,
     accounts: userAccounts.map(account => ({
       id: account.id,

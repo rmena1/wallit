@@ -12,6 +12,7 @@ import * as review from '@/lib/actions/review'
 import * as emergency from '@/lib/actions/emergency'
 import * as loan from '@/lib/actions/loans'
 import * as investment from '@/lib/actions/investments'
+import { netReportCategories } from '@/lib/domain/report-netting'
 import { getReportData } from '@/lib/actions/reports'
 import { movementLedger } from '@/lib/domain/movement-ledger'
 import { importEmailTransaction } from '@/lib/domain/email-import-service'
@@ -146,8 +147,16 @@ export const mcpTools: ToolDefinition[] = [
   define('wallit_investment_snapshots', 'Read investment snapshots and performance summary.', 'wallit:read', { ...read, accountId: id }, async a => ({ snapshots: await investment.getInvestmentSnapshots(a.accountId), summary: await investment.getInvestmentSummary(a.accountId) })),
   define('wallit_investment_value_update', 'Set investment current value in cents and record a snapshot.', 'wallit:write', { ...write, accountId: id, value: z.number().int().nonnegative().max(2_147_483_647) }, a => investment.updateInvestmentValue(a.accountId, a.value)),
   define('wallit_investment_snapshot_delete', 'Delete a snapshot and synchronize current investment value.', 'wallit:write', { ...write, accountId: id, snapshotId: id }, a => investment.deleteInvestmentSnapshot(a.accountId, a.snapshotId)),
-  define('wallit_reports', 'Read category reports, daily cashflow and balances for an inclusive date range.', 'wallit:read', { ...read, startDate: date, endDate: date, categoryIds: z.array(id).max(200).optional(), accountId: id.optional() }, a => getReportData(a.startDate, a.endDate, a.categoryIds, a.accountId)),
-  define('wallit_report_category_movements', 'Read reportable expenses for a category/date range.', 'wallit:read', { ...read, startDate: date, endDate: date, categoryId: id.nullable(), accountId: id.optional() }, a => movement.getReportCategoryMovements(a.startDate, a.endDate, a.categoryId, a.accountId)),
+  define('wallit_reports', 'Read CLP reports for an inclusive date range: income/expense totals sum positive/negative per-category nets; uncategorized stays gross. Includes grossIncome/grossExpense, signed category nets and daily changes in cumulative nets; balances stay gross.', 'wallit:read', { ...read, startDate: date, endDate: date, categoryIds: z.array(id).max(200).optional(), accountId: id.optional() }, a => getReportData(a.startDate, a.endDate, a.categoryIds, a.accountId)),
+  define('wallit_report_category_movements', 'Read reportable incomes and expenses for a category/date range in canonical CLP. Use type to sign amounts and reconcile the category net (income minus expense); uncategorized remains gross by type.', 'wallit:read', { ...read, startDate: date, endDate: date, categoryId: id.nullable(), accountId: id.optional() }, async a => {
+    const movements = await movement.getReportCategoryMovements(a.startDate, a.endDate, a.categoryId, a.accountId)
+    const totals = netReportCategories(movements.map(m => ({
+      categoryId: a.categoryId, income: m.type === 'income' ? m.amount : 0,
+      expense: m.type === 'expense' ? m.amount : 0,
+    })))
+    return { movements, currency: 'CLP', totalIncome: totals.totalIncome, totalExpense: totals.totalExpense,
+      net: totals.totalIncome - totals.totalExpense, grossIncome: totals.grossIncome, grossExpense: totals.grossExpense }
+  }),
   define('wallit_exchange_rate', 'Read the current cached/live USD→CLP rate × 100.', 'wallit:read', read, () => transfer.getCurrentExchangeRate()),
   define('wallit_import_movement', 'Import user-supplied bank evidence through the retry-safe importer. Cannot claim authenticated worker evidence or reconcile manual incoming movements. New movements always pending review.', 'wallit:write', { ...write, sourceEmailProvider: z.enum(['bci', 'tenpo', 'mercadopago', 'mach', 'santander', 'bancochile', 'bice']), sourceEmailId: z.string().min(1).max(500), ...money, originalName: text.optional() }, a => importEmailTransaction({ ...a, kind: 'movement', userId: ledger().userId, needsReview: true, amountUsd: a.amountUsd ?? undefined, exchangeRate: a.exchangeRate ?? undefined, time: a.time ?? undefined })),
   define('wallit_import_transfer', 'Import retry-safe CLP/USD transfer evidence into two accessible accounts; both new legs enter review.', 'wallit:write', { ...write, ...sourceIdentity, fromAccountId: id, toAccountId: id, currency, amount: cents, amountUsd: integerCents.optional(), exchangeRate: integerCents.optional(), toCurrency: currency.optional(), toAmount: cents.optional(), toAmountUsd: integerCents.optional(), toExchangeRate: integerCents.optional(), date, time: z.string().max(5).optional(), originalName: text.optional(), sourceName: text.optional(), destinationName: text.optional() }, a => importEmailTransaction({ ...a, kind: 'transfer', userId: ledger().userId })),

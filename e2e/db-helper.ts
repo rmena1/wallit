@@ -1,3 +1,4 @@
+import { netReportCategories } from '../src/lib/domain/report-netting'
 import postgres from 'postgres'
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://127.0.0.1:5432/wallit_e2e'
@@ -155,11 +156,12 @@ export async function countMovementsInSpace(spaceId: string, nameLike: string): 
 
 export async function getReportTotalsForSpace(spaceId: string): Promise<{ totalIncome: number; totalExpense: number; count: number }> {
   const rows = await sql`
-    SELECT
+    SELECT c.id AS category_id,
       COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0)::bigint AS total_income,
       COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0)::bigint AS total_expense,
       COUNT(*)::int AS count
     FROM movements m
+    LEFT JOIN categories c ON c.id = m.category_id AND c.space_id = m.space_id
     WHERE m.space_id = ${spaceId}
       AND m.needs_review = false
       AND m.reportable = true
@@ -168,12 +170,12 @@ export async function getReportTotalsForSpace(spaceId: string): Promise<{ totalI
       AND (m.emergency = false OR m.emergency IS NULL)
       AND (m.loan = false OR m.loan IS NULL)
       AND m.loan_id IS NULL
+    GROUP BY c.id
   `
-  return {
-    totalIncome: Number(rows[0]?.total_income ?? 0),
-    totalExpense: Number(rows[0]?.total_expense ?? 0),
-    count: Number(rows[0]?.count ?? 0),
-  }
+  const { totalIncome, totalExpense, count } = netReportCategories(rows.map(row => ({
+    categoryId: row.category_id, income: row.total_income, expense: row.total_expense, count: row.count,
+  })))
+  return { totalIncome, totalExpense, count }
 }
 
 export async function getMovementWorkflowState(spaceId: string, nameLike: string): Promise<{
@@ -546,6 +548,7 @@ export async function seedTypedReviewMovement(userId: string, accountId: string 
 }
 
 export async function seedConfirmedWorkflowMovement(userId: string, accountId: string | null, opts: {
+  date?: string
   name: string
   clpAmount: number
   type: 'income' | 'expense'
@@ -576,7 +579,7 @@ export async function seedConfirmedWorkflowMovement(userId: string, accountId: s
       ${opts.categoryId ?? null},
       ${accountId},
       ${opts.name},
-      ${today},
+      ${opts.date ?? today},
       ${opts.clpAmount},
       ${opts.type},
       false,
@@ -752,6 +755,8 @@ export async function seedInterspaceTransfer(userId: string, opts: {
   destinationSpaceId: string
   sourceAccountId: string
   destinationAccountId: string
+  sourceCategoryId?: string
+  destinationCategoryId?: string
   amount: number
   note?: string
   date?: string
@@ -770,12 +775,12 @@ export async function seedInterspaceTransfer(userId: string, opts: {
 
   await sql`
     INSERT INTO movements (
-      id, space_id, created_by_user_id, account_id, name, date, amount, type,
+      id, space_id, created_by_user_id, account_id, category_id, name, date, amount, type,
       needs_review, reportable, currency, receivable, received, created_at, updated_at
     )
     VALUES
-      (${sourceMovementId}, ${opts.sourceSpaceId}, ${userId}, ${opts.sourceAccountId}, ${`Transferencia a ${destinationSpaceName}${note}`}, ${date}, ${opts.amount}, 'expense', false, false, 'CLP', false, false, ${now}, ${now}),
-      (${destinationMovementId}, ${opts.destinationSpaceId}, ${userId}, ${opts.destinationAccountId}, ${`Transferencia desde ${sourceSpaceName}${note}`}, ${date}, ${opts.amount}, 'income', false, false, 'CLP', false, false, ${now}, ${now})
+      (${sourceMovementId}, ${opts.sourceSpaceId}, ${userId}, ${opts.sourceAccountId}, ${opts.sourceCategoryId ?? null}, ${`Transferencia a ${destinationSpaceName}${note}`}, ${date}, ${opts.amount}, 'expense', false, ${Boolean(opts.sourceCategoryId)}, 'CLP', false, false, ${now}, ${now}),
+      (${destinationMovementId}, ${opts.destinationSpaceId}, ${userId}, ${opts.destinationAccountId}, ${opts.destinationCategoryId ?? null}, ${`Transferencia desde ${sourceSpaceName}${note}`}, ${date}, ${opts.amount}, 'income', false, ${Boolean(opts.destinationCategoryId)}, 'CLP', false, false, ${now}, ${now})
   `
 
   await sql`

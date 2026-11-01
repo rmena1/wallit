@@ -111,7 +111,7 @@ test.describe('Pagination & Infinite Scroll', () => {
 
     // 3. Verify summary cards show aggregated data
     await expect(page.getByText('Ingresos', { exact: true })).toBeVisible({ timeout: 5000 })
-    await expect(page.getByText('Neto')).toBeVisible()
+    await expect(page.getByText('Neto', { exact: true })).toBeVisible()
     await screenshot(page, 'pagination-reports-02-summary')
 
     // 4. Verify charts are rendered

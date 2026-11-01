@@ -126,7 +126,7 @@ test.describe('USD Movements — Complete Flow', () => {
     await screenshot(page, 'usd-income-04-income-visible')
   })
 
-  test('selected USD account reports use USD for summary and category totals', async ({ page }) => {
+  test('selected USD account reports use canonical CLP for summary and category totals', async ({ page }) => {
     const email = await registerAndLogin(page)
     await seedUsdToClpRate(95000)
 
@@ -164,12 +164,11 @@ test.describe('USD Movements — Complete Flow', () => {
       has: page.locator(`option[value="${usdAccountId}"]`),
     }).selectOption(usdAccountId)
 
-    await expect(page.locator('main')).toContainText('US$100,00', { timeout: 10000 })
-    await expect(page.locator('main')).toContainText('US$25,00')
-    await expect(page.locator('main')).toContainText('US$75,00')
+    await expect(page.locator('main')).toContainText('$95.000', { timeout: 10000 })
+    await expect(page.locator('main')).toContainText('$23.750')
+    await expect(page.locator('main')).toContainText('$71.250')
     await expect(page.locator('main')).toContainText('USD Supplies')
-    await expect(page.locator('main')).not.toContainText('$95.000')
-    await expect(page.locator('main')).not.toContainText('$23.750')
+    await expect(page.getByTestId('balance-chart')).toHaveAttribute('data-balance-currency', 'USD')
     await screenshot(page, 'usd-reports-selected-account-usd-totals')
   })
 
