@@ -23,9 +23,36 @@ test('category nets reconcile reports, dashboard, refunds, uncategorized and CLP
   await page.getByTestId('reports-period-trigger').click()
   await page.getByRole('button', { name: '100 días', exact: true }).click()
   await totals(page, 0, 10000)
-  const chart = JSON.parse((await page.getByTestId('expense-chart').getAttribute('data-expense-chart'))!) as { date: string; actual: number | null }[]
+  const chart = JSON.parse((await page.getByTestId('expense-chart').getAttribute('data-expense-chart'))!) as { date: string; actual: number | null; trend: number | null }[]
   expect(chart.find(p => p.date === yesterday)?.actual).toBe(30000)
   expect(chart.find(p => p.date === today)?.actual).toBe(10000)
+  const observedDays = chart.filter(p => p.date <= today).length
+  expect(observedDays).toBe(100)
+  for (const [index, point] of chart.entries()) {
+    expect(point.trend).toBeCloseTo(10000 / observedDays * (index + 1), 6)
+  }
+  await expect(page.getByText('Tendencia lineal:', { exact: false })).toHaveText('Tendencia lineal: $10.000')
+
+  // Include a future day to distinguish the observed net from the projected total.
+  // The picker stays open after choosing the 100-day preset.
+  const tomorrowDate = new Date(`${today}T12:00:00`)
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1)
+  const tomorrow = tomorrowDate.toISOString().slice(0, 10)
+  const startDay = page.getByTestId(`reports-calendar-day-${yesterday}`)
+  if (await startDay.count() === 0) await page.getByRole('button', { name: 'Mes anterior', exact: true }).click()
+  await startDay.click()
+  const endDay = page.getByTestId(`reports-calendar-day-${tomorrow}`)
+  if (await endDay.count() === 0) await page.getByRole('button', { name: 'Mes siguiente', exact: true }).click()
+  await endDay.click()
+  await expect(page.getByTestId('reports-period-trigger')).toHaveAttribute('data-period-start', yesterday)
+  await expect(page.getByTestId('reports-period-trigger')).toHaveAttribute('data-period-end', tomorrow)
+  await expect.poll(async () => JSON.parse((await page.getByTestId('expense-chart').getAttribute('data-expense-chart'))!)).toEqual([
+    { date: yesterday, actual: 30000, trend: 5000 },
+    { date: today, actual: 10000, trend: 10000 },
+    { date: tomorrow, actual: null, trend: 15000 },
+  ])
+  await totals(page, 0, 10000)
+  await expect(page.getByText('Tendencia lineal:', { exact: false })).toHaveText('Tendencia lineal: $15.000')
   const category = page.getByRole('button').filter({ hasText: 'Restaurante net fixture' }).last()
   await expect(category).toContainText('-$10.000')
   await category.click()
