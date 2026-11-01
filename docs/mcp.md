@@ -130,8 +130,8 @@ Fixtures cover default/bounded previews with complete before/after snapshots, ap
 | `wallit_investment_snapshots` | `wallit:read` | Read investment snapshots and performance summary. |
 | `wallit_investment_value_update` | `wallit:write` | Set investment current value in cents and record a snapshot. |
 | `wallit_investment_snapshot_delete` | `wallit:write` | Delete a snapshot and synchronize current investment value. |
-| `wallit_reports` | `wallit:read` | Read category reports, daily cashflow and balances for an inclusive date range. |
-| `wallit_report_category_movements` | `wallit:read` | Read reportable expenses for a category/date range. |
+| `wallit_reports` | `wallit:read` | Read CLP reports for an inclusive date range: income/expense totals sum positive/negative per-category nets; uncategorized stays gross. Includes grossIncome/grossExpense, signed category nets and daily changes in cumulative nets; balances stay gross. |
+| `wallit_report_category_movements` | `wallit:read` | Read reportable incomes and expenses for a category/date range in canonical CLP. Use type to sign amounts and reconcile the category net (income minus expense); uncategorized remains gross by type. |
 | `wallit_exchange_rate` | `wallit:read` | Read the current cached/live USD→CLP rate × 100. |
 | `wallit_import_movement` | `wallit:write` | Import user-supplied bank evidence. Cannot claim worker evidence or reconcile manual incoming movements. New movements always pending review. |
 | `wallit_import_transfer` | `wallit:write` | Import retry-safe CLP/USD transfer evidence into two accessible accounts; both new legs enter review. |
@@ -253,3 +253,5 @@ operator workflow using the saved parsed payload through the authenticated worke
 endpoint after correcting candidate data; it neither resets the cursor nor rereads mail.
 Neither raw evidence payloads nor worker credentials are exposed through MCP.
 Independent security/spec review remains required before merging MCP changes.
+
+Report semantics: `wallit_reports` returns CLP category nets (`type`, signed `net`, absolute `total`, gross fields), net income/expense cards (`reportCurrency: CLP`), and `dailyData` changes in cumulative category nets (may be negative). `balanceDailyData` remains gross in `balanceCurrency`. `wallit_report_category_movements` returns `{ movements, currency, totalIncome, totalExpense, net, grossIncome, grossExpense }`; movement amounts stay positive CLP cents with explicit `type`. Both income and expense movements contribute to the summary. Uncategorized stays gross. No reporting capability is excluded from MCP parity.

@@ -215,3 +215,9 @@ _Avoid_: Viewer
 - "Transferencia que salda un por cobrar" was considered for household reimbursements. Resolved: the canonical workflow is **Receivable Settlement Expense**. A settlement born from consuming an **Inter-Space Transfer** may be confirmed in review as an **Inter-Space Transfer** with both existing legs non-reportable, preserving the collection; direct new payments retain expense classification.
 - A single existing **Transfer** can cover multiple **Receivables**. Resolved: each settlement consumes one receivable at a time from the **Transfer** using a 5% tolerance after currency conversion; the remaining operational amount stays as a **Settlement Remainder Transfer** until fully consumed.
 - Earlier discussion suggested exact full coverage for settlement. Overridden: settlement allows a ±5% tolerance for same-currency and different-currency payments. Existing payments above the upper bound are partially consumed with a remainder; new cross-Space entered amounts outside the band are rejected.
+
+## Reporting category nets
+
+Reports, dashboard and remote MCP calculate Ingresos and Gastos per Space and selected date range using canonical CLP `amount` (including converted USD). Each category nets income minus expense: positive nets add to Ingresos, absolute negative nets add to Gastos. Uncategorized income and expense stay gross on their respective sides. Neto remains Ingresos minus Gastos. Reportable Inter-Space Transfer legs participate with their own type and category; same-Space Transfers remain operational. Existing reportable filters and balance calculations are unchanged.
+
+Category breakdowns show the resulting net type and signed amount; category detail includes both incomes and expenses. Cumulative report charts apply this rule from range start through each day, so refunds can lower a curve; the linear expense trend uses that same series. The dashboard retains its all-time range. Balance charts remain gross.

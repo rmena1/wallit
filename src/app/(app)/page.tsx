@@ -5,6 +5,8 @@ import { getAccountBalances, getNetLiquidity, type AccountWithBalanceSerialized,
 import { getUsdToClpRate } from '@/lib/exchange-rate'
 import { getUnsettledEmergencyCount } from '@/lib/actions/emergency'
 import { getUnsettledLoanCount } from '@/lib/actions/loans'
+import { categoryReadAccess } from '@/lib/domain/read-access'
+import { netReportCategories } from '@/lib/domain/report-netting'
 import { reportableMovementSqlFilters } from '@/lib/domain/reporting'
 import { getPendingReviewItemCount } from '@/lib/domain/pending-review'
 import { HomePage } from './home-client'
@@ -102,11 +104,13 @@ export default async function Home() {
     // Totals for confirmed reportable movements only
     db
       .select({
-        totalIncome: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN ${movements.amount} ELSE 0 END), 0)`,
-        totalExpense: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN ${movements.amount} ELSE 0 END), 0)`,
+        categoryId: categories.id,
+        income: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'income' THEN ${movements.amount} ELSE 0 END), 0)`,
+        expense: sql<number>`COALESCE(SUM(CASE WHEN ${movements.type} = 'expense' THEN ${movements.amount} ELSE 0 END), 0)`,
       })
       .from(movements)
-      .where(reportableMovementWhere),
+      .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess(space.id)))
+      .where(reportableMovementWhere).groupBy(categories.id),
 
     // Pending review item count. Transfer roots count as one review item even when both legs are pending.
     getPendingReviewItemCount(space.id),
@@ -247,7 +251,7 @@ export default async function Home() {
     return sum + a.balance
   }, 0)
 
-  const totals = totalsResult[0] || { totalIncome: 0, totalExpense: 0 }
+  const totals = netReportCategories(totalsResult)
   const netLiquidity: NetLiquidityData = await getNetLiquidity(usdClpRate ?? undefined, accountBalances)
   const serializedAccountBalances: AccountWithBalanceSerialized[] = accountBalances.map((account) => ({
     ...account,

@@ -15,6 +15,7 @@ export type MovementActionResult = {
 }
 
 export interface ReportCategoryMovement {
+  type: 'income' | 'expense'
   id: string
   date: string
   name: string
@@ -195,7 +196,7 @@ export async function getMovements() {
 }
 
 /**
- * Get expense movements for a report category within a selected period.
+ * Get both income and expense movements in canonical CLP for a report category within a selected period.
  */
 export async function getReportCategoryMovements(
   startDate: string,
@@ -210,13 +211,10 @@ export async function getReportCategoryMovements(
 
   if (accountId && !selectedAccount) return []
 
-  const reportAmount = selectedAccount?.currency === 'USD'
-    ? sql<number>`COALESCE(${movements.amountUsd}, 0)`
-    : sql<number>`${movements.amount}`
+  const reportAmount = sql<number>`${movements.amount}`
 
   const conditions: SQL[] = [
     ...reportableMovementSqlFilters(space.id),
-    eq(movements.type, 'expense'),
     gte(movements.date, startDate),
     lte(movements.date, endDate),
     categoryId ? eq(categories.id, categoryId) : isNull(categories.id),
@@ -224,7 +222,7 @@ export async function getReportCategoryMovements(
   if (accountId) conditions.push(eq(movements.accountId, accountId))
 
   const results = await db
-    .select({ id: movements.id, date: movements.date, name: movements.name, amount: reportAmount, time: movements.time })
+    .select({ id: movements.id, date: movements.date, name: movements.name, type: movements.type, amount: reportAmount, time: movements.time })
     .from(movements)
     .leftJoin(categories, and(eq(movements.categoryId, categories.id), categoryReadAccess(space.id)))
     .where(and(...conditions))

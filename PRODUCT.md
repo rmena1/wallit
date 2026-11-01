@@ -31,3 +31,9 @@ Do not make Wallit look like a playful budgeting toy, a crypto dashboard, or a d
 ## Accessibility & Inclusion
 
 Target WCAG AA for text contrast and interactive states. Controls must be keyboard reachable, labels should not rely on color alone, and any motion should be short, state-driven, and compatible with reduced-motion preferences.
+
+## Reporting category nets
+
+Reports, dashboard and remote MCP calculate Ingresos and Gastos per Space and selected date range using canonical CLP `amount` (including converted USD). Each category nets income minus expense: positive nets add to Ingresos, absolute negative nets add to Gastos. Uncategorized income and expense stay gross on their respective sides. Neto remains Ingresos minus Gastos. Reportable Inter-Space Transfer legs participate with their own type and category; same-Space Transfers remain operational. Existing reportable filters and balance calculations are unchanged.
+
+Category breakdowns show the resulting net type and signed amount; category detail includes both incomes and expenses. Cumulative report charts apply this rule from range start through each day, so refunds can lower a curve; the linear expense trend uses that same series. The dashboard retains its all-time range. Balance charts remain gross.

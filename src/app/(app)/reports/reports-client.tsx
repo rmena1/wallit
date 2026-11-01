@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { formatCurrency, today as todayInTimezone } from '@/lib/utils'
 import { getReportData, type ReportData, type DailyData } from '@/lib/actions/reports'
+import { netReportCategories } from '@/lib/domain/report-netting'
 import { getReportCategoryMovements, type ReportCategoryMovement } from '@/lib/actions/movements'
 import {
   type TooltipContentProps,
@@ -146,8 +147,9 @@ function formatRangeSummary(startDate: string, endDate: string) {
 
 function daysInRange(start: string, end: string): string[] {
   const days: string[] = []
-  const d = new Date(start + 'T00:00:00')
-  const e = new Date(end + 'T00:00:00')
+  // Noon avoids Santiago's midnight DST transition dropping the range's last day.
+  const d = parseDate(start)
+  const e = parseDate(end)
   while (d <= e) {
     days.push(fmt(d))
     d.setDate(d.getDate() + 1)
@@ -172,7 +174,10 @@ function buildExpenseChart(
   const days = daysInRange(startDate, endDate)
   const map = new Map(dailyData.map(d => [d.date, d.expense]))
   const today = todayInTimezone()
-  const observableEnd = endDate < today ? endDate : today
+  // Recorded future movements also belong to the card's selected range.
+  const lastRecordedDay = dailyData.at(-1)?.date ?? today
+  const actualEnd = lastRecordedDay > today ? lastRecordedDay : today
+  const observableEnd = endDate < actualEnd ? endDate : actualEnd
 
   // Only days inside the range up to the observable end contribute to actuals and the average line.
   let cumulative = 0
@@ -195,19 +200,6 @@ function buildExpenseChart(
         date: day,
         label: day.slice(5),
         actual: null,
-        trend: null,
-      }
-    })
-    return { data, trendTotal: null }
-  }
-
-  if (totalActualExpense <= 0) {
-    const data = days.map(day => {
-      const isFuture = day > observableEnd
-      return {
-        date: day,
-        label: day.slice(5),
-        actual: isFuture ? null : 0,
         trend: null,
       }
     })
@@ -237,7 +229,9 @@ function buildIncomeChart(dailyData: DailyData[], startDate: string, endDate: st
   const today = todayInTimezone()
   
   // Find the last day we have actual data for (up to today)
-  const lastActualDay = days.filter(d => d <= today).pop() || today
+  const lastRecordedDay = dailyData.at(-1)?.date ?? today
+  const actualEnd = lastRecordedDay > today ? lastRecordedDay : today
+  const lastActualDay = days.filter(d => d <= actualEnd).pop() || actualEnd
   
   let cumulative = 0
   return days.map(day => {
@@ -551,7 +545,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
       try {
         const movements = await getReportCategoryMovements(startDate, endDate, selectedCategory.id, accountId || undefined)
         if (cancelled) return
-        setCategoryMovements(movements)
+        setCategoryMovements(selectedCategory.id === null ? movements.filter(m => m.type === selectedCategory.type) : movements)
       } catch (error) {
         if (cancelled) return
         console.error(error)
@@ -663,11 +657,18 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
   const balanceChart = useMemo(() =>
     data ? buildBalanceChart(data.balanceDailyData, startDate, endDate, data.openingBalance) : [],
     [data, startDate, endDate])
-  const reportCurrency = data?.balanceCurrency ?? 'CLP'
+  const reportCurrency = 'CLP' as const
   const categorySheetTotal = useMemo(() => {
-    const loadedTotal = categoryMovements.reduce((sum, movement) => sum + movement.amount, 0)
-    return loadedTotal || selectedCategory?.total || 0
-  }, [categoryMovements, selectedCategory])
+    if (categoryMovementsLoading || categoryMovementsError) return selectedCategory?.net ?? 0
+    const totals = netReportCategories(categoryMovements.map(movement => ({
+      categoryId: selectedCategory?.id ?? null,
+      income: movement.type === 'income' ? movement.amount : 0,
+      expense: movement.type === 'expense' ? movement.amount : 0,
+    })))
+    return selectedCategory?.id === null
+      ? (selectedCategory.type === 'income' ? totals.totalIncome : -totals.totalExpense)
+      : totals.totalIncome - totals.totalExpense
+  }, [categoryMovements, selectedCategory, categoryMovementsLoading, categoryMovementsError])
   const categorySheetPeriodLabel = useMemo(() => {
     const startLabel = formatShortDate(startDate)
     const endLabel = formatShortDate(endDate)
@@ -1043,7 +1044,7 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                   Sin ingresos en este período
                 </div>
               ) : (
-                <div style={{ width: '100%', height: 200 }}>
+                <div data-testid="income-chart" data-income-chart={JSON.stringify(incomeChart)} style={{ width: '100%', height: 200 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={incomeChart} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#555' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
@@ -1088,15 +1089,17 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
               )}
             </div>
 
-            {/* Category Spending */}
-            <div style={cardStyle}>
-              <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: '0 0 14px' }}>Gastos por Categoría</h2>
-              {data.categorySpending.length === 0 ? (
-                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '20px 0', fontSize: 13 }}>Sin gastos en este período</div>
+            {/* Category nets, separated by their resulting type. */}
+            {(['expense', 'income'] as const).map(categoryType => {
+              const categoryRows = data.categorySpending.filter(c => c.type === categoryType)
+              return <div style={cardStyle} key={categoryType}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, color: '#e5e5e5', margin: '0 0 14px' }}>{categoryType === 'expense' ? 'Gastos' : 'Ingresos'} por Categoría</h2>
+              {categoryRows.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '20px 0', fontSize: 13 }}>Sin categorías con {categoryType === 'expense' ? 'gasto' : 'ingreso'} neto en este período</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {data.categorySpending.map((cat, i) => {
-                    const max = data.categorySpending[0]?.total || 1
+                  {categoryRows.map((cat, i) => {
+                    const max = categoryRows[0]?.total || 1
                     return (
                       <button
                         key={`${cat.id || 'uncategorized'}-${cat.name}-${i}`}
@@ -1117,12 +1120,12 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                             <span style={{ fontSize: 11, color: '#9ca3af', flexShrink: 0 }}>({cat.count})</span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                            <span style={{ fontSize: 14, fontWeight: 600, color: '#f87171' }}>{formatCurrency(cat.total, reportCurrency)}</span>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: cat.type === 'income' ? '#4ade80' : '#f87171' }}>{cat.type === 'income' ? '+' : '-'}{formatCurrency(cat.total, reportCurrency)}</span>
                             <span style={{ fontSize: 16, color: '#71717a' }}>›</span>
                           </div>
                         </div>
                         <div style={{ height: 6, borderRadius: 3, backgroundColor: '#27272a', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', borderRadius: 3, backgroundColor: '#ef4444', width: `${(cat.total / max) * 100}%`, transition: 'width 0.3s ease' }} />
+                          <div style={{ height: '100%', borderRadius: 3, backgroundColor: cat.type === 'income' ? '#22c55e' : '#ef4444', width: `${(cat.total / max) * 100}%`, transition: 'width 0.3s ease' }} />
                         </div>
                       </button>
                     )
@@ -1130,6 +1133,8 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                 </div>
               )}
             </div>
+
+            })}
 
             {/* Movement Count */}
             <div style={{
@@ -1231,8 +1236,8 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                 <div style={{ fontSize: 13, fontWeight: 600, color: '#d4d4d8' }}>{categorySheetPeriodLabel}</div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 11, color: '#71717a', marginBottom: 4 }}>Total</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: '#f87171' }}>{formatCurrency(categorySheetTotal, reportCurrency)}</div>
+                <div style={{ fontSize: 11, color: '#71717a', marginBottom: 4 }}>{selectedCategory.id === null ? 'Total' : 'Neto de categoría'}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: categorySheetTotal >= 0 ? '#4ade80' : '#f87171' }}>{categorySheetTotal > 0 ? '+' : ''}{formatCurrency(categorySheetTotal, reportCurrency)}</div>
               </div>
             </div>
 
@@ -1305,8 +1310,8 @@ export function ReportsPage({ initialData, initialStartDate, initialEndDate }: R
                           {movement.name}
                         </div>
                       </div>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: '#f87171', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                        -{formatCurrency(movement.amount, reportCurrency)}
+                      <div style={{ fontSize: 15, fontWeight: 700, color: movement.type === 'income' ? '#4ade80' : '#f87171', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                        {movement.type === 'income' ? '+' : '-'}{formatCurrency(movement.amount, reportCurrency)}
                       </div>
                     </div>
                   ))}

@@ -1015,3 +1015,33 @@ test('Cursor OAuth completes login and a cross-origin 308 callback with one appr
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test('reports net categories in CLP, include refunds in detail and retain gross uncategorized totals', async ({ request }) => {
+  const f = await fixture(), auth = await grant(f)
+  const create = async (extra: Record<string, unknown>) => {
+    const args = money(f, extra)
+    const created = await call(request, auth.token, 'wallit_movement_create', write(f, args))
+    await call(request, auth.token, 'wallit_review_confirm', write(f, { id: created.createdMovementIds[0], ...args }))
+    return created.createdMovementIds[0]
+  }
+  const expense = await create({ name: 'Restaurante bill', amount: 3000000, date: '2026-10-01' })
+  const refund = await create({ name: 'Restaurante refund', amount: 2000000, type: 'income', date: '2026-10-02' })
+  await create({ amount: 500000, type: 'income', categoryId: null })
+  await create({ amount: 300000, categoryId: null })
+  // Unconfirmed MCP-created movements still do not enter reports.
+  await call(request, auth.token, 'wallit_movement_create', write(f, money(f, { amount: 9999999 })))
+  const range = { spaceId: f.spaceId, startDate: '2026-10-01', endDate: '2026-10-31' }
+  const report = await call(request, auth.token, 'wallit_reports', range)
+  expect(report).toMatchObject({ totalIncome: 500000, totalExpense: 1300000, grossIncome: 2500000, grossExpense: 3300000, movementCount: 4 })
+  expect(report.categorySpending.find((c: { id: string }) => c.id === f.categoryId)).toMatchObject({ net: -1000000, total: 1000000, type: 'expense', count: 2 })
+  expect(report.dailyData.slice(0, 2)).toEqual([{ date: '2026-10-01', income: 0, expense: 3000000 }, { date: '2026-10-02', income: 0, expense: -2000000 }])
+  const detail = await call(request, auth.token, 'wallit_report_category_movements', { ...range, categoryId: f.categoryId })
+  expect(detail).toMatchObject({ net: -1000000, totalIncome: 0, totalExpense: 1000000, grossIncome: 2000000, grossExpense: 3000000 })
+  expect(detail.movements).toEqual(expect.arrayContaining([expect.objectContaining({ id: expense, type: 'expense' }), expect.objectContaining({ id: refund, type: 'income' })]))
+  await create({ accountId: f.usdAccountId, currency: 'USD', amount: 9500000, amountUsd: 10000, exchangeRate: 95000, amountInputMode: 'canonicalClp' })
+  await create({ accountId: f.usdAccountId, currency: 'USD', amount: 1900000, amountUsd: 2000, exchangeRate: 95000, amountInputMode: 'canonicalClp', type: 'income' })
+  const usd = await call(request, auth.token, 'wallit_reports', { ...range, accountId: f.usdAccountId })
+  expect(usd).toMatchObject({ totalIncome: 0, totalExpense: 7600000, balanceCurrency: 'USD' })
+  const usdDetail = await call(request, auth.token, 'wallit_report_category_movements', { ...range, categoryId: f.categoryId, accountId: f.usdAccountId })
+  expect(usdDetail).toMatchObject({ net: -7600000, grossIncome: 1900000, grossExpense: 9500000 })
+})
